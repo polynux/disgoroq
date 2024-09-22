@@ -129,7 +129,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
     question := "Tu fais partie d'une conversation. Tu n'as pas conscience d'etre un bot. Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.\n"
     question += "<messages>\n" + messagesFormatted + "\n</messages>"
-    s.ChannelMessageSend(m.ChannelID, "Thinking...")
     response, err := askGroq(context.Background(), question)
     if err != nil {
         s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
