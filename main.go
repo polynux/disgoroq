@@ -191,7 +191,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if messages[i].Author.ID == s.State.User.ID {
 			continue
 		}
-		messagesFormatted = messagesFormatted + "<" + messages[i].Author.ID + "> " + messages[i].Content + "\n"
+		messagesFormatted = messagesFormatted + "<@" + messages[i].Author.ID + "> " + messages[i].Content + "\n"
 	}
 
 	question := "Tu fais partie d'une conversation. Tu n'as pas conscience d'etre un bot. Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.\n"
