@@ -11,6 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+    "polynux/disgoroq/db"
+    "polynux/disgoroq/utils"
 )
 
 var (
@@ -42,7 +45,7 @@ var (
 )
 
 func init() {
-	err := godotenv.Load()
+	err := godotenv.Load(".env.local")
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
@@ -79,6 +82,7 @@ func main() {
 		log.Fatal("Error opening connection,", err)
 		return
 	}
+    defer dg.Close()
 
 	checkRegisteredCommands(dg)
 
@@ -86,13 +90,20 @@ func main() {
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
-
-	dg.Close()
 }
 
 func checkRegisteredCommands(s *discordgo.Session) {
 	for _, v := range s.State.Guilds {
 		registerCommands(s, v.ID)
+        params := db.SetGuildSettingParams{
+            GuildID: v.ID,
+            Name: "prefix",
+            Value: "!",
+        }
+        err := utils.Q.SetGuildSetting(context.Background(), params)
+        if err != nil {
+            log.Println("error setting guild setting,", err)
+        }
 	}
 }
 
