@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"syscall"
 
-    "polynux/disgoroq/db"
     "polynux/disgoroq/utils"
 )
 
@@ -69,6 +68,14 @@ func main() {
 		return
 	}
 
+    utils.InitializeDB()
+    defer func() {
+        log.Println("closing db")
+        if err := utils.DB.Close(); err != nil {
+            log.Println("error closing db,", err)
+        }
+    }()
+
 	dg.AddHandler(messageCreate)
 	dg.AddHandler(joiningGuild)
 	dg.AddHandler(leavingGuild)
@@ -79,7 +86,7 @@ func main() {
 
 	err = dg.Open()
 	if err != nil {
-		log.Fatal("Error opening connection,", err)
+		log.Fatal("Error opening discord connection,", err)
 		return
 	}
     defer dg.Close()
@@ -95,15 +102,6 @@ func main() {
 func checkRegisteredCommands(s *discordgo.Session) {
 	for _, v := range s.State.Guilds {
 		registerCommands(s, v.ID)
-        params := db.SetGuildSettingParams{
-            GuildID: v.ID,
-            Name: "prefix",
-            Value: "!",
-        }
-        err := utils.Q.SetGuildSetting(context.Background(), params)
-        if err != nil {
-            log.Println("error setting guild setting,", err)
-        }
 	}
 }
 

@@ -49,7 +49,7 @@ func Connect() *sql.DB {
 	return db
 }
 
-func init() {
+func InitializeDB() {
 	LoadEnv()
 	DB = Connect()
 	Q = db.New(DB)
