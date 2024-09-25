@@ -36,6 +36,22 @@ func (q *Queries) GetAllGuilds(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const getGuildSetting = `-- name: GetGuildSetting :one
+SELECT value FROM guild_settings WHERE guild_id = ? AND name = ?
+`
+
+type GetGuildSettingParams struct {
+	GuildID string
+	Name    string
+}
+
+func (q *Queries) GetGuildSetting(ctx context.Context, arg GetGuildSettingParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getGuildSetting, arg.GuildID, arg.Name)
+	var value string
+	err := row.Scan(&value)
+	return value, err
+}
+
 const getGuildSettings = `-- name: GetGuildSettings :many
 SELECT id, guild_id, name, value FROM guild_settings WHERE id = ?
 `
@@ -66,27 +82,6 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 		return nil, err
 	}
 	return items, nil
-}
-
-const getGuildSettingsByName = `-- name: GetGuildSettingsByName :one
-SELECT id, guild_id, name, value FROM guild_settings WHERE guild_id = ? AND name = ?
-`
-
-type GetGuildSettingsByNameParams struct {
-	GuildID string
-	Name    string
-}
-
-func (q *Queries) GetGuildSettingsByName(ctx context.Context, arg GetGuildSettingsByNameParams) (GuildSetting, error) {
-	row := q.db.QueryRowContext(ctx, getGuildSettingsByName, arg.GuildID, arg.Name)
-	var i GuildSetting
-	err := row.Scan(
-		&i.ID,
-		&i.GuildID,
-		&i.Name,
-		&i.Value,
-	)
-	return i, err
 }
 
 const setGuildSetting = `-- name: SetGuildSetting :exec

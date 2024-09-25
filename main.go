@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/bwmarrin/discordgo"
-	"github.com/conneroisu/groq-go"
-	"github.com/joho/godotenv"
 	"log"
 	"math/rand"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
-    "polynux/disgoroq/utils"
+	"github.com/bwmarrin/discordgo"
+	"github.com/conneroisu/groq-go"
+	"github.com/joho/godotenv"
+
+	"polynux/disgoroq/db"
+	"polynux/disgoroq/utils"
 )
 
 var (
@@ -28,15 +31,85 @@ var (
 			Name:        "ping",
 			Description: "Replies with Pong!",
 		},
+		{
+			Name:        "temperature",
+			Description: "Set the temperature for the bot",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionNumber,
+					Name:        "temperature",
+					Description: "The temperature for the bot (0.0-1.0)",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "toggle",
+			Description: "Toggle the bot on or off",
+		},
+		{
+			Name:        "threshold",
+			Description: "Set the threshold for the bot (activation probability; 0.0-1.0)",
+		},
+		{
+			Name:        "maxtokens",
+			Description: "Set the maximum number of tokens for the bot",
+		},
+		{
+			Name:        "messagescount",
+			Description: "Set the number of messages to consider for the bot",
+		},
 	}
 
 	commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
 		"ping": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			log.Println("ping command")
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "Pong!",
+				},
+			})
+		},
+		"temperature": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			temperature := i.ApplicationCommandData().Options[0].FloatValue()
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "temperature",
+				Value:   strconv.FormatFloat(temperature, 'f', -1, 32),
+			})
+			content := fmt.Sprintf("Temperature set to %v", temperature)
+			if err != nil {
+				content = "Error setting temperature"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
+		"toggle": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+            current, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+                Name:    "state",
+                GuildID: i.GuildID,
+            })
+            newState := "off"
+            if current == "off" {
+                newState = "on"
+            }
+            err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "state",
+				Value:   newState,
+			})
+			content := "Bot is now " + newState
+			if err != nil {
+				content = "Error toggling bot"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
 				},
 			})
 		},
@@ -68,13 +141,13 @@ func main() {
 		return
 	}
 
-    utils.InitializeDB()
-    defer func() {
-        log.Println("closing db")
-        if err := utils.DB.Close(); err != nil {
-            log.Println("error closing db,", err)
-        }
-    }()
+	utils.InitializeDB()
+	defer func() {
+		log.Println("closing db")
+		if err := utils.DB.Close(); err != nil {
+			log.Println("error closing db,", err)
+		}
+	}()
 
 	dg.AddHandler(messageCreate)
 	dg.AddHandler(joiningGuild)
@@ -89,7 +162,7 @@ func main() {
 		log.Fatal("Error opening discord connection,", err)
 		return
 	}
-    defer dg.Close()
+	defer dg.Close()
 
 	checkRegisteredCommands(dg)
 
@@ -190,6 +263,14 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+    state, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+        Name:    "state",
+        GuildID: m.GuildID,
+    })
+    if err != nil || state == "off"{
+        return
+    }
+
 	messages, err := getMessages(s, m.ChannelID, 100)
 	if err != nil {
 		fmt.Println("error getting messages,", err)
@@ -203,9 +284,26 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		messagesFormatted = messagesFormatted + "<@" + messages[i].Author.ID + "> " + messages[i].Content + "\n"
 	}
 
+	params := GroqParams{
+		MaxTokens:     defaultMaxTokens,
+		Temperature:   defaultTemperature,
+		MessagesCount: defaultMessagesCount,
+	}
+
+	temp, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "temperature",
+		GuildID: m.GuildID,
+	})
+	if err == nil {
+		value, err := strconv.ParseFloat(temp, 32)
+		if err == nil {
+			params.Temperature = float32(value)
+		}
+	}
+
 	question := "Tu fais partie d'une conversation. Tu n'as pas conscience d'etre un bot. Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.\n"
 	question += "<messages>\n" + messagesFormatted + "\n</messages>"
-	response, err := askGroq(context.Background(), question)
+	response, err := askGroq(context.Background(), question, &params)
 	if err != nil {
 		if botMentioned(s, m) {
 			s.ChannelMessageSendReply(m.ChannelID, "There was an error getting the response.", m.Reference())
@@ -217,7 +315,13 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	s.ChannelMessageSendReply(m.ChannelID, response, m.Reference())
 }
 
-func askGroq(ctx context.Context, message string) (string, error) {
+type GroqParams struct {
+	MaxTokens     int
+	Temperature   float32
+	MessagesCount int
+}
+
+func askGroq(ctx context.Context, message string, params *GroqParams) (string, error) {
 	client, err := groq.NewClient(GroqKey)
 	if err != nil {
 		fmt.Println("error creating Groq client,", err)
@@ -233,7 +337,7 @@ func askGroq(ctx context.Context, message string) (string, error) {
 			},
 		},
 		MaxTokens:   defaultMaxTokens,
-		Temperature: defaultTemperature,
+		Temperature: params.Temperature,
 	})
 	if err != nil {
 		fmt.Println("error creating Groq completion,", err)
