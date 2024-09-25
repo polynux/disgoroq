@@ -304,15 +304,33 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	question := "Tu fais partie d'une conversation. Tu n'as pas conscience d'etre un bot. Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.\n"
 	question += "<messages>\n" + messagesFormatted + "\n</messages>"
 	response, err := askGroq(context.Background(), question, &params)
+
+    reference := &discordgo.MessageReference{
+        MessageID: m.ID,
+        ChannelID: m.ChannelID,
+        GuildID:   m.GuildID,
+    }
 	if err != nil {
 		if botMentioned(s, m) {
-			s.ChannelMessageSendReply(m.ChannelID, "There was an error getting the response.", m.Reference())
+            s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+                Content: "There was an error getting the response.",
+                Reference: reference,
+                AllowedMentions: &discordgo.MessageAllowedMentions{
+                    Parse: []discordgo.AllowedMentionType{},
+                },
+            })
 		} else {
 			s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
 		}
 		return
 	}
-	s.ChannelMessageSendReply(m.ChannelID, response, m.Reference())
+    s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+        Content: response,
+        Reference: reference,
+        AllowedMentions: &discordgo.MessageAllowedMentions{
+            Parse: []discordgo.AllowedMentionType{},
+        },
+    })
 }
 
 type GroqParams struct {
