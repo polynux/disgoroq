@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/conneroisu/groq-go"
@@ -25,6 +26,7 @@ var (
 	defaultMaxTokens             = 100
 	defaultTemperature   float32 = 0.5
 	defaultMessagesCount         = 100
+	rateLimit            int64   = 10
 
 	commands = []*discordgo.ApplicationCommand{
 		{
@@ -123,11 +125,19 @@ var (
 				fmt.Println("error getting messages,", err)
 				return
 			}
+			messagesToDelete := make([]string, 0)
 			for idx := range messages {
 				if messages[idx].Author.ID == s.State.User.ID {
-					s.ChannelMessageDelete(i.ChannelID, messages[idx].ID)
+					messagesToDelete = append(messagesToDelete, messages[idx].ID)
 				}
 			}
+			s.ChannelMessagesBulkDelete(i.ChannelID, messagesToDelete)
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: string(len(messagesToDelete)) + " messages deleted",
+				},
+			})
 		},
 	}
 )
@@ -284,6 +294,32 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		GuildID: m.GuildID,
 	})
 	if err != nil || state == "off" {
+		return
+	}
+
+	lastMessage, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "last_message",
+		GuildID: m.GuildID,
+	})
+	var lastMessageTime int64 = 0
+	if lastMessage != "" {
+		lastMessageTime, _ = strconv.ParseInt(lastMessage, 10, 64)
+	}
+
+	if lastMessageTime > 0 {
+		if time.Now().Unix()-lastMessageTime < rateLimit {
+			s.ChannelMessageSend(m.ChannelID, "Please wait a bit before asking me again.")
+			return
+		}
+	}
+
+	err = utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+		GuildID: m.GuildID,
+		Name:    "last_message",
+		Value:   strconv.FormatInt(time.Now().Unix(), 10),
+	})
+	if err != nil {
+		fmt.Println("error setting last message time,", err)
 		return
 	}
 
