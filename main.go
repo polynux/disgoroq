@@ -59,6 +59,10 @@ var (
 			Name:        "messagescount",
 			Description: "Set the number of messages to consider for the bot",
 		},
+		{
+			Name:        "clean",
+			Description: "Clean the bot's messages",
+		},
 	}
 
 	commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
@@ -89,15 +93,15 @@ var (
 			})
 		},
 		"toggle": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-            current, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-                Name:    "state",
-                GuildID: i.GuildID,
-            })
-            newState := "off"
-            if current == "off" {
-                newState = "on"
-            }
-            err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+			current, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+				Name:    "state",
+				GuildID: i.GuildID,
+			})
+			newState := "off"
+			if current == "off" {
+				newState = "on"
+			}
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
 				GuildID: i.GuildID,
 				Name:    "state",
 				Value:   newState,
@@ -112,6 +116,18 @@ var (
 					Content: content,
 				},
 			})
+		},
+		"clean": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			messages, err := s.ChannelMessages(i.ChannelID, 100, "", "", "")
+			if err != nil {
+				fmt.Println("error getting messages,", err)
+				return
+			}
+			for idx := range messages {
+				if messages[idx].Author.ID == s.State.User.ID {
+					s.ChannelMessageDelete(i.ChannelID, messages[idx].ID)
+				}
+			}
 		},
 	}
 )
@@ -263,13 +279,13 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-    state, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-        Name:    "state",
-        GuildID: m.GuildID,
-    })
-    if err != nil || state == "off"{
-        return
-    }
+	state, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "state",
+		GuildID: m.GuildID,
+	})
+	if err != nil || state == "off" {
+		return
+	}
 
 	messages, err := getMessages(s, m.ChannelID, 100)
 	if err != nil {
@@ -305,32 +321,32 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	question += "<messages>\n" + messagesFormatted + "\n</messages>"
 	response, err := askGroq(context.Background(), question, &params)
 
-    reference := &discordgo.MessageReference{
-        MessageID: m.ID,
-        ChannelID: m.ChannelID,
-        GuildID:   m.GuildID,
-    }
+	reference := &discordgo.MessageReference{
+		MessageID: m.ID,
+		ChannelID: m.ChannelID,
+		GuildID:   m.GuildID,
+	}
 	if err != nil {
 		if botMentioned(s, m) {
-            s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-                Content: "There was an error getting the response.",
-                Reference: reference,
-                AllowedMentions: &discordgo.MessageAllowedMentions{
-                    Parse: []discordgo.AllowedMentionType{},
-                },
-            })
+			s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+				Content:   "There was an error getting the response.",
+				Reference: reference,
+				AllowedMentions: &discordgo.MessageAllowedMentions{
+					Parse: []discordgo.AllowedMentionType{},
+				},
+			})
 		} else {
 			s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
 		}
 		return
 	}
-    s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-        Content: response,
-        Reference: reference,
-        AllowedMentions: &discordgo.MessageAllowedMentions{
-            Parse: []discordgo.AllowedMentionType{},
-        },
-    })
+	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
+		Content:   response,
+		Reference: reference,
+		AllowedMentions: &discordgo.MessageAllowedMentions{
+			Parse: []discordgo.AllowedMentionType{},
+		},
+	})
 }
 
 type GroqParams struct {
