@@ -125,6 +125,12 @@ var (
 				fmt.Println("error getting messages,", err)
 				return
 			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Cleaning messages...",
+				},
+			})
 			messagesToDelete := make([]string, 0)
 			for idx := range messages {
 				if messages[idx].Author.ID == s.State.User.ID {
@@ -132,11 +138,12 @@ var (
 				}
 			}
 			s.ChannelMessagesBulkDelete(i.ChannelID, messagesToDelete)
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: string(len(messagesToDelete)) + " messages deleted",
-				},
+			str := fmt.Sprintf("Messages cleaned")
+			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &str,
+			})
+			time.AfterFunc(10*time.Second, func() {
+				s.InteractionResponseDelete(i.Interaction)
 			})
 		},
 	}
