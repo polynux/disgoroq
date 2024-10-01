@@ -317,17 +317,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	rand := rand.Float32()
-    thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-        Name:    "threshold",
-        GuildID: m.GuildID,
-    })
-    threshold := defaultThreshold
-    if err == nil {
-        value, err := strconv.ParseFloat(thresholdDb, 64)
-        if err == nil {
-            threshold = float64(value)
-        }
-    }
+	thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "threshold",
+		GuildID: m.GuildID,
+	})
+	threshold := defaultThreshold
+	if err == nil {
+		value, err := strconv.ParseFloat(thresholdDb, 64)
+		if err == nil {
+			threshold = float64(value)
+		}
+	}
 
 	if rand > float32(threshold) && !botMentioned(s, m) {
 		return
@@ -350,7 +350,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		lastMessageTime, _ = strconv.ParseInt(lastMessage, 10, 64)
 	}
 
-	if lastMessageTime > 0 {
+	if lastMessageTime > 0 && !botMentioned(s, m) {
 		if time.Now().Unix()-lastMessageTime < rateLimit {
 			s.ChannelMessageSend(m.ChannelID, "Please wait a bit before asking me again.")
 			return
