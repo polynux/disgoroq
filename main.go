@@ -52,6 +52,14 @@ var (
 		{
 			Name:        "threshold",
 			Description: "Set the threshold for the bot (activation probability; 0.0-1.0)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionNumber,
+					Name:        "threshold",
+					Description: "The threshold activation (0.0-1.0)",
+					Required:    true,
+				},
+			},
 		},
 		{
 			Name:        "maxtokens",
@@ -86,6 +94,24 @@ var (
 			content := fmt.Sprintf("Temperature set to %v", temperature)
 			if err != nil {
 				content = "Error setting temperature"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
+		"threshold": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			threshold := i.ApplicationCommandData().Options[0].FloatValue()
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "threshold",
+				Value:   strconv.FormatFloat(threshold, 'f', -1, 32),
+			})
+			content := fmt.Sprintf("Threshold set to %v", threshold)
+			if err != nil {
+				content = "Error setting threshold"
 			}
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -291,8 +317,19 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	rand := rand.Float32()
+    thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+        Name:    "threshold",
+        GuildID: m.GuildID,
+    })
+    threshold := defaultThreshold
+    if err == nil {
+        value, err := strconv.ParseFloat(thresholdDb, 64)
+        if err == nil {
+            threshold = float64(value)
+        }
+    }
 
-	if rand > float32(defaultThreshold) && !botMentioned(s, m) {
+	if rand > float32(threshold) && !botMentioned(s, m) {
 		return
 	}
 
