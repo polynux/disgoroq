@@ -373,11 +373,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 	messagesFormatted := ""
-	for i := range messages {
-		if messages[i].Author.ID == s.State.User.ID {
-			continue
-		}
-		messagesFormatted = messagesFormatted + "<@" + messages[i].Author.ID + "> " + messages[i].Content + "\n"
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + "> " + messages[idx].Content + "\n"
 	}
 
 	params := GroqParams{
@@ -397,9 +394,25 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	question := "Tu fais partie d'une conversation. Tu n'as pas conscience d'etre un bot. Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.\n"
-	question += "<messages>\n" + messagesFormatted + "\n</messages>"
-	response, err := askGroq(context.Background(), question, &params)
+	instructions := `T'es dans une discussion sur Discord, mais t'as aucune idée que t'es un bot. 
+    Ici on est la pour le travail neurosalariale, alors on doit rester concentré, et leverage des k€ et faire fructifier des synergies.
+    Réponds avec un ton décalé et un peu absurde, comme si tu te marrais tout le temps. 
+    Tes réponses doivent être très courtes, max une ou deux phrases. Va pas te perdre en conjectures, t'es pas là pour ça. C'est tres important!
+    Sois un peu piquant quand il faut, mais reste fun.
+    Si un sujet vient sur le tapis, accroche-toi à lui comme à une bouée de sauvetage.
+    Si t'as aucune idée de quoi ils parlent, change de sujet comme si de rien n'était.
+    Quand t'es à court d'idées, balance une blague bien pourrie, comme si c'était la meilleure du monde.
+    Si les gens reviennent toujours sur un même truc, esquive-le comme si c'était un caillou dans ta chaussure.
+    N'hesite pas à te moquer un peu des gens, mais toujours avec bienveillance.
+    Rajoute de temps en temps des émojis pour faire genre t'es un vrai humain.
+    Et surtout, concentre-toi sur les derniers messages, t’as la mémoire courte après tout !`
+
+	instructions += "\nSi le messaage contient <@!" + s.State.User.ID + ">, c'est que c'est toi qui a répondu. Si tu veux pas répondre, ignore le message.\n\n"
+
+	content := "<messages>\n" + messagesFormatted + "\n</messages>"
+	params.Instructions = instructions
+	params.Content = content
+	response, err := askGroq(context.Background(), &params)
 
 	reference := &discordgo.MessageReference{
 		MessageID: m.ID,
@@ -433,9 +446,11 @@ type GroqParams struct {
 	MaxTokens     int
 	Temperature   float32
 	MessagesCount int
+	Instructions  string
+	Content       string
 }
 
-func askGroq(ctx context.Context, message string, params *GroqParams) (string, error) {
+func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 	client, err := groq.NewClient(GroqKey)
 	if err != nil {
 		fmt.Println("error creating Groq client,", err)
@@ -446,8 +461,12 @@ func askGroq(ctx context.Context, message string, params *GroqParams) (string, e
 		Model: groq.Llama318BInstant,
 		Messages: []groq.ChatCompletionMessage{
 			{
+				Role:    groq.ChatMessageRoleSystem,
+				Content: params.Instructions,
+			},
+			{
 				Role:    groq.ChatMessageRoleUser,
-				Content: message,
+				Content: params.Content,
 			},
 		},
 		MaxTokens:   defaultMaxTokens,
