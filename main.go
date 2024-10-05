@@ -407,8 +407,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
     Rajoute de temps en temps des émojis pour faire genre t'es un vrai humain.
     Et surtout, concentre-toi sur les derniers messages, t’as la mémoire courte après tout !`
 
-	instructions += "\nSi le messaage contient <@!" + s.State.User.ID + ">, c'est que c'est toi qui a répondu. Si tu veux pas répondre, ignore le message.\n\n"
-
 	content := "<messages>\n" + messagesFormatted + "\n</messages>"
 	params.Instructions = instructions
 	params.Content = content
