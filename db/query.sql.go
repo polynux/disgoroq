@@ -9,6 +9,20 @@ import (
 	"context"
 )
 
+const deleteGuildSetting = `-- name: DeleteGuildSetting :exec
+DELETE FROM guild_settings WHERE guild_id = ? AND name = ?
+`
+
+type DeleteGuildSettingParams struct {
+	GuildID string
+	Name    string
+}
+
+func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSettingParams) error {
+	_, err := q.db.ExecContext(ctx, deleteGuildSetting, arg.GuildID, arg.Name)
+	return err
+}
+
 const getAllGuilds = `-- name: GetAllGuilds :many
 SELECT DISTINCT guild_id FROM guild_settings
 `

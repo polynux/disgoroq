@@ -9,3 +9,6 @@ SELECT DISTINCT guild_id FROM guild_settings;
 
 -- name: SetGuildSetting :exec
 INSERT OR REPLACE INTO guild_settings (guild_id, name, value) VALUES (?, ?, ?);
+
+-- name: DeleteGuildSetting :exec
+DELETE FROM guild_settings WHERE guild_id = ? AND name = ?;

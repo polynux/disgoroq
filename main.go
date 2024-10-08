@@ -89,14 +89,32 @@ var (
 			Description: "Set the prompt for the bot",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "prompt",
-					Description: "The prompt for the bot",
-					Required:    true,
-					MaxLength:   1000,
+					Name:        "set",
+					Description: "Set a custom prompt for the bot",
+					Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Name:        "custom",
+							Description: "Set a custom prompt for the bot",
+							Type:        discordgo.ApplicationCommandOptionSubCommand,
+							Options: []*discordgo.ApplicationCommandOption{
+								{
+									Name:        "prompt",
+									Description: "The custom prompt for the bot",
+									Type:        discordgo.ApplicationCommandOptionString,
+									Required:    true,
+									MaxLength:   1000,
+								},
+							},
+						},
+						{
+							Name:        "default",
+							Description: "Put back the default prompt",
+							Type:        discordgo.ApplicationCommandOptionSubCommand,
+						},
+					},
 				},
 			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
 		},
 	}
 
@@ -216,13 +234,52 @@ var (
 			})
 		},
 		"prompt": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			prompt := i.ApplicationCommandData().Options[0].StringValue()
+			options := i.ApplicationCommandData().Options
+			if options[0].Name != "set" {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "Wrong option!",
+					},
+				})
+				return
+			}
+
+			options = options[0].Options
+			if options[0].Name == "default" {
+				content := "Prompt set to default"
+				err := utils.Q.DeleteGuildSetting(context.Background(), db.DeleteGuildSettingParams{
+					GuildID: i.GuildID,
+					Name:    "prompt",
+				})
+				if err != nil {
+					content = "Error setting prompt"
+				}
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: content,
+					},
+				})
+				return
+			}
+
+			if options[0].Name != "custom" {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "Wrong option!",
+					},
+				})
+				return
+			}
+			value := options[0].Options[0].StringValue()
 			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
 				GuildID: i.GuildID,
 				Name:    "prompt",
-				Value:   prompt,
+				Value:   value,
 			})
-			content := fmt.Sprintf("Prompt set to %v", prompt)
+			content := fmt.Sprintf("Prompt correctly set")
 			if err != nil {
 				content = "Error setting prompt"
 			}
@@ -292,6 +349,7 @@ func main() {
 	log.Println("Bot is now running.  Press CTRL-C to exit.")
 
 	registerCommands(dg)
+	log.Println("Commands registered")
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
@@ -299,13 +357,9 @@ func main() {
 }
 
 func registerCommands(s *discordgo.Session) {
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
-	for i, v := range commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
-		registeredCommands[i] = cmd
+	_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
+	if err != nil {
+		log.Panicf("Cannot create commands: %v", err)
 	}
 }
 
