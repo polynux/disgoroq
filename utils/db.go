@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/joho/godotenv"
 	"github.com/tursodatabase/go-libsql"
 	_ "github.com/tursodatabase/go-libsql"
 
@@ -49,9 +48,32 @@ func Connect() *sql.DB {
 	return db
 }
 
-func InitializeDB() {
-	LoadEnv()
-	DB = Connect()
+func ConnectLocal() *sql.DB {
+	dbName := "local.db"
+	dir, err := os.MkdirTemp("", "libsql-*")
+	if err != nil {
+		log.Fatalf("Error creating temp directory: %v", err)
+		os.Exit(1)
+	}
+
+	dbPath := filepath.Join(dir, dbName)
+
+	db, err := sql.Open("libsql", "file:"+dbPath)
+	if err != nil {
+		log.Fatalf("Error opening local db: %v", err)
+		os.Exit(1)
+	}
+
+	return db
+}
+
+func InitializeDB(local bool) {
+	if !local {
+		DB = Connect()
+	} else {
+		DB = ConnectLocal()
+	}
+
 	Q = db.New(DB)
 	CreateTables(context.Background())
 }
@@ -71,14 +93,6 @@ func CreateTables(ctx context.Context) {
 	_, err := DB.ExecContext(ctx, schema)
 	if err != nil {
 		log.Fatalf("Error creating tables: %v", err)
-		os.Exit(1)
-	}
-}
-
-func LoadEnv() {
-	err := godotenv.Load(".env.local")
-	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
 		os.Exit(1)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -175,6 +176,8 @@ var (
 	}
 )
 
+var local bool
+
 func init() {
 	err := godotenv.Load(".env.local")
 	if err != nil {
@@ -191,6 +194,9 @@ func init() {
 	if GroqKey == "" {
 		log.Fatal("No Groq key found in .env file")
 	}
+
+	flag.BoolVar(&local, "local", false, "Use local database")
+	flag.Parse()
 }
 
 func main() {
@@ -200,7 +206,7 @@ func main() {
 		return
 	}
 
-	utils.InitializeDB()
+	utils.InitializeDB(local)
 	defer func() {
 		log.Println("closing db")
 		if err := utils.DB.Close(); err != nil {
@@ -223,9 +229,10 @@ func main() {
 	}
 	defer dg.Close()
 
+	log.Println("Bot is now running.  Press CTRL-C to exit.")
+
 	checkRegisteredCommands(dg)
 
-	log.Println("Bot is now running.  Press CTRL-C to exit.")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
