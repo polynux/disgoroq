@@ -29,6 +29,8 @@ var (
 	defaultMessagesCount         = 100
 	rateLimit            int64   = 10
 
+	defaultMemberPermissions int64 = discordgo.PermissionManageMessages
+
 	commands = []*discordgo.ApplicationCommand{
 		{
 			Name:        "ping",
@@ -45,10 +47,12 @@ var (
 					Required:    true,
 				},
 			},
+			DefaultMemberPermissions: &defaultMemberPermissions,
 		},
 		{
-			Name:        "toggle",
-			Description: "Toggle the bot on or off",
+			Name:                     "toggle",
+			Description:              "Toggle the bot on or off",
+			DefaultMemberPermissions: &defaultMemberPermissions,
 		},
 		{
 			Name:        "threshold",
@@ -63,16 +67,36 @@ var (
 			},
 		},
 		{
-			Name:        "maxtokens",
-			Description: "Set the maximum number of tokens for the bot",
-		},
-		{
 			Name:        "messagescount",
 			Description: "Set the number of messages to consider for the bot",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "messagescount",
+					Description: "The number of messages to consider for the bot (1-100)",
+					Required:    true,
+				},
+			},
+			DefaultMemberPermissions: &defaultMemberPermissions,
 		},
 		{
-			Name:        "clean",
-			Description: "Clean the bot's messages",
+			Name:                     "clean",
+			Description:              "Clean the bot's messages",
+			DefaultMemberPermissions: &defaultMemberPermissions,
+		},
+		{
+			Name:        "prompt",
+			Description: "Set the prompt for the bot",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "prompt",
+					Description: "The prompt for the bot",
+					Required:    true,
+					MaxLength:   1000,
+				},
+			},
+			DefaultMemberPermissions: &defaultMemberPermissions,
 		},
 	}
 
@@ -173,6 +197,42 @@ var (
 				s.InteractionResponseDelete(i.Interaction)
 			})
 		},
+		"messagescount": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			messagesCount := i.ApplicationCommandData().Options[0].IntValue()
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "messagescount",
+				Value:   strconv.FormatInt(messagesCount, 10),
+			})
+			content := fmt.Sprintf("Messages count set to %v", messagesCount)
+			if err != nil {
+				content = "Error setting messages count"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
+		"prompt": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			prompt := i.ApplicationCommandData().Options[0].StringValue()
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "prompt",
+				Value:   prompt,
+			})
+			content := fmt.Sprintf("Prompt set to %v", prompt)
+			if err != nil {
+				content = "Error setting prompt"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
 	}
 )
 
@@ -231,23 +291,17 @@ func main() {
 
 	log.Println("Bot is now running.  Press CTRL-C to exit.")
 
-	checkRegisteredCommands(dg)
+	registerCommands(dg)
 
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
 }
 
-func checkRegisteredCommands(s *discordgo.Session) {
-	for _, v := range s.State.Guilds {
-		registerCommands(s, v.ID)
-	}
-}
-
-func registerCommands(s *discordgo.Session, guildID string) {
+func registerCommands(s *discordgo.Session) {
 	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
 	for i, v := range commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, guildID, v)
+		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
 		if err != nil {
 			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
 		}
@@ -264,7 +318,14 @@ func userCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 }
 
 func joiningGuild(s *discordgo.Session, m *discordgo.GuildCreate) {
-	registerCommands(s, m.ID)
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
+	for i, v := range commands {
+		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
+		if err != nil {
+			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+		}
+		registeredCommands[i] = cmd
+	}
 }
 
 func leavingGuild(s *discordgo.Session, m *discordgo.GuildDelete) {
@@ -374,7 +435,18 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	messages, err := getMessages(s, m.ChannelID, 100)
+	messageCountDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "messagescount",
+		GuildID: m.GuildID,
+	})
+	messageCount := defaultMessagesCount
+	if err == nil {
+		value, err := strconv.ParseInt(messageCountDb, 10, 64)
+		if err == nil {
+			messageCount = int(value)
+		}
+	}
+	messages, err := getMessages(s, m.ChannelID, messageCount)
 	if err != nil {
 		fmt.Println("error getting messages,", err)
 		return
@@ -414,8 +486,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
     Rajoute de temps en temps des émojis pour faire genre t'es un vrai humain.
     Et surtout, concentre-toi sur les derniers messages, t’as la mémoire courte après tout !`
 
+	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "prompt",
+		GuildID: m.GuildID,
+	})
+	if err == nil {
+		params.Instructions = prompt
+	} else {
+		params.Instructions = instructions
+	}
+
 	content := "<messages>\n" + messagesFormatted + "\n</messages>"
-	params.Instructions = instructions
 	params.Content = content
 	response, err := askGroq(context.Background(), &params)
 
