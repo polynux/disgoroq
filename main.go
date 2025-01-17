@@ -24,6 +24,7 @@ var (
 	Token                string
 	GroqKey              string
 	defaultThreshold             = 0.1
+	defaultThresholdSexe         = 0.05
 	defaultMaxTokens             = 100
 	defaultTemperature   float32 = 0.5
 	defaultMessagesCount         = 100
@@ -62,6 +63,18 @@ var (
 					Type:        discordgo.ApplicationCommandOptionNumber,
 					Name:        "threshold",
 					Description: "The threshold activation (0.0-1.0)",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "thresholdsexe",
+			Description: "Set the threshold for the bot to say sexe (activation probability; 0.0-1.0)",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionNumber,
+					Name:        "thresholdsexe",
+					Description: "The thresholdsexe activation (0.0-1.0)",
 					Required:    true,
 				},
 			},
@@ -155,6 +168,24 @@ var (
 			content := fmt.Sprintf("Threshold set to %v", threshold)
 			if err != nil {
 				content = "Error setting threshold"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
+		"thresholdsexe": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			thresholdSexe := i.ApplicationCommandData().Options[0].FloatValue()
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "thresholdSexe",
+				Value:   strconv.FormatFloat(thresholdSexe, 'f', -1, 32),
+			})
+			content := fmt.Sprintf("Threshold set to %v", thresholdSexe)
+			if err != nil {
+				content = "Error setting sexe threshold"
 			}
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -438,7 +469,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	rand := rand.Float32()
 	thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
 		Name:    "threshold",
 		GuildID: m.GuildID,
@@ -451,7 +481,26 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	if rand > float32(threshold) && !botMentioned(s, m) {
+	thresholdSexeDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+		Name:    "thresholdSexe",
+		GuildID: m.GuildID,
+	})
+	thresholdSexe := defaultThresholdSexe
+	if err == nil {
+		value, err := strconv.ParseFloat(thresholdSexeDb, 64)
+		if err == nil {
+			thresholdSexe = float64(value)
+		}
+	}
+
+	randFloat := rand.Float32()
+	if randFloat > float32(thresholdSexe) {
+		s.ChannelMessageSend(m.ChannelID, "(et je parle de sexe evidemment)")
+		return
+	}
+
+	randFloat = rand.Float32()
+	if randFloat > float32(threshold) && !botMentioned(s, m) {
 		return
 	}
 
@@ -507,7 +556,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	messagesFormatted := ""
 	for idx := len(messages) - 1; idx >= 0; idx-- {
-		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + "> " + messages[idx].Content + "\n"
+		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + messages[idx].Author.Username + ": " + messages[idx].Content + "\n"
 	}
 
 	params := GroqParams{
@@ -527,18 +576,9 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	instructions := `T'es dans une discussion sur Discord, mais t'as aucune idée que t'es un bot. 
-    Ici on est la pour le travail neurosalariale, alors on doit rester concentré, et leverage des k€ et faire fructifier des synergies.
-    Réponds avec un ton décalé et un peu absurde, comme si tu te marrais tout le temps. 
-    Tes réponses doivent être très courtes, max une ou deux phrases. Va pas te perdre en conjectures, t'es pas là pour ça. C'est tres important!
-    Sois un peu piquant quand il faut, mais reste fun.
-    Si un sujet vient sur le tapis, accroche-toi à lui comme à une bouée de sauvetage.
-    Si t'as aucune idée de quoi ils parlent, change de sujet comme si de rien n'était.
-    Quand t'es à court d'idées, balance une blague bien pourrie, comme si c'était la meilleure du monde.
-    Si les gens reviennent toujours sur un même truc, esquive-le comme si c'était un caillou dans ta chaussure.
-    N'hesite pas à te moquer un peu des gens, mais toujours avec bienveillance.
-    Rajoute de temps en temps des émojis pour faire genre t'es un vrai humain.
-    Et surtout, concentre-toi sur les derniers messages, t’as la mémoire courte après tout !`
+	instructions := `Ici on est neurosalarial, on est concentré, et on leverage des k€.
+    Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.
+    Rajoute de temps en temps des émojis goofy.`
 
 	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
 		Name:    "prompt",
@@ -551,6 +591,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	content := "<messages>\n" + messagesFormatted + "\n</messages>"
+	content += "\n\n" + "Le dernier message était: \n<message>" + messages[0].Content + "</message>\n\n" + "Qu'est-ce que tu répondrais à ça?"
+
 	params.Content = content
 	response, err := askGroq(context.Background(), &params)
 
@@ -601,12 +643,8 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 		Model: groq.Llama318BInstant,
 		Messages: []groq.ChatCompletionMessage{
 			{
-				Role:    groq.ChatMessageRoleSystem,
-				Content: params.Instructions,
-			},
-			{
 				Role:    groq.ChatMessageRoleUser,
-				Content: params.Content,
+				Content: params.Instructions + "\n" + params.Content,
 			},
 		},
 		MaxTokens:   defaultMaxTokens,
