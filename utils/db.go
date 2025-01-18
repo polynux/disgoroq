@@ -50,10 +50,9 @@ func Connect() *sql.DB {
 
 func ConnectLocal() *sql.DB {
 	dbName := "local.db"
-	dir, err := os.MkdirTemp("", "libsql-*")
-	if err != nil {
-		log.Fatalf("Error creating temp directory: %v", err)
-		os.Exit(1)
+	dir := "tmp"
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		os.Mkdir(dir, 0755)
 	}
 
 	dbPath := filepath.Join(dir, dbName)
