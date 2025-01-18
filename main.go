@@ -612,7 +612,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	randFloat := rand.Float32()
-	if randFloat > float32(thresholdSexe) {
+	if randFloat < float32(thresholdSexe) && !botMentioned(s, m) {
 		s.ChannelMessageSend(m.ChannelID, "(et je parle de sexe evidemment)")
 		return
 	}
