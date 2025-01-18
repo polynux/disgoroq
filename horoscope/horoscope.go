@@ -8,7 +8,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 )
 
-var signes = map[string]string{
+var Signes = map[string]string{
 	"belier":     "1",
 	"taureau":    "2",
 	"gemeaux":    "3",
@@ -26,7 +26,7 @@ var signes = map[string]string{
 var url = "https://www.horoscope.com/fr/horoscopes/general/horoscope-general-du-jour-aujourdhui.aspx?signe="
 
 func GetHoroscope(signe string) (string, error) {
-	resp, err := http.Get(url + signes[signe])
+	resp, err := http.Get(url + Signes[signe])
 	if err != nil {
 		return "", err
 	}
@@ -58,9 +58,9 @@ func GetHoroscopes() (Horoscope, HoroscopeError) {
 	errors := make(HoroscopeError)
 	horoscopes := make(Horoscope)
 
-	ch := make(chan string, len(signes))
+	ch := make(chan string, len(Signes))
 
-	for key, value := range signes {
+	for key, value := range Signes {
 		go func(key, value string) {
 			horoscope, err := GetHoroscope(key)
 			if err != nil {
@@ -72,7 +72,7 @@ func GetHoroscopes() (Horoscope, HoroscopeError) {
 		}(key, value)
 	}
 
-	for range signes {
+	for range Signes {
 		<-ch
 	}
 

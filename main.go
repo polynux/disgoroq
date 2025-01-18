@@ -465,7 +465,7 @@ func scheduleHoroscope(s *discordgo.Session) gocron.Scheduler {
 		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(12, 0, 0))),
 		gocron.NewTask(
 			sendHoroscope,
-            s,
+			s,
 		),
 	)
 	if jobErr != nil {
@@ -481,8 +481,34 @@ func sendHoroscope(s *discordgo.Session) {
 	horoscopes, _ := horoscope.GetHoroscopes()
 	horoscopeMessage := ""
 	for key, value := range horoscopes {
-		horoscopeMessage += fmt.Sprintf("**%s**\n%s\n\n", key, value)
+		horoscopeMessage += fmt.Sprintf("%s\n%s\n\n", key, value)
 	}
+	instructions := `Tu es un createur d'horoscope. Tous les messages que tu recevras sont des horoscopes a modifier.
+    Reponds de maniere GOOFY, c'est tres important. Ta reponse doit etre tres courte, deux phrases ou trois pour chaque horoscope.
+    Rajoute de temps en temps des émojis goofy.
+    Le signe astro doit etre en gras sous cette forme "**SIGNE**"`
+
+	params := GroqParams{
+		MaxTokens:    2000,
+		Temperature:  1,
+		Instructions: instructions,
+		Content:      horoscopeMessage,
+	}
+
+	response, err := askGroq(context.Background(), &params)
+	if err != nil {
+		fmt.Println("error getting response,", err)
+		return
+	}
+	responses := make([]string, 0)
+	if len(response) > 2000 {
+		for i := 0; i < len(response); i += 2000 {
+			responses = append(responses, response[i:min(i+2000, len(response))])
+		}
+	} else {
+		responses = append(responses, response)
+	}
+
 	guilds, err := utils.Q.GetAllGuilds(context.Background())
 	if err != nil {
 		fmt.Println("error getting guilds,", err)
@@ -495,12 +521,19 @@ func sendHoroscope(s *discordgo.Session) {
 		})
 		if err != nil {
 			log.Println("error getting horoscope channel,", err)
-			return
+			continue
 		}
-		_, err = s.ChannelMessageSend(channelID, horoscopeMessage)
+		_, err = s.ChannelMessageSend(channelID, "Horoscope du jour:")
 		if err != nil {
 			fmt.Println("error sending horoscope,", err)
-			return
+			continue
+		}
+		for _, value := range responses {
+			_, err = s.ChannelMessageSend(channelID, value)
+			if err != nil {
+				fmt.Println("error sending horoscope,", err)
+				continue
+			}
 		}
 	}
 }
@@ -678,9 +711,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	params := GroqParams{
-		MaxTokens:     defaultMaxTokens,
-		Temperature:   defaultTemperature,
-		MessagesCount: defaultMessagesCount,
+		MaxTokens:   defaultMaxTokens,
+		Temperature: defaultTemperature,
 	}
 
 	temp, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -743,11 +775,10 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 }
 
 type GroqParams struct {
-	MaxTokens     int
-	Temperature   float32
-	MessagesCount int
-	Instructions  string
-	Content       string
+	MaxTokens    int
+	Temperature  float32
+	Instructions string
+	Content      string
 }
 
 func askGroq(ctx context.Context, params *GroqParams) (string, error) {
@@ -765,7 +796,7 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 				Content: params.Instructions + "\n" + params.Content,
 			},
 		},
-		MaxTokens:   defaultMaxTokens,
+		MaxTokens:   params.MaxTokens,
 		Temperature: params.Temperature,
 	})
 	if err != nil {
