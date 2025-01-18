@@ -14,9 +14,11 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/conneroisu/groq-go"
+	"github.com/go-co-op/gocron/v2"
 	"github.com/joho/godotenv"
 
 	"polynux/disgoroq/db"
+	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/utils"
 )
 
@@ -36,6 +38,30 @@ var (
 		{
 			Name:        "ping",
 			Description: "Replies with Pong!",
+		},
+		{
+			Name:        "horoscope",
+			Description: "Get the horoscope for a sign",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionString,
+					Name:        "sign",
+					Description: "The sign for the horoscope (belier, taureau, etc...)",
+					Required:    true,
+				},
+			},
+		},
+		{
+			Name:        "horoscopechannel",
+			Description: "Set the channel for the horoscope",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionChannel,
+					Name:        "channel",
+					Description: "The channel for the horoscope",
+					Required:    true,
+				},
+			},
 		},
 		{
 			Name:        "temperature",
@@ -137,6 +163,43 @@ var (
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
 					Content: "Pong!",
+				},
+			})
+		},
+		"horoscope": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			sign := i.ApplicationCommandData().Options[0].StringValue()
+			horo, err := horoscope.GetHoroscope(sign)
+			if err != nil {
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "Error getting horoscope",
+					},
+				})
+				return
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: horo,
+				},
+			})
+		},
+		"horoscopechannel": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "horoscope_channel",
+				Value:   channelID.ID,
+			})
+			content := fmt.Sprintf("Horoscope channel set to %v", channelID.ID)
+			if err != nil {
+				content = "Error setting horoscope channel"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
 				},
 			})
 		},
@@ -382,9 +445,64 @@ func main() {
 	registerCommands(dg)
 	log.Println("Commands registered")
 
+	scheduler := scheduleHoroscope(dg)
+	defer scheduler.Shutdown()
+
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
+}
+
+func scheduleHoroscope(s *discordgo.Session) gocron.Scheduler {
+	location, _ := time.LoadLocation("Europe/Paris")
+	logger := gocron.NewLogger(gocron.LogLevelInfo)
+	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(logger))
+	if schedulerErr != nil {
+		log.Println("error creating scheduler,", schedulerErr)
+	}
+
+	_, jobErr := scheduler.NewJob(
+		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(12, 0, 0))),
+		gocron.NewTask(
+			sendHoroscope,
+            s,
+		),
+	)
+	if jobErr != nil {
+		log.Println("error creating job,", jobErr)
+	}
+
+	scheduler.Start()
+
+	return scheduler
+}
+
+func sendHoroscope(s *discordgo.Session) {
+	horoscopes, _ := horoscope.GetHoroscopes()
+	horoscopeMessage := ""
+	for key, value := range horoscopes {
+		horoscopeMessage += fmt.Sprintf("**%s**\n%s\n\n", key, value)
+	}
+	guilds, err := utils.Q.GetAllGuilds(context.Background())
+	if err != nil {
+		fmt.Println("error getting guilds,", err)
+		return
+	}
+	for _, guild := range guilds {
+		channelID, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+			Name:    "horoscope_channel",
+			GuildID: guild,
+		})
+		if err != nil {
+			log.Println("error getting horoscope channel,", err)
+			return
+		}
+		_, err = s.ChannelMessageSend(channelID, horoscopeMessage)
+		if err != nil {
+			fmt.Println("error sending horoscope,", err)
+			return
+		}
+	}
 }
 
 func registerCommands(s *discordgo.Session) {
