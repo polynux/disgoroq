@@ -2,7 +2,6 @@ package horoscope
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 
