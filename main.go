@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -708,11 +709,16 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 	messagesFormatted := ""
+	attachmentCount := 0
 	for idx := len(messages) - 1; idx >= 0; idx-- {
+		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
+			idx--
+			continue
+		}
 		imageDescription := ""
-		attachmentCount := 0
 		for _, attachment := range messages[idx].Attachments {
 			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" && attachmentCount < 5 {
+				s.ChannelTyping(m.ChannelID)
 				response, err := describeImage(context.Background(), &GroqImageParams{
 					Instruction: "Décris cette image avec une liste de 5-6 mots-clés EN FRANÇAIS, séparés par des virgules, SUR UNE SEULE LIGNE. AUCUN AUTRE TEXTE.",
 					ImageURL:    attachment.URL,
@@ -725,9 +731,19 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				attachmentCount++
 			}
 		}
-		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + messages[idx].Author.Username + ": "
+		userMember, err := s.GuildMember(m.GuildID, m.Author.ID)
+		if err != nil {
+			fmt.Println("error getting user member,", err)
+			return
+		}
+		nick := userMember.Nick
+		if nick == "" {
+			nick = m.Author.Username
+		}
+		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + userMember.Nick + ": "
+
 		if imageDescription != "" {
-			messagesFormatted += "[IMAGE_DESC:" + imageDescription + "]\n"
+			messagesFormatted += "[IMAGE_DESC:" + strings.TrimSuffix(imageDescription, "\n") + "]\n"
 		}
 		messagesFormatted += messages[idx].Content + "\n\n"
 	}
@@ -748,9 +764,18 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	instructions := `Ici on est neurosalarial, on est concentré, et on leverage des k€.
-    Reponds de maniere goofy. Ta reponse doit etre tres courte, une phrase ou deux.
-    Rajoute de temps en temps des émojis goofy.`
+	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va. 
+Tu parles avec plein d'émojis, des références délirantes et un sens de l'humour complètement random. 
+Chaque message est une mini-aventure comique. Troll, déconne, mais reste bienveillant.
+Tes réponses sont ULTRA COURTES : 2-3 phrases max ! 
+Pas de blabla sur comment tu vas répondre - tu FONCES direct avec tes vannes ! 🤪🚀🔥
+Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
+	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
+	if err != nil {
+		fmt.Println("error getting bot member,", err)
+		return
+	}
+	instructions = fmt.Sprintf(instructions, botMember.Nick)
 
 	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
 		Name:    "prompt",
@@ -763,7 +788,9 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	content := "<messages>\n" + messagesFormatted + "\n</messages>"
-	content += "\n\n" + "Le dernier message était: \n<message>" + messages[0].Content + "</message>\n\n" + "Qu'est-ce que tu répondrais à ça?"
+	content += "\n\n" + "Le dernier message était: \n<message>" + messages[0].Content + "</message>\n"
+
+	s.ChannelTyping(m.ChannelID)
 
 	params.Content = content
 	response, err := askGroq(context.Background(), &params)
