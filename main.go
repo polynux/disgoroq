@@ -659,7 +659,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		Name:    "state",
 		GuildID: m.GuildID,
 	})
-	if err != nil || state == "off" {
+	if state == "off" {
 		return
 	}
 
@@ -689,6 +689,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
+	s.ChannelTyping(m.ChannelID)
+
 	messageCountDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
 		Name:    "messagescount",
 		GuildID: m.GuildID,
@@ -707,7 +709,27 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	messagesFormatted := ""
 	for idx := len(messages) - 1; idx >= 0; idx-- {
-		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + messages[idx].Author.Username + ": " + messages[idx].Content + "\n"
+		imageDescription := ""
+		attachmentCount := 0
+		for _, attachment := range messages[idx].Attachments {
+			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" && attachmentCount < 5 {
+				response, err := describeImage(context.Background(), &GroqImageParams{
+					Instruction: "Décris cette image avec une liste de 5-6 mots-clés EN FRANÇAIS, séparés par des virgules, SUR UNE SEULE LIGNE. AUCUN AUTRE TEXTE.",
+					ImageURL:    attachment.URL,
+				})
+				if err != nil {
+					fmt.Println("error getting response,", err)
+					return
+				}
+				imageDescription += response + "\n"
+				attachmentCount++
+			}
+		}
+		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + messages[idx].Author.Username + ": "
+		if imageDescription != "" {
+			messagesFormatted += "[IMAGE_DESC:" + imageDescription + "]\n"
+		}
+		messagesFormatted += messages[idx].Content + "\n\n"
 	}
 
 	params := GroqParams{
@@ -788,11 +810,11 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 		return "", err
 	}
 
-	resp, err := client.CreateChatCompletion(ctx, groq.ChatCompletionRequest{
-		Model: groq.Llama318BInstant,
+	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
+		Model: groq.ModelLlama318BInstant,
 		Messages: []groq.ChatCompletionMessage{
 			{
-				Role:    groq.ChatMessageRoleUser,
+				Role:    groq.RoleUser,
 				Content: params.Instructions + "\n" + params.Content,
 			},
 		},
@@ -804,5 +826,47 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 		return "", err
 	}
 
+	return string(resp.Choices[0].Message.Content), nil
+}
+
+type GroqImageParams struct {
+	Instruction string
+	ImageURL    string
+}
+
+func describeImage(ctx context.Context, params *GroqImageParams) (string, error) {
+	client, err := groq.NewClient(GroqKey)
+	if err != nil {
+		fmt.Println("error creating Groq client,", err)
+		return "", err
+	}
+
+	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
+		Model: groq.ModelLlama3211BVisionPreview,
+		Messages: []groq.ChatCompletionMessage{
+			{
+				Role: groq.RoleUser,
+				MultiContent: []groq.ChatMessagePart{
+					{
+						Type: groq.ChatMessagePartTypeText,
+						Text: params.Instruction,
+					},
+					{
+						Type: groq.ChatMessagePartTypeImageURL,
+						ImageURL: &groq.ChatMessageImageURL{
+							URL:    params.ImageURL,
+							Detail: "auto",
+						},
+					},
+				},
+			},
+		},
+		MaxTokens:   100,
+		Temperature: 0.2,
+	})
+	if err != nil {
+		fmt.Println("error creating Groq completion,", err)
+		return "", err
+	}
 	return string(resp.Choices[0].Message.Content), nil
 }

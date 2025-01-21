@@ -1,13 +1,13 @@
 module polynux/disgoroq
 
-go 1.23.0
+go 1.23.2
 
-toolchain go1.23.1
+toolchain go1.23.5
 
 require (
 	github.com/PuerkitoBio/goquery v1.10.1
 	github.com/bwmarrin/discordgo v0.28.1
-	github.com/conneroisu/groq-go v0.9.2
+	github.com/conneroisu/groq-go v0.9.5
 	github.com/joho/godotenv v1.5.1
 	github.com/tursodatabase/go-libsql v0.0.0-20240916111504-922dfa87e1e6
 )
@@ -19,7 +19,7 @@ require (
 	github.com/buger/jsonparser v1.1.1 // indirect
 	github.com/go-co-op/gocron/v2 v2.14.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jonboulle/clockwork v0.4.0 // indirect
 	github.com/libsql/sqlite-antlr4-parser v0.0.0-20240327125255-dbf53b6cbf06 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
