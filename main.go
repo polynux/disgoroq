@@ -827,7 +827,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		messagesFormatted += sb.String()
 	}
 
-	params := GroqParams{
+	params := OllamaParams{
 		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
 	}
@@ -843,12 +843,27 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
+	// 	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va.
+	// Tu parles avec plein d'émojis, des références délirantes et un sens de l'humour complètement random.
+	// Chaque message est une mini-aventure comique. Troll, déconne, mais reste bienveillant.
+	// Tes réponses sont ULTRA COURTES : 2-3 phrases max !
+	// Pas de blabla sur comment tu vas répondre - tu FONCES direct avec tes vannes ! 🤪🚀🔥
+	// Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va. 
-Tu parles avec plein d'émojis, des références délirantes et un sens de l'humour complètement random. 
-Chaque message est une mini-aventure comique. Troll, déconne, mais reste bienveillant.
-Tes réponses sont ULTRA COURTES : 2-3 phrases max ! 
-Pas de blabla sur comment tu vas répondre - tu FONCES direct avec tes vannes ! 🤪🚀🔥
-Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
+Tu ne dois JAMAIS :
+- Mentionner que tu es une IA ou un assistant
+- Sortir de ton personnage de pote déjanté
+- Parler de manière formelle ou donner des suggestions
+- Commencer tes phrases par "En tant que..."
+
+Tu DOIS TOUJOURS :
+- Parler comme un vrai pote qui déconne
+- Utiliser des émojis et des références pop culture
+- Répondre de manière ultra courte (2-3 phrases max)
+- Rester dans le délire même sur des sujets sérieux
+- Commencer direct par ta réponse sans introduction
+
+Tu es un VRAI POTE FOU, pas un assistant - comporte-toi comme tel ! 🤪🚀🔥`
 	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
 	if err != nil {
 		fmt.Println("error getting bot member,", err)
@@ -871,7 +886,8 @@ Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 
 	s.ChannelTyping(m.ChannelID)
 
-	response, err := askOllama(content)
+	params.Content = content
+	response, err := askOllama(&params)
 
 	reference := &discordgo.MessageReference{
 		MessageID: m.ID,
@@ -901,7 +917,14 @@ Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 	})
 }
 
-func askOllama(message string) (string, error) {
+type OllamaParams struct {
+	MaxTokens    int
+	Temperature  float32
+	Instructions string
+	Content      string
+}
+
+func askOllama(params *OllamaParams) (string, error) {
 	client, err := api.ClientFromEnvironment()
 	if err != nil {
 		log.Println(err)
@@ -909,9 +932,16 @@ func askOllama(message string) (string, error) {
 	}
 
 	req := &api.GenerateRequest{
-		Model:  "dolphin-llama3",
-		Prompt: message,
+		Model:  "dolphin3",
+		System: params.Instructions,
+		Prompt: params.Content,
 		Stream: new(bool),
+		Options: map[string]interface{}{
+			"temperature":   params.Temperature,
+			"num_predict":   params.MaxTokens,
+			"repeat_last_n": -1,
+			"top_k":         60,
+		},
 	}
 
 	ctx := context.Background()
