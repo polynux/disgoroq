@@ -17,6 +17,7 @@ import (
 	"github.com/conneroisu/groq-go"
 	"github.com/go-co-op/gocron/v2"
 	"github.com/joho/godotenv"
+	"github.com/ollama/ollama/api"
 
 	"polynux/disgoroq/db"
 	"polynux/disgoroq/horoscope"
@@ -870,8 +871,7 @@ Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 
 	s.ChannelTyping(m.ChannelID)
 
-	params.Content = content
-	response, err := askGroq(context.Background(), &params)
+	response, err := askOllama(content)
 
 	reference := &discordgo.MessageReference{
 		MessageID: m.ID,
@@ -899,6 +899,35 @@ Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 			Parse: []discordgo.AllowedMentionType{},
 		},
 	})
+}
+
+func askOllama(message string) (string, error) {
+	client, err := api.ClientFromEnvironment()
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	req := &api.GenerateRequest{
+		Model:  "dolphin-llama3",
+		Prompt: message,
+		Stream: new(bool),
+	}
+
+	ctx := context.Background()
+	response := ""
+	respFunc := func(resp api.GenerateResponse) error {
+		response = resp.Response
+		return nil
+	}
+
+	err = client.Generate(ctx, req, respFunc)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	return response, nil
 }
 
 type GroqParams struct {
