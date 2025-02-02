@@ -616,6 +616,73 @@ func botMentioned(s *discordgo.Session, m *discordgo.MessageCreate) bool {
 	return false
 }
 
+type imageToProcess struct {
+	id  string
+	url string
+}
+
+func getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
+	attachmentCount := 0
+	imagesToProcess := make([]imageToProcess, 0)
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		for _, attachment := range messages[idx].Attachments {
+			if attachmentCount > 5 {
+				return imagesToProcess
+			}
+			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" {
+				// u, _ := url.Parse(attachment.URL)
+				// u.RawQuery = ""
+				// u.Fragment = ""
+				imagesToProcess = append(imagesToProcess, imageToProcess{
+					id:  messages[idx].ID,
+					url: attachment.URL,
+				})
+				attachmentCount++
+			}
+		}
+	}
+
+	return imagesToProcess
+}
+
+type processedImage struct {
+	id          string
+	description string
+}
+
+func processImageInMessages(s *discordgo.Session, m *discordgo.MessageCreate, messages []*discordgo.Message) map[string]string {
+	imagesToProcess := getImagesToProcess(messages)
+
+	describedImages := make(map[string]string)
+
+	ch := make(chan processedImage, len(imagesToProcess))
+
+	for _, img := range imagesToProcess {
+		go func(img imageToProcess) {
+			response, err := describeImage(context.Background(), &GroqImageParams{
+				Instruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
+				ImageURL:    img.url,
+			})
+			if err != nil {
+				fmt.Println("error getting response,", err)
+				return
+			}
+			ch <- processedImage{
+				id:          img.id,
+				description: response,
+			}
+		}(img)
+	}
+	s.ChannelTyping(m.ChannelID)
+
+	for range imagesToProcess {
+		img := <-ch
+		describedImages[img.id] = img.description
+	}
+
+	return describedImages
+}
+
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
@@ -708,28 +775,18 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		fmt.Println("error getting messages,", err)
 		return
 	}
+	processedImages := processImageInMessages(s, m, messages)
+
 	messagesFormatted := ""
-	attachmentCount := 0
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
 			idx--
 			continue
 		}
 		imageDescription := ""
-		for _, attachment := range messages[idx].Attachments {
-			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" && attachmentCount < 5 {
-				s.ChannelTyping(m.ChannelID)
-				response, err := describeImage(context.Background(), &GroqImageParams{
-					Instruction: "Décris cette image avec une liste de 5-6 mots-clés EN FRANÇAIS, séparés par des virgules, SUR UNE SEULE LIGNE. AUCUN AUTRE TEXTE.",
-					ImageURL:    attachment.URL,
-				})
-				if err != nil {
-					fmt.Println("error getting response,", err)
-					return
-				}
-				imageDescription += response + "\n"
-				attachmentCount++
-			}
+		_, found := processedImages[messages[idx].ID]
+		if found {
+			imageDescription = processedImages[messages[idx].ID]
 		}
 		userMember, err := s.GuildMember(m.GuildID, m.Author.ID)
 		if err != nil {
@@ -743,7 +800,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + userMember.Nick + ": "
 
 		if imageDescription != "" {
-			messagesFormatted += "[IMAGE_DESC:" + strings.TrimSuffix(imageDescription, "\n") + "]\n"
+			messagesFormatted += "<IMAGE_DESC>\n" + strings.ReplaceAll(imageDescription, "\n", "") + "</IMAGE_DESC>\n"
 		}
 		messagesFormatted += messages[idx].Content + "\n\n"
 	}
