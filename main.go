@@ -775,9 +775,11 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		fmt.Println("error getting messages,", err)
 		return
 	}
+
 	processedImages := processImageInMessages(s, m, messages)
 
 	messagesFormatted := ""
+	memberCache := make(map[string]*discordgo.Member)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
 			idx--
@@ -788,21 +790,40 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if found {
 			imageDescription = processedImages[messages[idx].ID]
 		}
-		userMember, err := s.GuildMember(m.GuildID, m.Author.ID)
-		if err != nil {
-			fmt.Println("error getting user member,", err)
-			return
+		var userMember *discordgo.Member
+		var err error
+		if cachedMember, exists := memberCache[m.Author.ID]; exists {
+			userMember = cachedMember
+		} else {
+			userMember, err = s.GuildMember(m.GuildID, m.Author.ID)
+			if err != nil {
+				fmt.Println("error getting user member,", err)
+				return
+			}
+			memberCache[m.Author.ID] = userMember
 		}
+
 		nick := userMember.Nick
 		if nick == "" {
 			nick = m.Author.Username
 		}
-		messagesFormatted = messagesFormatted + "<@" + messages[idx].Author.ID + ">" + userMember.Nick + ": "
+
+		var sb strings.Builder
+		sb.WriteString("<@")
+		sb.WriteString(messages[idx].Author.ID)
+		sb.WriteString(">")
+		sb.WriteString(userMember.Nick)
+		sb.WriteString(": ")
 
 		if imageDescription != "" {
-			messagesFormatted += "<IMAGE_DESC>\n" + strings.ReplaceAll(imageDescription, "\n", "") + "</IMAGE_DESC>\n"
+			sb.WriteString("<IMAGE_DESC>\n")
+			sb.WriteString(strings.ReplaceAll(imageDescription, "\n", ""))
+			sb.WriteString("</IMAGE_DESC>\n")
 		}
-		messagesFormatted += messages[idx].Content + "\n\n"
+		sb.WriteString(messages[idx].Content)
+		sb.WriteString("\n\n")
+
+		messagesFormatted += sb.String()
 	}
 
 	params := GroqParams{
