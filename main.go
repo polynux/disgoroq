@@ -955,7 +955,6 @@ func askOllama(params *OllamaParams) (string, error) {
 			"top_k":         60,
 		},
 	}
-	log.Println(params.Messages)
 
 	ctx := context.Background()
 	response := ""
