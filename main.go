@@ -693,6 +693,11 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
 	}
+	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
+	if err != nil {
+		fmt.Println("error getting bot member,", err)
+		return
+	}
 
 	thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
 		Name:    "threshold",
@@ -784,7 +789,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	processedImages := processImageInMessages(s, m, messages)
 
-	messagesFormatted := ""
+	messagesFormatted := make([]api.Message, 1)
 	memberCache := make(map[string]*discordgo.Member)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
@@ -829,7 +834,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		sb.WriteString(messages[idx].Content)
 		sb.WriteString("\n\n")
 
-		messagesFormatted += sb.String()
+		if messages[idx].Author.ID == s.State.User.ID {
+			messagesFormatted = append(messagesFormatted, api.Message{
+				Role:    "assistant",
+				Content: messages[idx].Content,
+			})
+		} else {
+			messagesFormatted = append(messagesFormatted, api.Message{
+				Role:    "user",
+				Content: sb.String(),
+			})
+		}
 	}
 
 	params := OllamaParams{
@@ -863,11 +878,6 @@ Tu DOIS TOUJOURS :
 - Commencer direct par ta réponse sans introduction
 
 Tu es un VRAI POTE FOU, pas un assistant - comporte-toi comme tel ! 🤪🚀🔥`
-	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
-	if err != nil {
-		fmt.Println("error getting bot member,", err)
-		return
-	}
 	instructions = fmt.Sprintf(instructions, botMember.Nick)
 
 	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -880,12 +890,10 @@ Tu es un VRAI POTE FOU, pas un assistant - comporte-toi comme tel ! 🤪🚀🔥
 		params.Instructions = instructions
 	}
 
-	content := "<messages>\n" + messagesFormatted + "\n</messages>"
-	content += "\n\n" + "Le dernier message était: \n<message>" + messages[0].Content + "</message>\n"
+	params.Messages = messagesFormatted
 
 	s.ChannelTyping(m.ChannelID)
 
-	params.Content = content
 	response, err := askOllama(&params)
 
 	reference := &discordgo.MessageReference{
@@ -920,7 +928,7 @@ type OllamaParams struct {
 	MaxTokens    int
 	Temperature  float32
 	Instructions string
-	Content      string
+	Messages     []api.Message
 }
 
 func askOllama(params *OllamaParams) (string, error) {
@@ -930,11 +938,16 @@ func askOllama(params *OllamaParams) (string, error) {
 		return "", err
 	}
 
-	req := &api.GenerateRequest{
-		Model:  "dolphin3",
-		System: params.Instructions,
-		Prompt: params.Content,
-		Stream: new(bool),
+	instructions := make([]api.Message, 1)
+	instructions = append(instructions, api.Message{
+		Role:    "system",
+		Content: params.Instructions,
+	})
+	params.Messages = append(instructions, params.Messages...)
+	req := &api.ChatRequest{
+		Model:    "dolphin3",
+		Messages: params.Messages,
+		Stream:   new(bool),
 		Options: map[string]interface{}{
 			"temperature":   params.Temperature,
 			"num_predict":   params.MaxTokens,
@@ -942,15 +955,16 @@ func askOllama(params *OllamaParams) (string, error) {
 			"top_k":         60,
 		},
 	}
+	log.Println(params.Messages)
 
 	ctx := context.Background()
 	response := ""
-	respFunc := func(resp api.GenerateResponse) error {
-		response = resp.Response
+	respFunc := func(resp api.ChatResponse) error {
+		response = resp.Message.Content
 		return nil
 	}
 
-	err = client.Generate(ctx, req, respFunc)
+	err = client.Chat(ctx, req, respFunc)
 	if err != nil {
 		log.Println(err)
 		return "", err
