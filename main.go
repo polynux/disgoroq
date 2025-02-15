@@ -29,7 +29,7 @@ var (
 	GroqKey              string
 	defaultThreshold             = 0.1
 	defaultThresholdSexe         = 0.05
-	defaultMaxTokens             = 100
+	defaultMaxTokens             = 200
 	defaultTemperature   float32 = 0.5
 	defaultMessagesCount         = 100
 	rateLimit            int64   = 10
@@ -491,7 +491,7 @@ func sendHoroscope(s *discordgo.Session) {
     Le signe astro doit etre en gras sous cette forme "**SIGNE**"`
 
 	params := GroqParams{
-		MaxTokens:    2000,
+		MaxTokens:    3000,
 		Temperature:  1,
 		Instructions: instructions,
 		Content:      horoscopeMessage,
