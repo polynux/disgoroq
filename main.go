@@ -631,9 +631,9 @@ func getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
 				return imagesToProcess
 			}
 			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" {
-				// u, _ := url.Parse(attachment.URL)
-				// u.RawQuery = ""
-				// u.Fragment = ""
+				if attachment.Size > 10000000 {
+					continue
+				}
 				imagesToProcess = append(imagesToProcess, imageToProcess{
 					id:  messages[idx].ID,
 					url: attachment.URL,
@@ -666,6 +666,11 @@ func processImageInMessages(s *discordgo.Session, m *discordgo.MessageCreate, me
 			})
 			if err != nil {
 				fmt.Println("error getting response,", err)
+				fmt.Println("Image URL:", img.url)
+				ch <- processedImage{
+					id:          img.id,
+					description: "",
+				}
 				return
 			}
 			ch <- processedImage{
@@ -843,12 +848,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	// 	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va.
-	// Tu parles avec plein d'émojis, des références délirantes et un sens de l'humour complètement random.
-	// Chaque message est une mini-aventure comique. Troll, déconne, mais reste bienveillant.
-	// Tes réponses sont ULTRA COURTES : 2-3 phrases max !
-	// Pas de blabla sur comment tu vas répondre - tu FONCES direct avec tes vannes ! 🤪🚀🔥
-	// Ne perds JAMAIS ton style goofy, même si on te parle de trucs sérieux.`
 	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va. 
 Tu ne dois JAMAIS :
 - Mentionner que tu es une IA ou un assistant
