@@ -796,6 +796,9 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			idx--
 			continue
 		}
+		if messages[idx].Content == "(et je parle de sexe evidemment)" && messages[idx].Author.ID == s.State.User.ID {
+			continue
+		}
 		imageDescription := ""
 		_, found := processedImages[messages[idx].ID]
 		if found {
