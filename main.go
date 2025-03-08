@@ -390,6 +390,7 @@ var (
 )
 
 var local bool
+var sendDirectHoroscope bool
 
 func init() {
 	err := godotenv.Load(".env.local")
@@ -409,6 +410,7 @@ func init() {
 	}
 
 	flag.BoolVar(&local, "local", false, "Use local database")
+	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
 	flag.Parse()
 }
 
@@ -450,6 +452,10 @@ func main() {
 	scheduler := scheduleHoroscope(dg)
 	defer scheduler.Shutdown()
 
+	if sendDirectHoroscope {
+		sendHoroscope(dg)
+	}
+
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
@@ -482,9 +488,10 @@ func scheduleHoroscope(s *discordgo.Session) gocron.Scheduler {
 func sendHoroscope(s *discordgo.Session) {
 	horoscopes, _ := horoscope.GetHoroscopes()
 	horoscopeMessage := ""
-	for key, value := range horoscopes {
+	horoscopes.Range(func(key, value interface{}) bool {
 		horoscopeMessage += fmt.Sprintf("%s\n%s\n\n", key, value)
-	}
+		return true
+	})
 	instructions := `Tu es un createur d'horoscope. Tous les messages que tu recevras sont des horoscopes a modifier.
     Reponds de maniere GOOFY, c'est tres important. Ta reponse doit etre tres courte, deux phrases ou trois pour chaque horoscope.
     Rajoute de temps en temps des émojis goofy.

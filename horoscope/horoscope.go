@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -41,8 +42,8 @@ func GetHoroscope(signe string) (string, error) {
 	}
 
 	var horoscope string
-	doc.Find(".main-horoscope > p:first-child").Each(func(i int, s *goquery.Selection) {
-		bold := s.Find("b").Text()
+	doc.Find(".main-horoscope > p:nth-child(2)").Each(func(i int, s *goquery.Selection) {
+		bold := s.Find("strong").Text()
 		horoscope = strings.Trim(s.Text(), " \n")
 		horoscope = strings.Replace(horoscope, bold+" - ", "", -1)
 	})
@@ -50,31 +51,32 @@ func GetHoroscope(signe string) (string, error) {
 	return horoscope, nil
 }
 
-type Horoscope map[string]string
+type Horoscopes struct {
+	sync.Map
+}
 
-type HoroscopeError map[string]error
+type HoroscopeErrors struct {
+	sync.Map
+}
 
-func GetHoroscopes() (Horoscope, HoroscopeError) {
-	errors := make(HoroscopeError)
-	horoscopes := make(Horoscope)
-
-	ch := make(chan string, len(Signes))
+func GetHoroscopes() (*Horoscopes, *HoroscopeErrors) {
+	var errors HoroscopeErrors
+	var horoscopes Horoscopes
+	var wg sync.WaitGroup
 
 	for key, value := range Signes {
+		wg.Add(1)
 		go func(key, value string) {
+			defer wg.Done()
 			horoscope, err := GetHoroscope(key)
 			if err != nil {
-				errors[key] = err
+				errors.Store(key, err)
 			} else {
-				horoscopes[key] = horoscope
+				horoscopes.Store(key, horoscope)
 			}
-			ch <- key
 		}(key, value)
 	}
+	wg.Wait()
 
-	for range Signes {
-		<-ch
-	}
-
-	return horoscopes, errors
+	return &horoscopes, &errors
 }
