@@ -23,7 +23,7 @@ var Signes = map[string]string{
 	"poissons":   "12",
 }
 
-var url = "https://www.horoscope.com/fr/horoscopes/general/horoscope-general-du-jour-aujourdhui.aspx?signe="
+var url = "https://www.horoscope.com/us/horoscopes/general/horoscope-general-daily-today.aspx?sign="
 
 func GetHoroscope(signe string) (string, error) {
 	resp, err := http.Get(url + Signes[signe])
@@ -41,7 +41,7 @@ func GetHoroscope(signe string) (string, error) {
 	}
 
 	var horoscope string
-	doc.Find(".horoscope-content > p:first-child").Each(func(i int, s *goquery.Selection) {
+	doc.Find(".main-horoscope > p:first-child").Each(func(i int, s *goquery.Selection) {
 		bold := s.Find("b").Text()
 		horoscope = strings.Trim(s.Text(), " \n")
 		horoscope = strings.Replace(horoscope, bold+" - ", "", -1)
