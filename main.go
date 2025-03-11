@@ -492,16 +492,24 @@ func sendHoroscope(s *discordgo.Session) {
 		horoscopeMessage += fmt.Sprintf("%s\n%s\n\n", key, value)
 		return true
 	})
-	instructions := `Tu es un createur d'horoscope. Tous les messages que tu recevras sont des horoscopes a modifier.
-    Reponds de maniere GOOFY, c'est tres important. Ta reponse doit etre tres courte, deux phrases ou trois pour chaque horoscope.
-    Rajoute de temps en temps des émojis goofy.
-    Le signe astro doit etre en gras sous cette forme "**SIGNE**"`
+	instructions := `Tu es un créateur d'horoscope DÉLIRANT 🤪. Pour chaque horoscope que tu recevras:
+
+1. Transforme-le en version ULTRA GOOFY avec des prédictions absurdes et exagérées 🥴
+2. Limite ta réponse à 2-3 phrases MAXIMUM par thème
+3. Saupoudre GÉNÉREUSEMENT d'émojis loufoques (🤪, 👽, 🧠, 🌮, etc.)
+4. Utilise un langage décalé et des métaphores ridicules
+5. Inclus toujours le signe astrologique en gras au début: "**SIGNE**"
+6. Termine par une "recommandation cosmique" totalement farfelue
+7. Évite tout conseil sérieux - plus c'est absurde, mieux c'est!
+
+Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
 	params := GroqParams{
 		MaxTokens:    3000,
 		Temperature:  1,
 		Instructions: instructions,
 		Content:      horoscopeMessage,
+		Model:        groq.ModelLlama3370BVersatile,
 	}
 
 	response, err := askGroq(context.Background(), &params)
@@ -987,6 +995,7 @@ type GroqParams struct {
 	Temperature  float32
 	Instructions string
 	Content      string
+	Model        groq.ChatModel
 }
 
 func askGroq(ctx context.Context, params *GroqParams) (string, error) {
@@ -997,7 +1006,7 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 	}
 
 	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
-		Model: groq.ModelLlama318BInstant,
+		Model: params.Model,
 		Messages: []groq.ChatCompletionMessage{
 			{
 				Role:    groq.RoleUser,
