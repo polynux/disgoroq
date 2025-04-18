@@ -485,7 +485,7 @@ func schedule(s *discordgo.Session) gocron.Scheduler {
 		log.Println("error creating horoscope job,", jobErr)
 	}
 	_, err := scheduler.NewJob(
-		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(20, 0, 0))),
+		gocron.WeeklyJob(1, gocron.NewWeekdays(time.Friday), gocron.NewAtTimes(gocron.NewAtTime(20, 0, 0))),
 		gocron.NewTask(
 			sendDirectFartingFriday,
 			s,
