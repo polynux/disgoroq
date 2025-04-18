@@ -391,6 +391,7 @@ var (
 
 var local bool
 var sendDirectHoroscope bool
+var sendDirectFartingFriday bool
 
 func init() {
 	err := godotenv.Load(".env.local")
@@ -411,6 +412,7 @@ func init() {
 
 	flag.BoolVar(&local, "local", false, "Use local database")
 	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
+	flag.BoolVar(&sendDirectFartingFriday, "sendFartingFriday", false, "Send farting friday directly")
 	flag.Parse()
 }
 
@@ -449,11 +451,14 @@ func main() {
 	registerCommands(dg)
 	log.Println("Commands registered")
 
-	scheduler := scheduleHoroscope(dg)
+	scheduler := schedule(dg)
 	defer scheduler.Shutdown()
 
 	if sendDirectHoroscope {
 		sendHoroscope(dg)
+	}
+	if sendDirectFartingFriday {
+		sendFartingFriday(dg)
 	}
 
 	sc := make(chan os.Signal, 1)
@@ -461,7 +466,7 @@ func main() {
 	<-sc
 }
 
-func scheduleHoroscope(s *discordgo.Session) gocron.Scheduler {
+func schedule(s *discordgo.Session) gocron.Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	logger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(logger))
@@ -477,12 +482,79 @@ func scheduleHoroscope(s *discordgo.Session) gocron.Scheduler {
 		),
 	)
 	if jobErr != nil {
-		log.Println("error creating job,", jobErr)
+		log.Println("error creating horoscope job,", jobErr)
+	}
+	_, err := scheduler.NewJob(
+		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(20, 0, 0))),
+		gocron.NewTask(
+			sendDirectFartingFriday,
+			s,
+		),
+	)
+	if err != nil {
+		log.Println("error creating farting job,", err)
 	}
 
 	scheduler.Start()
 
 	return scheduler
+}
+
+func sendFartingFriday(s *discordgo.Session) {
+	embed := &discordgo.MessageEmbed{
+		Title:       "🎉 FARTING FRIDAY NOTIFICATION 🎉",
+		Description: "Heeeeeeyyyyyy les amis du bruit de fond !!! 💨💨💨",
+		Color:       0x9B59B6,
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "🌈✨ JOYEUX FARTING FRIDAY À TOUS LES PÉTOMANES EN HERBE ✨🌈",
+				Value:  "Que vos flatulences soient mélodieuses et vos pets harmonieux en ce jour béni où nous célébrons l'art ancestral du prout ! 🎵💨",
+				Inline: false,
+			},
+			{
+				Name:   "Rappel Important",
+				Value:  "N'oubliez pas : aujourd'hui, c'est pas juste permis, c'est ENCOURAGÉ de lâcher la pression atmosphérique !! 🌪️🌬️",
+				Inline: false,
+			},
+			{
+				Name:   "Conseil du jour 💡",
+				Value:  "Mangez des haricots pour un boost de performance ! 🫘💪",
+				Inline: true,
+			},
+			{
+				Name:   "Astuce pro 🧠",
+				Value:  "\"Qui prout dans l'eau fait des bulles, qui prout dans le vent fait du parfum\"",
+				Inline: true,
+			},
+		},
+		Footer: &discordgo.MessageEmbedFooter{
+			Text: "*pffffrrrrrttttt* 💨 (c'était ma signature olfactive)",
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: "https://media.discordapp.net/attachments/1194331990506356780/1362860968891384119/fartin.gif?ex=6803eeaf&is=68029d2f&hm=120759b2a6258432922d9e61239288ab3226dc925c86009e0402298c6b0e3df5&=",
+		},
+	}
+
+	guilds, err := utils.Q.GetAllGuilds(context.Background())
+	if err != nil {
+		fmt.Println("error getting guilds,", err)
+		return
+	}
+	for _, guild := range guilds {
+		channelID, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
+			Name:    "farting_friday_channel",
+			GuildID: guild,
+		})
+		if err != nil {
+			log.Println("error getting farting friday channel,", err)
+			continue
+		}
+		_, err = s.ChannelMessageSendEmbed(channelID, embed)
+		if err != nil {
+			fmt.Println("error sending farting friday,", err)
+			continue
+		}
+	}
 }
 
 func sendHoroscope(s *discordgo.Session) {
