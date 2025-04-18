@@ -66,6 +66,18 @@ var (
 			},
 		},
 		{
+			Name:        "farting_friday_channel",
+			Description: "Set the channel for the farting friday",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionChannel,
+					Name:        "channel",
+					Description: "The channel for the farting friday",
+					Required:    true,
+				},
+			},
+		},
+		{
 			Name:        "temperature",
 			Description: "Set the temperature for the bot",
 			Options: []*discordgo.ApplicationCommandOption{
@@ -197,6 +209,24 @@ var (
 			content := fmt.Sprintf("Horoscope channel set to %v", channelID.ID)
 			if err != nil {
 				content = "Error setting horoscope channel"
+			}
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: content,
+				},
+			})
+		},
+		"farting_friday_channel": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
+			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
+				GuildID: i.GuildID,
+				Name:    "farting_friday_channel",
+				Value:   channelID.ID,
+			})
+			content := fmt.Sprintf("Farting Friday channel set to %v", channelID.ID)
+			if err != nil {
+				content = "Error setting farting friday channel"
 			}
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -487,7 +517,7 @@ func schedule(s *discordgo.Session) gocron.Scheduler {
 	_, err := scheduler.NewJob(
 		gocron.WeeklyJob(1, gocron.NewWeekdays(time.Friday), gocron.NewAtTimes(gocron.NewAtTime(20, 0, 0))),
 		gocron.NewTask(
-			sendDirectFartingFriday,
+			sendFartingFriday,
 			s,
 		),
 	)
