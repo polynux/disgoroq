@@ -333,7 +333,7 @@ var (
 				}
 			}
 			s.ChannelMessagesBulkDelete(i.ChannelID, messagesToDelete)
-			str := fmt.Sprintf("Messages cleaned")
+			str := "Messages cleaned"
 			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 				Content: &str,
 			})
@@ -405,7 +405,7 @@ var (
 				Name:    "prompt",
 				Value:   value,
 			})
-			content := fmt.Sprintf("Prompt correctly set")
+			content := "Prompt correctly set"
 			if err != nil {
 				content = "Error setting prompt"
 			}
@@ -601,7 +601,7 @@ func sendFartingFriday(s *discordgo.Session) {
 func sendHoroscope(s *discordgo.Session) {
 	horoscopes, _ := horoscope.GetHoroscopes()
 	horoscopeMessage := ""
-	horoscopes.Range(func(key, value interface{}) bool {
+	horoscopes.Range(func(key, value any) bool {
 		horoscopeMessage += fmt.Sprintf("%s\n%s\n\n", key, value)
 		return true
 	})
@@ -617,11 +617,22 @@ func sendHoroscope(s *discordgo.Session) {
 
 Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
+	messages := []groq.ChatCompletionMessage{
+		{
+			Role:    "system",
+			Content: instructions,
+		},
+		{
+			Role:    "user",
+			Content: horoscopeMessage,
+		},
+	}
+
 	params := GroqParams{
 		MaxTokens:    3000,
 		Temperature:  1,
 		Instructions: instructions,
-		Content:      horoscopeMessage,
+		Messages:     messages,
 		Model:        groq.ModelLlama3370BVersatile,
 	}
 
@@ -715,12 +726,7 @@ func getMessages(s *discordgo.Session, channelID string, num int) ([]*discordgo.
 
 	messages := []*discordgo.Message{}
 	for num > 0 {
-		var toGet int
-		if num > 100 {
-			toGet = 100
-		} else {
-			toGet = num
-		}
+		toGet := min(100, num)
 		lastMessage := ""
 		if len(messages) > 0 {
 			lastMessage = messages[len(messages)-1].ID
@@ -922,7 +928,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	processedImages := processImageInMessages(s, m, messages)
 
-	messagesFormatted := make([]api.Message, 1)
+	messagesFormatted := make([]groq.ChatCompletionMessage, 0)
 	memberCache := make(map[string]*discordgo.Member)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
@@ -971,21 +977,22 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		sb.WriteString("\n\n")
 
 		if messages[idx].Author.ID == s.State.User.ID {
-			messagesFormatted = append(messagesFormatted, api.Message{
+			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
 				Role:    "assistant",
 				Content: messages[idx].Content,
 			})
 		} else {
-			messagesFormatted = append(messagesFormatted, api.Message{
+			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
 				Role:    "user",
 				Content: sb.String(),
 			})
 		}
 	}
 
-	params := OllamaParams{
+	params := GroqParams{
 		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
+		Model:       "openai/gpt-oss-20b",
 	}
 
 	temp, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -999,21 +1006,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	instructions := `Tu es %s, un pote complètement déjanté qui balance des vannes à tout-va. 
-Tu ne dois JAMAIS :
-- Mentionner que tu es une IA ou un assistant
-- Sortir de ton personnage de pote déjanté
-- Parler de manière formelle ou donner des suggestions
-- Commencer tes phrases par "En tant que..."
-
-Tu DOIS TOUJOURS :
-- Parler comme un vrai pote qui déconne
-- Utiliser des émojis et des références pop culture
-- Répondre de manière ultra courte (2-3 phrases max)
-- Rester dans le délire même sur des sujets sérieux
-- Commencer direct par ta réponse sans introduction
-
-Tu es un VRAI POTE FOU, pas un assistant - comporte-toi comme tel ! 🤪🚀🔥`
+	instructions := `yo, t’es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t’envoies du lourd ! 🔥 pas de majuscules, jamais, t’es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d’ia, pas d’assistant, juste un bro qui claque des émojis et du fun ! 🚀`
 	instructions = fmt.Sprintf(instructions, botMember.Nick)
 
 	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -1030,7 +1023,7 @@ Tu es un VRAI POTE FOU, pas un assistant - comporte-toi comme tel ! 🤪🚀🔥
 
 	s.ChannelTyping(m.ChannelID)
 
-	response, err := askOllama(&params)
+	response, err := askGroq(context.Background(), &params)
 
 	reference := &discordgo.MessageReference{
 		MessageID: m.ID,
@@ -1084,7 +1077,7 @@ func askOllama(params *OllamaParams) (string, error) {
 		Model:    "dolphin3",
 		Messages: params.Messages,
 		Stream:   new(bool),
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			"temperature":   params.Temperature,
 			"num_predict":   params.MaxTokens,
 			"repeat_last_n": -1,
@@ -1112,7 +1105,7 @@ type GroqParams struct {
 	MaxTokens    int
 	Temperature  float32
 	Instructions string
-	Content      string
+	Messages	 []groq.ChatCompletionMessage
 	Model        groq.ChatModel
 }
 
@@ -1123,14 +1116,15 @@ func askGroq(ctx context.Context, params *GroqParams) (string, error) {
 		return "", err
 	}
 
+	instructions := make([]groq.ChatCompletionMessage, 0)
+	instructions = append(instructions, groq.ChatCompletionMessage{
+		Role:    "system",
+		Content: params.Instructions,
+	})
+
 	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
 		Model: params.Model,
-		Messages: []groq.ChatCompletionMessage{
-			{
-				Role:    groq.RoleUser,
-				Content: params.Instructions + "\n" + params.Content,
-			},
-		},
+		Messages: append(instructions, params.Messages...),
 		MaxTokens:   params.MaxTokens,
 		Temperature: params.Temperature,
 	})
