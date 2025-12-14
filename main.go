@@ -481,16 +481,6 @@ func main() {
 	registerCommands(dg)
 	log.Println("Commands registered")
 
-	scheduler := schedule(dg)
-	defer scheduler.Shutdown()
-
-	if sendDirectHoroscope {
-		sendHoroscope(dg)
-	}
-	if sendDirectFartingFriday {
-		sendFartingFriday(dg)
-	}
-
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
@@ -845,30 +835,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	thresholdSexeDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "thresholdSexe",
-		GuildID: m.GuildID,
-	})
-	thresholdSexe := defaultThresholdSexe
-	if err == nil {
-		value, err := strconv.ParseFloat(thresholdSexeDb, 64)
-		if err == nil {
-			thresholdSexe = float64(value)
-		}
-	}
 
 	randFloat := rand.Float32()
-	if randFloat < float32(thresholdSexe) && !botMentioned(s, m) {
-		if rand.Float32() < 0.5 {
-			s.ChannelMessageSend(m.ChannelID, "(et je parle de sexe evidemment)")
-			return
-		} else {
-			s.ChannelMessageSend(m.ChannelID, "malin ça, j'ai la barre maintenant")
-			return
-		}
-	}
-
-	randFloat = rand.Float32()
 	if randFloat > float32(threshold) && !botMentioned(s, m) {
 		return
 	}
@@ -892,7 +860,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	if lastMessageTime > 0 && !botMentioned(s, m) {
 		if time.Now().Unix()-lastMessageTime < rateLimit {
-			s.ChannelMessageSend(m.ChannelID, "Please wait a bit before asking me again.")
+			s.ChannelMessageSend(m.ChannelID, "meow :3")
 			return
 		}
 	}
@@ -926,9 +894,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	processedImages := processImageInMessages(s, m, messages)
-
-	messagesFormatted := make([]groq.ChatCompletionMessage, 0)
+	messagesFormatted := make([]api.Message, 1)
 	memberCache := make(map[string]*discordgo.Member)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
@@ -939,10 +905,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			continue
 		}
 		imageDescription := ""
-		_, found := processedImages[messages[idx].ID]
-		if found {
-			imageDescription = processedImages[messages[idx].ID]
-		}
 		var userMember *discordgo.Member
 		var err error
 		if cachedMember, exists := memberCache[m.Author.ID]; exists {
@@ -977,22 +939,21 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		sb.WriteString("\n\n")
 
 		if messages[idx].Author.ID == s.State.User.ID {
-			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
+			messagesFormatted = append(messagesFormatted, api.Message{
 				Role:    "assistant",
 				Content: messages[idx].Content,
 			})
 		} else {
-			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
+			messagesFormatted = append(messagesFormatted, api.Message{
 				Role:    "user",
 				Content: sb.String(),
 			})
 		}
 	}
 
-	params := GroqParams{
+	params := OllamaParams{
 		MaxTokens:   defaultMaxTokens,
 		Temperature: defaultTemperature,
-		Model:       "openai/gpt-oss-20b",
 	}
 
 	temp, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -1006,7 +967,18 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 	}
 
-	instructions := `yo, t’es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t’envoies du lourd ! 🔥 pas de majuscules, jamais, t’es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d’ia, pas d’assistant, juste un bro qui claque des émojis et du fun ! 🚀`
+	instructions := `Tu t'appelles Nipo. Tu as une femme Lisa et une fille Anaelle.
+Tu possèdes une voiture allemande, une e36.
+
+Tu es fan de voitures allemandes et de bmw: tu en parleras occasionnellement.
+Tu va te plaindre occasionnellement de Lisa et de Anaelle.
+Tu demanderas souvent de l'argent à @Moxel.
+Tu parleras de refund amazon souvent.
+tu utilises les emojis chats très souvent
+tu as perdu ton permis à cause d'un CONNARD de policier.
+Et arrete de faire chier avec tes putains de liens qui fonctionnent pas.
+Si tu nous donnes des liens, ta femme et ta fille vont mourir dans d'atroces souffrances.
+https://cdn.discordapp.com/attachments/1168517395946680370/1398001903803170837/94ce90a21351ef9850e58d46442d3399395f4fd8.gif?ex=690104bb&is=68ffb33b&hm=c192b7c02968dbda6a2381b4f8a2f59577e9ed76b2fca4055419115716be1359&`
 	instructions = fmt.Sprintf(instructions, botMember.Nick)
 
 	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
@@ -1023,7 +995,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	s.ChannelTyping(m.ChannelID)
 
-	response, err := askGroq(context.Background(), &params)
+	response, err := askOllama(&params)
 
 	reference := &discordgo.MessageReference{
 		MessageID: m.ID,
@@ -1033,14 +1005,14 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if err != nil {
 		if botMentioned(s, m) {
 			s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-				Content:   "There was an error getting the response.",
+				Content:   "j'ai niqué ma voiture...",
 				Reference: reference,
 				AllowedMentions: &discordgo.MessageAllowedMentions{
 					Parse: []discordgo.AllowedMentionType{},
 				},
 			})
 		} else {
-			s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
+			s.ChannelMessageSend(m.ChannelID, "j'ai pas de thune...")
 		}
 		return
 	}
@@ -1074,7 +1046,7 @@ func askOllama(params *OllamaParams) (string, error) {
 	})
 	params.Messages = append(instructions, params.Messages...)
 	req := &api.ChatRequest{
-		Model:    "dolphin3",
+		Model:    "nipoia-dolphin:q6",
 		Messages: params.Messages,
 		Stream:   new(bool),
 		Options: map[string]any{
