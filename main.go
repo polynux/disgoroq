@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -756,6 +757,13 @@ type imageToProcess struct {
 	url string
 }
 
+var supportedImageTypes = []string{
+	"image/jpeg",
+	"image/png",
+	"image/jpg",
+	"image/gif",
+	"image/webp",
+}
 func getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
 	attachmentCount := 0
 	imagesToProcess := make([]imageToProcess, 0)
@@ -764,16 +772,23 @@ func getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
 			if attachmentCount > 5 {
 				return imagesToProcess
 			}
-			if attachment.ContentType == "image/jpeg" || attachment.ContentType == "image/png" {
-				if attachment.Size > 10000000 {
-					continue
-				}
-				imagesToProcess = append(imagesToProcess, imageToProcess{
-					id:  messages[idx].ID,
-					url: attachment.URL,
-				})
-				attachmentCount++
+			if !strings.HasPrefix(attachment.ContentType, "image/") {
+				continue
 			}
+			if !slices.Contains(supportedImageTypes, attachment.ContentType) {
+				continue
+			}
+			if attachment.Size > 20000000 {
+				continue
+			}
+			if attachment.Width * attachment.Height > 33000000 {
+				continue
+			}
+			imagesToProcess = append(imagesToProcess, imageToProcess{
+				id:  messages[idx].ID,
+				url: attachment.URL,
+			})
+			attachmentCount++
 		}
 	}
 
@@ -817,6 +832,9 @@ func processImageInMessages(s *discordgo.Session, m *discordgo.MessageCreate, me
 
 	for range imagesToProcess {
 		img := <-ch
+		if img.description == "" {
+			continue
+		}
 		describedImages[img.id] = img.description
 	}
 
@@ -942,6 +960,10 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		_, found := processedImages[messages[idx].ID]
 		if found {
 			imageDescription = processedImages[messages[idx].ID]
+		} else {
+			if messages[idx].Content == "" {
+				continue
+			}
 		}
 		var userMember *discordgo.Member
 		var err error
@@ -1149,7 +1171,7 @@ func describeImage(ctx context.Context, params *GroqImageParams) (string, error)
 	}
 
 	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
-		Model: groq.ModelLlama3211BVisionPreview,
+		Model: "meta-llama/llama-4-scout-17b-16e-instruct",
 		Messages: []groq.ChatCompletionMessage{
 			{
 				Role: groq.RoleUser,
