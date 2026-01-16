@@ -1,428 +1,32 @@
 package main
 
 import (
-	"context"
 	"flag"
-	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"os/signal"
-	"slices"
-	"strconv"
-	"strings"
 	"syscall"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/conneroisu/groq-go"
-	"github.com/go-co-op/gocron/v2"
 	"github.com/joho/godotenv"
-	"github.com/ollama/ollama/api"
 
-	"polynux/disgoroq/db"
-	"polynux/disgoroq/horoscope"
+	"polynux/disgoroq/ai"
+	"polynux/disgoroq/commands"
+	"polynux/disgoroq/database"
+	"polynux/disgoroq/handlers"
+	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
 )
 
 var (
-	Token                string
-	GroqKey              string
-	defaultThreshold             = 0.1
-	defaultThresholdSexe         = 0.05
-	defaultMaxTokens             = 200
-	defaultTemperature   float32 = 0.5
-	defaultMessagesCount         = 100
-	rateLimit            int64   = 10
+	Token   string
+	GroqKey string
 
-	defaultMemberPermissions int64 = discordgo.PermissionManageMessages
-
-	commands = []*discordgo.ApplicationCommand{
-		{
-			Name:        "ping",
-			Description: "Replies with Pong!",
-		},
-		{
-			Name:        "horoscope",
-			Description: "Get the horoscope for a sign",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "sign",
-					Description: "The sign for the horoscope (belier, taureau, etc...)",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "horoscopechannel",
-			Description: "Set the channel for the horoscope",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
-					Name:        "channel",
-					Description: "The channel for the horoscope",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "farting_friday_channel",
-			Description: "Set the channel for the farting friday",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
-					Name:        "channel",
-					Description: "The channel for the farting friday",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "temperature",
-			Description: "Set the temperature for the bot",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
-					Name:        "temperature",
-					Description: "The temperature for the bot (0.0-1.0)",
-					Required:    true,
-				},
-			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
-		},
-		{
-			Name:                     "toggle",
-			Description:              "Toggle the bot on or off",
-			DefaultMemberPermissions: &defaultMemberPermissions,
-		},
-		{
-			Name:        "threshold",
-			Description: "Set the threshold for the bot (activation probability; 0.0-1.0)",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
-					Name:        "threshold",
-					Description: "The threshold activation (0.0-1.0)",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "thresholdsexe",
-			Description: "Set the threshold for the bot to say sexe (activation probability; 0.0-1.0)",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
-					Name:        "thresholdsexe",
-					Description: "The thresholdsexe activation (0.0-1.0)",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "messagescount",
-			Description: "Set the number of messages to consider for the bot",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionInteger,
-					Name:        "messagescount",
-					Description: "The number of messages to consider for the bot (1-100)",
-					Required:    true,
-				},
-			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
-		},
-		{
-			Name:                     "clean",
-			Description:              "Clean the bot's messages",
-			DefaultMemberPermissions: &defaultMemberPermissions,
-		},
-		{
-			Name:        "prompt",
-			Description: "Set the prompt for the bot",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Name:        "set",
-					Description: "Set a custom prompt for the bot",
-					Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Name:        "custom",
-							Description: "Set a custom prompt for the bot",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
-							Options: []*discordgo.ApplicationCommandOption{
-								{
-									Name:        "prompt",
-									Description: "The custom prompt for the bot",
-									Type:        discordgo.ApplicationCommandOptionString,
-									Required:    true,
-									MaxLength:   1000,
-								},
-							},
-						},
-						{
-							Name:        "default",
-							Description: "Put back the default prompt",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
-						},
-					},
-				},
-			},
-		},
-	}
-
-	commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-		"ping": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Pong!",
-				},
-			})
-		},
-		"horoscope": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			sign := i.ApplicationCommandData().Options[0].StringValue()
-			horo, err := horoscope.GetHoroscope(sign)
-			if err != nil {
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Error getting horoscope",
-					},
-				})
-				return
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: horo,
-				},
-			})
-		},
-		"horoscopechannel": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "horoscope_channel",
-				Value:   channelID.ID,
-			})
-			content := fmt.Sprintf("Horoscope channel set to %v", channelID.ID)
-			if err != nil {
-				content = "Error setting horoscope channel"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"farting_friday_channel": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "farting_friday_channel",
-				Value:   channelID.ID,
-			})
-			content := fmt.Sprintf("Farting Friday channel set to %v", channelID.ID)
-			if err != nil {
-				content = "Error setting farting friday channel"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"temperature": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			temperature := i.ApplicationCommandData().Options[0].FloatValue()
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "temperature",
-				Value:   strconv.FormatFloat(temperature, 'f', -1, 32),
-			})
-			content := fmt.Sprintf("Temperature set to %v", temperature)
-			if err != nil {
-				content = "Error setting temperature"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"threshold": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			threshold := i.ApplicationCommandData().Options[0].FloatValue()
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "threshold",
-				Value:   strconv.FormatFloat(threshold, 'f', -1, 32),
-			})
-			content := fmt.Sprintf("Threshold set to %v", threshold)
-			if err != nil {
-				content = "Error setting threshold"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"thresholdsexe": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			thresholdSexe := i.ApplicationCommandData().Options[0].FloatValue()
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "thresholdSexe",
-				Value:   strconv.FormatFloat(thresholdSexe, 'f', -1, 32),
-			})
-			content := fmt.Sprintf("Threshold set to %v", thresholdSexe)
-			if err != nil {
-				content = "Error setting sexe threshold"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"toggle": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			current, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-				Name:    "state",
-				GuildID: i.GuildID,
-			})
-			newState := "off"
-			if current == "off" {
-				newState = "on"
-			}
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "state",
-				Value:   newState,
-			})
-			content := "Bot is now " + newState
-			if err != nil {
-				content = "Error toggling bot"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"clean": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			messages, err := s.ChannelMessages(i.ChannelID, 100, "", "", "")
-			if err != nil {
-				fmt.Println("error getting messages,", err)
-				return
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Cleaning messages...",
-				},
-			})
-			messagesToDelete := make([]string, 0)
-			for idx := range messages {
-				if messages[idx].Author.ID == s.State.User.ID {
-					messagesToDelete = append(messagesToDelete, messages[idx].ID)
-				}
-			}
-			s.ChannelMessagesBulkDelete(i.ChannelID, messagesToDelete)
-			str := "Messages cleaned"
-			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: &str,
-			})
-			time.AfterFunc(10*time.Second, func() {
-				s.InteractionResponseDelete(i.Interaction)
-			})
-		},
-		"messagescount": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			messagesCount := i.ApplicationCommandData().Options[0].IntValue()
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "messagescount",
-				Value:   strconv.FormatInt(messagesCount, 10),
-			})
-			content := fmt.Sprintf("Messages count set to %v", messagesCount)
-			if err != nil {
-				content = "Error setting messages count"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-		"prompt": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			options := i.ApplicationCommandData().Options
-			if options[0].Name != "set" {
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Wrong option!",
-					},
-				})
-				return
-			}
-
-			options = options[0].Options
-			if options[0].Name == "default" {
-				content := "Prompt set to default"
-				err := utils.Q.DeleteGuildSetting(context.Background(), db.DeleteGuildSettingParams{
-					GuildID: i.GuildID,
-					Name:    "prompt",
-				})
-				if err != nil {
-					content = "Error setting prompt"
-				}
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: content,
-					},
-				})
-				return
-			}
-
-			if options[0].Name != "custom" {
-				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseChannelMessageWithSource,
-					Data: &discordgo.InteractionResponseData{
-						Content: "Wrong option!",
-					},
-				})
-				return
-			}
-			value := options[0].Options[0].StringValue()
-			err := utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-				GuildID: i.GuildID,
-				Name:    "prompt",
-				Value:   value,
-			})
-			content := "Prompt correctly set"
-			if err != nil {
-				content = "Error setting prompt"
-			}
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: content,
-				},
-			})
-		},
-	}
+	local                   bool
+	sendDirectHoroscope     bool
+	sendDirectFartingFriday bool
+	clearCommands           bool
 )
-
-var local bool
-var sendDirectHoroscope bool
-var sendDirectFartingFriday bool
 
 func init() {
 	err := godotenv.Load(".env.local")
@@ -444,6 +48,7 @@ func init() {
 	flag.BoolVar(&local, "local", false, "Use local database")
 	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
 	flag.BoolVar(&sendDirectFartingFriday, "sendFartingFriday", false, "Send farting friday directly")
+	flag.BoolVar(&clearCommands, "clearCommands", false, "Clear all registered commands")
 	flag.Parse()
 }
 
@@ -462,11 +67,20 @@ func main() {
 		}
 	}()
 
-	dg.AddHandler(messageCreate)
-	dg.AddHandler(joiningGuild)
-	dg.AddHandler(leavingGuild)
+	groqProvider := ai.NewGroqProvider(GroqKey)
+	repo := database.NewRepository()
 
-	dg.AddHandler(userCommand)
+	messageHandler := handlers.NewMessageHandler(dg, groqProvider, repo)
+	dg.AddHandler(messageHandler.Handle)
+	dg.AddHandler(handlers.HandleGuildCreate)
+	dg.AddHandler(handlers.HandleGuildDelete)
+
+	registry := commands.NewRegistry(dg, local)
+	commands.RegisterAll(registry, repo)
+
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		registry.HandleCommand(i)
+	})
 
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
 
@@ -477,19 +91,28 @@ func main() {
 	}
 	defer dg.Close()
 
-	log.Println("Bot is now running.  Press CTRL-C to exit.")
+	log.Println("Bot is now running. Press CTRL-C to exit.")
 
-	registerCommands(dg)
+	if clearCommands {
+		clearAllCommands(dg)
+		return
+	}
+
+	err = registry.Register()
+	if err != nil {
+		log.Fatal("Error registering commands,", err)
+	}
 	log.Println("Commands registered")
 
-	scheduler := schedule(dg)
-	defer scheduler.Shutdown()
+	sched := scheduler.New(dg, groqProvider, repo)
+	sched.Start()
+	defer sched.Shutdown()
 
 	if sendDirectHoroscope {
-		sendHoroscope(dg)
+		sched.SendHoroscope()
 	}
 	if sendDirectFartingFriday {
-		sendFartingFriday(dg)
+		sched.SendFartingFriday()
 	}
 
 	sc := make(chan os.Signal, 1)
@@ -497,705 +120,46 @@ func main() {
 	<-sc
 }
 
-func schedule(s *discordgo.Session) gocron.Scheduler {
-	location, _ := time.LoadLocation("Europe/Paris")
-	logger := gocron.NewLogger(gocron.LogLevelInfo)
-	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(logger))
-	if schedulerErr != nil {
-		log.Println("error creating scheduler,", schedulerErr)
-	}
+func clearAllCommands(dg *discordgo.Session) {
+	log.Println("Clearing all commands...")
 
-	_, jobErr := scheduler.NewJob(
-		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(12, 0, 0))),
-		gocron.NewTask(
-			sendHoroscope,
-			s,
-		),
-	)
-	if jobErr != nil {
-		log.Println("error creating horoscope job,", jobErr)
-	}
-	_, err := scheduler.NewJob(
-		gocron.WeeklyJob(1, gocron.NewWeekdays(time.Friday), gocron.NewAtTimes(gocron.NewAtTime(0, 0, 0))),
-		gocron.NewTask(
-			sendFartingFriday,
-			s,
-		),
-	)
+	guilds := dg.State.Guilds
+
+	totalDeleted := 0
+
+	log.Println("Clearing global commands...")
+	existing, err := dg.ApplicationCommands(dg.State.User.ID, "")
 	if err != nil {
-		log.Println("error creating farting job,", err)
-	}
-
-	scheduler.Start()
-
-	return scheduler
-}
-
-func sendFartingFriday(s *discordgo.Session) {
-	embed := &discordgo.MessageEmbed{
-		Title:       "🎉 FARTING FRIDAY NOTIFICATION 🎉",
-		Description: "@everyone Heeeeeeyyyyyy les amis du bruit de fond !!! 💨💨💨",
-		Color:       0x8B4513,
-		Fields: []*discordgo.MessageEmbedField{
-			{
-				Name:   "🌈✨ JOYEUX FARTING FRIDAY À TOUS LES PÉTOMANES EN HERBE ✨🌈",
-				Value:  "Que vos flatulences soient mélodieuses et vos pets harmonieux en ce jour béni où nous célébrons l'art ancestral du prout ! 🎵💨",
-				Inline: false,
-			},
-			{
-				Name:   "Rappel Important",
-				Value:  "N'oubliez pas : aujourd'hui, c'est pas juste permis, c'est ENCOURAGÉ de lâcher la pression atmosphérique !! 🌪️🌬️",
-				Inline: false,
-			},
-			{
-				Name:   "Conseil du jour 💡",
-				Value:  "Mangez des haricots pour un boost de performance ! 🫘💪",
-				Inline: true,
-			},
-			{
-				Name:   "Astuce pro 🧠",
-				Value:  "\"Qui prout dans l'eau fait des bulles, qui prout dans le vent fait du parfum\"",
-				Inline: true,
-			},
-		},
-		Footer: &discordgo.MessageEmbedFooter{
-			Text: "*pffffrrrrrttttt* 💨 (c'était ma signature olfactive)",
-		},
-		Thumbnail: &discordgo.MessageEmbedThumbnail{
-			URL: "https://media.discordapp.net/attachments/1194331990506356780/1362866990980796576/fartfireani.gif?ex=6803f44b&is=6802a2cb&hm=ecbbe318aa782a48b1ee9d1454b10870009bde37e96dcc470337a52d965271af&=",
-		},
-		Image: &discordgo.MessageEmbedImage{
-			URL: "https://media.discordapp.net/attachments/1194331990506356780/1362860968891384119/fartin.gif?ex=6803eeaf&is=68029d2f&hm=120759b2a6258432922d9e61239288ab3226dc925c86009e0402298c6b0e3df5&=",
-		},
-	}
-
-	guilds, err := utils.Q.GetAllGuilds(context.Background())
-	if err != nil {
-		fmt.Println("error getting guilds,", err)
-		return
-	}
-	for _, guild := range guilds {
-		channelID, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-			Name:    "farting_friday_channel",
-			GuildID: guild,
-		})
-		if err != nil {
-			log.Println("error getting farting friday channel,", err)
-			continue
-		}
-
-		_, err = s.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-			Content: "🔊 **FARTING FRIDAY EST ARRIVÉ!** 💨 [Cliquez pour entendre le son légendaire](https://www.myinstants.com/en/instant/wet-fart-11093/)",
-			Embed:   embed,
-			AllowedMentions: &discordgo.MessageAllowedMentions{
-				Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeEveryone},
-			},
-		})
-
-		if err != nil {
-			fmt.Println("error sending farting friday,", err)
-			continue
-		}
-	}
-}
-
-func sendHoroscope(s *discordgo.Session) {
-	horoscopes, _ := horoscope.GetHoroscopes()
-	horoscopeMessage := ""
-	horoscopes.Range(func(key, value any) bool {
-		horoscopeMessage += fmt.Sprintf("%s\n%s\n\n", key, value)
-		return true
-	})
-	instructions := `Tu es un créateur d'horoscope DÉLIRANT 🤪. Pour chaque horoscope que tu recevras:
-
-1. Transforme-le en version ULTRA GOOFY avec des prédictions absurdes et exagérées 🥴
-2. Limite ta réponse à 2-3 phrases MAXIMUM par thème
-3. Saupoudre GÉNÉREUSEMENT d'émojis loufoques (🤪, 👽, 🧠, 🌮, etc.)
-4. Utilise un langage décalé et des métaphores ridicules
-5. Inclus toujours le signe astrologique en gras au début: "**SIGNE**"
-6. Termine par une "recommandation cosmique" totalement farfelue
-7. Évite tout conseil sérieux - plus c'est absurde, mieux c'est!
-
-Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
-
-	messages := []groq.ChatCompletionMessage{
-		{
-			Role:    "system",
-			Content: instructions,
-		},
-		{
-			Role:    "user",
-			Content: horoscopeMessage,
-		},
-	}
-
-	params := GroqParams{
-		MaxTokens:    3000,
-		Temperature:  1,
-		Instructions: instructions,
-		Messages:     messages,
-		Model:        groq.ModelLlama3370BVersatile,
-	}
-
-	response, err := askGroq(context.Background(), &params)
-	if err != nil {
-		fmt.Println("error getting response,", err)
-		return
-	}
-	responses := make([]string, 0)
-	if len(response) > 2000 {
-		for i := 0; i < len(response); i += 2000 {
-			responses = append(responses, response[i:min(i+2000, len(response))])
-		}
+		log.Printf("Error fetching global commands: %v", err)
 	} else {
-		responses = append(responses, response)
+		for _, cmd := range existing {
+			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", cmd.ID)
+			if err != nil {
+				log.Printf("Error deleting global command %s: %v", cmd.Name, err)
+			} else {
+				log.Printf("Deleted global command: %s", cmd.Name)
+				totalDeleted++
+			}
+		}
 	}
 
-	guilds, err := utils.Q.GetAllGuilds(context.Background())
-	if err != nil {
-		fmt.Println("error getting guilds,", err)
-		return
-	}
 	for _, guild := range guilds {
-		channelID, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-			Name:    "horoscope_channel",
-			GuildID: guild,
-		})
+		log.Printf("Clearing commands for guild: %s", guild.Name)
+		existing, err := dg.ApplicationCommands(dg.State.User.ID, guild.ID)
 		if err != nil {
-			log.Println("error getting horoscope channel,", err)
+			log.Printf("Error fetching commands for guild %s: %v", guild.Name, err)
 			continue
 		}
-		_, err = s.ChannelMessageSend(channelID, "Horoscope du jour:")
-		if err != nil {
-			fmt.Println("error sending horoscope,", err)
-			continue
-		}
-		for _, value := range responses {
-			_, err = s.ChannelMessageSend(channelID, value)
+		for _, cmd := range existing {
+			err := dg.ApplicationCommandDelete(dg.State.User.ID, guild.ID, cmd.ID)
 			if err != nil {
-				fmt.Println("error sending horoscope,", err)
-				continue
+				log.Printf("Error deleting guild command %s from %s: %v", cmd.Name, guild.Name, err)
+			} else {
+				log.Printf("Deleted guild command %s from %s", cmd.Name, guild.Name)
+				totalDeleted++
 			}
 		}
 	}
-}
 
-func registerCommands(s *discordgo.Session) {
-	_, err := s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
-	if err != nil {
-		log.Panicf("Cannot create commands: %v", err)
-	}
-}
-
-func userCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	handler, ok := commandHandlers[i.ApplicationCommandData().Name]
-	if !ok {
-		return
-	}
-	handler(s, i)
-}
-
-func joiningGuild(s *discordgo.Session, m *discordgo.GuildCreate) {
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
-	for i, v := range commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, "", v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
-		registeredCommands[i] = cmd
-	}
-}
-
-func leavingGuild(s *discordgo.Session, m *discordgo.GuildDelete) {
-	for _, v := range commands {
-		err := s.ApplicationCommandDelete(s.State.User.ID, m.ID, v.ID)
-		if err != nil {
-			log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
-		}
-	}
-}
-
-func getMessages(s *discordgo.Session, channelID string, num int) ([]*discordgo.Message, error) {
-	if num <= 100 {
-		messages, err := s.ChannelMessages(channelID, num, "", "", "")
-		if err != nil {
-			log.Println("error getting messages,", err)
-			return nil, err
-		}
-		return messages, nil
-	}
-
-	messages := []*discordgo.Message{}
-	for num > 0 {
-		toGet := min(100, num)
-		lastMessage := ""
-		if len(messages) > 0 {
-			lastMessage = messages[len(messages)-1].ID
-		}
-		newMessages, err := s.ChannelMessages(channelID, toGet, lastMessage, "", "")
-		if err != nil {
-			fmt.Println("error getting messages,", err)
-			return nil, err
-		}
-		messages = append(messages, newMessages...)
-		num -= toGet
-	}
-	return messages, nil
-}
-
-func botMentioned(s *discordgo.Session, m *discordgo.MessageCreate) bool {
-	for i := range m.Mentions {
-		if m.Mentions[i].ID == s.State.User.ID {
-			return true
-		}
-	}
-	return false
-}
-
-type imageToProcess struct {
-	id  string
-	url string
-}
-
-var supportedImageTypes = []string{
-	"image/jpeg",
-	"image/png",
-	"image/jpg",
-	"image/gif",
-	"image/webp",
-}
-func getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
-	attachmentCount := 0
-	imagesToProcess := make([]imageToProcess, 0)
-	for idx := len(messages) - 1; idx >= 0; idx-- {
-		for _, attachment := range messages[idx].Attachments {
-			if attachmentCount > 5 {
-				return imagesToProcess
-			}
-			if !strings.HasPrefix(attachment.ContentType, "image/") {
-				continue
-			}
-			if !slices.Contains(supportedImageTypes, attachment.ContentType) {
-				continue
-			}
-			if attachment.Size > 20000000 {
-				continue
-			}
-			if attachment.Width * attachment.Height > 33000000 {
-				continue
-			}
-			imagesToProcess = append(imagesToProcess, imageToProcess{
-				id:  messages[idx].ID,
-				url: attachment.URL,
-			})
-			attachmentCount++
-		}
-	}
-
-	return imagesToProcess
-}
-
-type processedImage struct {
-	id          string
-	description string
-}
-
-func processImageInMessages(s *discordgo.Session, m *discordgo.MessageCreate, messages []*discordgo.Message) map[string]string {
-	imagesToProcess := getImagesToProcess(messages)
-
-	describedImages := make(map[string]string)
-
-	ch := make(chan processedImage, len(imagesToProcess))
-
-	for _, img := range imagesToProcess {
-		go func(img imageToProcess) {
-			response, err := describeImage(context.Background(), &GroqImageParams{
-				Instruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
-				ImageURL:    img.url,
-			})
-			if err != nil {
-				fmt.Println("error getting response,", err)
-				fmt.Println("Image URL:", img.url)
-				ch <- processedImage{
-					id:          img.id,
-					description: "",
-				}
-				return
-			}
-			ch <- processedImage{
-				id:          img.id,
-				description: response,
-			}
-		}(img)
-	}
-	s.ChannelTyping(m.ChannelID)
-
-	for range imagesToProcess {
-		img := <-ch
-		if img.description == "" {
-			continue
-		}
-		describedImages[img.id] = img.description
-	}
-
-	return describedImages
-}
-
-func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
-		return
-	}
-	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
-	if err != nil {
-		fmt.Println("error getting bot member,", err)
-		return
-	}
-
-	thresholdDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "threshold",
-		GuildID: m.GuildID,
-	})
-	threshold := defaultThreshold
-	if err == nil {
-		value, err := strconv.ParseFloat(thresholdDb, 64)
-		if err == nil {
-			threshold = float64(value)
-		}
-	}
-
-	thresholdSexeDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "thresholdSexe",
-		GuildID: m.GuildID,
-	})
-	thresholdSexe := defaultThresholdSexe
-	if err == nil {
-		value, err := strconv.ParseFloat(thresholdSexeDb, 64)
-		if err == nil {
-			thresholdSexe = float64(value)
-		}
-	}
-
-	randFloat := rand.Float32()
-	if randFloat < float32(thresholdSexe) && !botMentioned(s, m) {
-		if rand.Float32() < 0.5 {
-			s.ChannelMessageSend(m.ChannelID, "(et je parle de sexe evidemment)")
-			return
-		} else {
-			s.ChannelMessageSend(m.ChannelID, "malin ça, j'ai la barre maintenant")
-			return
-		}
-	}
-
-	randFloat = rand.Float32()
-	if randFloat > float32(threshold) && !botMentioned(s, m) {
-		return
-	}
-
-	state, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "state",
-		GuildID: m.GuildID,
-	})
-	if state == "off" {
-		return
-	}
-
-	lastMessage, _ := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "last_message",
-		GuildID: m.GuildID,
-	})
-	var lastMessageTime int64 = 0
-	if lastMessage != "" {
-		lastMessageTime, _ = strconv.ParseInt(lastMessage, 10, 64)
-	}
-
-	if lastMessageTime > 0 && !botMentioned(s, m) {
-		if time.Now().Unix()-lastMessageTime < rateLimit {
-			s.ChannelMessageSend(m.ChannelID, "Please wait a bit before asking me again.")
-			return
-		}
-	}
-
-	err = utils.Q.SetGuildSetting(context.Background(), db.SetGuildSettingParams{
-		GuildID: m.GuildID,
-		Name:    "last_message",
-		Value:   strconv.FormatInt(time.Now().Unix(), 10),
-	})
-	if err != nil {
-		fmt.Println("error setting last message time,", err)
-		return
-	}
-
-	s.ChannelTyping(m.ChannelID)
-
-	messageCountDb, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "messagescount",
-		GuildID: m.GuildID,
-	})
-	messageCount := defaultMessagesCount
-	if err == nil {
-		value, err := strconv.ParseInt(messageCountDb, 10, 64)
-		if err == nil {
-			messageCount = int(value)
-		}
-	}
-	messages, err := getMessages(s, m.ChannelID, messageCount)
-	if err != nil {
-		fmt.Println("error getting messages,", err)
-		return
-	}
-
-	processedImages := processImageInMessages(s, m, messages)
-
-	messagesFormatted := make([]groq.ChatCompletionMessage, 0)
-	memberCache := make(map[string]*discordgo.Member)
-	for idx := len(messages) - 1; idx >= 0; idx-- {
-		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == s.State.User.ID {
-			idx--
-			continue
-		}
-		if messages[idx].Content == "(et je parle de sexe evidemment)" && messages[idx].Author.ID == s.State.User.ID {
-			continue
-		}
-		imageDescription := ""
-		_, found := processedImages[messages[idx].ID]
-		if found {
-			imageDescription = processedImages[messages[idx].ID]
-		} else {
-			if messages[idx].Content == "" {
-				continue
-			}
-		}
-		var userMember *discordgo.Member
-		var err error
-		if cachedMember, exists := memberCache[m.Author.ID]; exists {
-			userMember = cachedMember
-		} else {
-			userMember, err = s.GuildMember(m.GuildID, m.Author.ID)
-			if err != nil {
-				fmt.Println("error getting user member,", err)
-				return
-			}
-			memberCache[m.Author.ID] = userMember
-		}
-
-		nick := userMember.Nick
-		if nick == "" {
-			nick = m.Author.Username
-		}
-
-		var sb strings.Builder
-		sb.WriteString("<@")
-		sb.WriteString(messages[idx].Author.ID)
-		sb.WriteString(">")
-		sb.WriteString(userMember.Nick)
-		sb.WriteString(": ")
-
-		if imageDescription != "" {
-			sb.WriteString("<IMAGE_DESC>\n")
-			sb.WriteString(strings.ReplaceAll(imageDescription, "\n", ""))
-			sb.WriteString("</IMAGE_DESC>\n")
-		}
-		sb.WriteString(messages[idx].Content)
-		sb.WriteString("\n\n")
-
-		if messages[idx].Author.ID == s.State.User.ID {
-			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
-				Role:    "assistant",
-				Content: messages[idx].Content,
-			})
-		} else {
-			messagesFormatted = append(messagesFormatted, groq.ChatCompletionMessage{
-				Role:    "user",
-				Content: sb.String(),
-			})
-		}
-	}
-
-	params := GroqParams{
-		MaxTokens:   defaultMaxTokens,
-		Temperature: defaultTemperature,
-		Model:       "openai/gpt-oss-20b",
-	}
-
-	temp, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "temperature",
-		GuildID: m.GuildID,
-	})
-	if err == nil {
-		value, err := strconv.ParseFloat(temp, 32)
-		if err == nil {
-			params.Temperature = float32(value)
-		}
-	}
-
-	instructions := `yo, t’es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t’envoies du lourd ! 🔥 pas de majuscules, jamais, t’es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d’ia, pas d’assistant, juste un bro qui claque des émojis et du fun ! 🚀`
-	instructions = fmt.Sprintf(instructions, botMember.Nick)
-
-	prompt, err := utils.Q.GetGuildSetting(context.Background(), db.GetGuildSettingParams{
-		Name:    "prompt",
-		GuildID: m.GuildID,
-	})
-	if err == nil {
-		params.Instructions = prompt
-	} else {
-		params.Instructions = instructions
-	}
-
-	params.Messages = messagesFormatted
-
-	s.ChannelTyping(m.ChannelID)
-
-	response, err := askGroq(context.Background(), &params)
-
-	reference := &discordgo.MessageReference{
-		MessageID: m.ID,
-		ChannelID: m.ChannelID,
-		GuildID:   m.GuildID,
-	}
-	if err != nil {
-		if botMentioned(s, m) {
-			s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-				Content:   "There was an error getting the response.",
-				Reference: reference,
-				AllowedMentions: &discordgo.MessageAllowedMentions{
-					Parse: []discordgo.AllowedMentionType{},
-				},
-			})
-		} else {
-			s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
-		}
-		return
-	}
-	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-		Content:   response,
-		Reference: reference,
-		AllowedMentions: &discordgo.MessageAllowedMentions{
-			Parse: []discordgo.AllowedMentionType{},
-		},
-	})
-}
-
-type OllamaParams struct {
-	MaxTokens    int
-	Temperature  float32
-	Instructions string
-	Messages     []api.Message
-}
-
-func askOllama(params *OllamaParams) (string, error) {
-	client, err := api.ClientFromEnvironment()
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
-
-	instructions := make([]api.Message, 1)
-	instructions = append(instructions, api.Message{
-		Role:    "system",
-		Content: params.Instructions,
-	})
-	params.Messages = append(instructions, params.Messages...)
-	req := &api.ChatRequest{
-		Model:    "dolphin3",
-		Messages: params.Messages,
-		Stream:   new(bool),
-		Options: map[string]any{
-			"temperature":   params.Temperature,
-			"num_predict":   params.MaxTokens,
-			"repeat_last_n": -1,
-			"top_k":         60,
-		},
-	}
-
-	ctx := context.Background()
-	response := ""
-	respFunc := func(resp api.ChatResponse) error {
-		response = resp.Message.Content
-		return nil
-	}
-
-	err = client.Chat(ctx, req, respFunc)
-	if err != nil {
-		log.Println(err)
-		return "", err
-	}
-
-	return response, nil
-}
-
-type GroqParams struct {
-	MaxTokens    int
-	Temperature  float32
-	Instructions string
-	Messages	 []groq.ChatCompletionMessage
-	Model        groq.ChatModel
-}
-
-func askGroq(ctx context.Context, params *GroqParams) (string, error) {
-	client, err := groq.NewClient(GroqKey)
-	if err != nil {
-		fmt.Println("error creating Groq client,", err)
-		return "", err
-	}
-
-	instructions := make([]groq.ChatCompletionMessage, 0)
-	instructions = append(instructions, groq.ChatCompletionMessage{
-		Role:    "system",
-		Content: params.Instructions,
-	})
-
-	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
-		Model: params.Model,
-		Messages: append(instructions, params.Messages...),
-		MaxTokens:   params.MaxTokens,
-		Temperature: params.Temperature,
-	})
-	if err != nil {
-		fmt.Println("error creating Groq completion,", err)
-		return "", err
-	}
-
-	return string(resp.Choices[0].Message.Content), nil
-}
-
-type GroqImageParams struct {
-	Instruction string
-	ImageURL    string
-}
-
-func describeImage(ctx context.Context, params *GroqImageParams) (string, error) {
-	client, err := groq.NewClient(GroqKey)
-	if err != nil {
-		fmt.Println("error creating Groq client,", err)
-		return "", err
-	}
-
-	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
-		Model: "meta-llama/llama-4-scout-17b-16e-instruct",
-		Messages: []groq.ChatCompletionMessage{
-			{
-				Role: groq.RoleUser,
-				MultiContent: []groq.ChatMessagePart{
-					{
-						Type: groq.ChatMessagePartTypeText,
-						Text: params.Instruction,
-					},
-					{
-						Type: groq.ChatMessagePartTypeImageURL,
-						ImageURL: &groq.ChatMessageImageURL{
-							URL:    params.ImageURL,
-							Detail: "auto",
-						},
-					},
-				},
-			},
-		},
-		MaxTokens:   100,
-		Temperature: 0.2,
-	})
-	if err != nil {
-		fmt.Println("error creating Groq completion,", err)
-		return "", err
-	}
-	return string(resp.Choices[0].Message.Content), nil
+	log.Printf("Cleared %d total commands. Exiting.", totalDeleted)
 }
