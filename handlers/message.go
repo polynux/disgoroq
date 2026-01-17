@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/logger"
 )
 
 type MessageHandler struct {
@@ -68,14 +70,13 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	lastMessageTime := h.repo.GetLastMessage(context.Background(), m.GuildID)
 	if lastMessageTime > 0 && !h.botMentioned(s, m) {
 		if time.Now().Unix()-lastMessageTime < database.DefaultRateLimit {
-			s.ChannelMessageSend(m.ChannelID, "Please wait a bit before asking me again.")
 			return
 		}
 	}
 
 	err = h.repo.SetLastMessage(context.Background(), m.GuildID, time.Now().Unix())
 	if err != nil {
-		fmt.Println("error setting last message time,", err)
+		logger.Log.Error("Error setting last message time", zap.Error(err))
 		return
 	}
 
@@ -84,13 +85,13 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	messageCount := h.repo.GetMessagesCount(context.Background(), m.GuildID)
 	messages, err := h.getMessages(s, m.ChannelID, messageCount)
 	if err != nil {
-		fmt.Println("error getting messages,", err)
+		logger.Log.Error("Error getting messages", zap.Error(err))
 		return
 	}
 
 	processedMessage, err := h.contextBuilder.BuildContext(context.Background(), messages, m.GuildID, s.State.User.ID)
 	if err != nil {
-		fmt.Println("error building context,", err)
+		logger.Log.Error("Error building context", zap.Error(err))
 		return
 	}
 
@@ -120,17 +121,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	}
 
 	if err != nil {
-		if h.botMentioned(s, m) {
-			s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-				Content:   "There was an error getting the response.",
-				Reference: reference,
-				AllowedMentions: &discordgo.MessageAllowedMentions{
-					Parse: []discordgo.AllowedMentionType{},
-				},
-			})
-		} else {
-			s.ChannelMessageSend(m.ChannelID, "There was an error getting the response.")
-		}
+		logger.Log.Error("Error getting AI response", zap.Error(err))
 		return
 	}
 

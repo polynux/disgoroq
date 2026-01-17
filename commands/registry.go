@@ -39,9 +39,22 @@ func (r *Registry) Register() error {
 }
 
 func (r *Registry) HandleCommand(i *discordgo.InteractionCreate) {
-	handler, ok := r.handlers[i.ApplicationCommandData().Name]
+	data := i.ApplicationCommandData()
+	handler, ok := r.handlers[data.Name]
 	if !ok {
+		logger.Log.Warn("Unknown command received",
+			zap.String("command", data.Name),
+			zap.String("guild_id", i.GuildID),
+			zap.String("user_id", i.Member.User.ID),
+		)
 		return
 	}
+
+	logger.Log.Debug("Command received",
+		zap.String("command", data.Name),
+		zap.String("guild_id", i.GuildID),
+		zap.String("user_id", i.Member.User.ID),
+	)
+
 	handler(r.session, i)
 }

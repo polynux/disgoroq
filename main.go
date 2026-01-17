@@ -82,6 +82,9 @@ func main() {
 
 	registry := commands.NewRegistry(dg, local)
 	commands.RegisterAll(registry, repo)
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		registry.HandleCommand(i)
+	})
 
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
 
