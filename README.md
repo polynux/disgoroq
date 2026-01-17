@@ -51,6 +51,49 @@ I use go 1.23.0 for this project. The following libraries are used:
 
 Environment variables are used for configuration. See `.env.example` for required variables.
 
+### Logging Configuration
+
+The bot features a comprehensive logging system with environment-based controls:
+
+#### Core Logging Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_ENABLED` | `true` | Enable/disable all logging output |
+| `LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `LOG_ENCODING` | `json` | Log format: `json` or `console` |
+
+#### Database Event Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LOG_TO_DB` | `false` | Enable automatic database event logging |
+| `EVENT_LOGGING_ENABLED` | `true` | Enable event storage in database |
+| `EVENT_RETENTION_DAYS` | `7` | Days to retain events before cleanup |
+
+#### Usage Examples
+
+```bash
+# Development logging with console output
+LOG_ENABLED=true
+LOG_LEVEL=debug
+LOG_ENCODING=console
+
+# Production logging with database events
+LOG_ENABLED=true
+LOG_LEVEL=info
+LOG_ENCODING=json
+LOG_TO_DB=true
+EVENT_LOGGING_ENABLED=true
+EVENT_RETENTION_DAYS=30
+
+# Minimal logging for performance
+LOG_ENABLED=true
+LOG_LEVEL=warn
+LOG_TO_DB=false
+EVENT_LOGGING_ENABLED=false
+```
+
 ## Development
 
 1. Install [Air](https://github.com/air-verse/air) for live reloading: `go install github.com/air-verse/air@latest`
@@ -60,11 +103,40 @@ Environment variables are used for configuration. See `.env.example` for require
 
 The bot includes comprehensive event logging for debugging and monitoring:
 
-- All bot events are logged to the `bot_events` table
-- Events include: message processing, AI calls, errors, response sending
-- Events are automatically cleaned up based on retention policy (default: 7 days)
-- Configure retention with `EVENT_RETENTION_DAYS` environment variable
-- Scheduled cleanup job runs daily at 3 AM
+### Automatic Event Logging
+
+When `LOG_TO_DB=true`, the following events are automatically logged:
+- Message processing and AI responses
+- Command executions and interactions
+- Scheduled task executions (horoscope, farting friday)
+- Database operations and cleanup
+- Error conditions and failures
+
+### Manual Event Logging
+
+Use the wrapper functions in your code:
+
+```go
+import "polynux/disgoroq/logger"
+
+// Log simple events
+logger.Info("User joined guild", 
+    zap.String("user_id", userID),
+    zap.String("guild_id", guildID))
+
+logger.Error("Failed to process message",
+    zap.Error(err),
+    zap.String("message_id", msgID))
+
+// Log structured events to database
+logger.LogMessageEvent(ctx, 
+    database.EventContextBuilt,
+    guildID, channelID, messageID, userID,
+    &database.EventDetails{
+        MessagesCount: 10,
+        ImageCount: 2,
+    })
+```
 
 ### Event Types
 
@@ -80,6 +152,59 @@ The bot includes comprehensive event logging for debugging and monitoring:
 - `empty_response` - AI returned empty response
 - `response_sent` - Response sent to Discord
 - `response_failed` - Failed to send response
+
+### Event Management
+
+- Events are automatically cleaned up based on retention policy (default: 7 days)
+- Configure retention with `EVENT_RETENTION_DAYS` environment variable
+- Scheduled cleanup job runs daily at 3 AM
+- Events include detailed context (guild, channel, user, duration, error information)
+
+## Logging Wrapper Functions
+
+The bot provides wrapper functions that respect environment settings:
+
+```go
+import "polynux/disgoroq/logger"
+
+// Basic logging (respects LOG_ENABLED setting)
+logger.Debug("Debug information")
+logger.Info("Information message")
+logger.Warn("Warning message") 
+logger.Error("Error occurred")
+logger.Fatal("Fatal error")
+
+// With structured fields
+logger.Info("User action",
+    zap.String("user_id", userID),
+    zap.String("action", "join"))
+
+// Automatic event logging (respects EVENT_LOGGING_ENABLED setting)
+logger.LogEvent(ctx, &database.BotEvent{
+    EventType: database.EventMessageReceived,
+    GuildID:   guildID,
+    ChannelID: channelID,
+    UserID:    userID,
+})
+
+// Convenience function for message events
+logger.LogMessageEvent(ctx, 
+    database.EventContextBuilt,
+    guildID, channelID, messageID, userID,
+    &database.EventDetails{
+        MessagesCount: 10,
+        ImageCount:    2,
+    })
+```
+
+### Environment-Based Behavior
+
+The wrapper functions automatically respect these environment settings:
+
+- **LOG_ENABLED=false**: All logging calls are no-ops (high performance)
+- **LOG_LEVEL=warn**: Debug/Info calls are ignored, Warn/Error work normally
+- **LOG_TO_DB=true**: Error logs are automatically stored in database
+- **EVENT_LOGGING_ENABLED=false**: Database event logging is disabled
 
 ## Testing
 

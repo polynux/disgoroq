@@ -8,14 +8,14 @@ import (
 )
 
 func HandleGuildCreate(s *discordgo.Session, m *discordgo.GuildCreate) {
-	logger.Log.Info("Bot joined guild",
+	logger.Info("Bot joined guild",
 		zap.String("guild_name", m.Guild.Name),
 		zap.String("guild_id", m.Guild.ID),
 	)
 }
 
 func HandleGuildDelete(s *discordgo.Session, m *discordgo.GuildDelete) {
-	logger.Log.Info("Bot left guild",
+	logger.Info("Bot left guild",
 		zap.String("guild_id", m.ID),
 	)
 }

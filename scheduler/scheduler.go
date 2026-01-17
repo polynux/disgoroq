@@ -83,14 +83,14 @@ func (s *Scheduler) CleanupOldEvents() {
 	ctx := context.Background()
 	retentionDays := logger.GetRetentionDays()
 
-	logger.Log.Info("Starting event cleanup",
+	logger.Info("Starting event cleanup",
 		zap.Int("retention_days", retentionDays),
 	)
 
 	if err := s.events.DeleteOldEvents(ctx, retentionDays); err != nil {
-		logger.Log.Error("Failed to cleanup old events", zap.Error(err))
+		logger.Error("Failed to cleanup old events", zap.Error(err))
 	} else {
-		logger.Log.Info("Event cleanup completed successfully",
+		logger.Info("Event cleanup completed successfully",
 			zap.Int("retention_days", retentionDays),
 		)
 	}

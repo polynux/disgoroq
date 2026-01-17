@@ -55,22 +55,25 @@ func init() {
 }
 
 func main() {
-	logger.Log.Info("Starting DisgoroQ bot")
+	logger.Info("Starting DisgoroQ bot")
 
 	dg, err := discordgo.New("Bot " + Token)
 	if err != nil {
-		logger.Log.Fatal("Error creating Discord session", zap.Error(err))
+		logger.Fatal("Error creating Discord session", zap.Error(err))
 		return
 	}
 
 	utils.InitializeDB(local)
 	defer func() {
-		logger.Log.Info("Closing database")
+		logger.Info("Closing database")
 		if err := utils.DB.Close(); err != nil {
-			logger.Log.Error("Error closing database", zap.Error(err))
+			logger.Error("Error closing database", zap.Error(err))
 		}
 		defer logger.Sync()
 	}()
+
+	eventRepo := logger.NewEventRepository(utils.DB, logger.Log)
+	logger.SetEventRepository(eventRepo)
 
 	groqProvider := ai.NewGroqProvider(GroqKey)
 	repo := database.NewRepository()
@@ -90,12 +93,12 @@ func main() {
 
 	err = dg.Open()
 	if err != nil {
-		logger.Log.Fatal("Error opening discord connection", zap.Error(err))
+		logger.Fatal("Error opening discord connection", zap.Error(err))
 		return
 	}
 	defer dg.Close()
 
-	logger.Log.Info("Bot is now running. Press CTRL-C to exit.")
+	logger.Info("Bot is now running. Press CTRL-C to exit.")
 
 	if clearCommands {
 		clearAllCommands(dg)
@@ -104,9 +107,9 @@ func main() {
 
 	err = registry.Register()
 	if err != nil {
-		logger.Log.Fatal("Error registering commands", zap.Error(err))
+		logger.Fatal("Error registering commands", zap.Error(err))
 	}
-	logger.Log.Info("Commands registered successfully")
+	logger.Info("Commands registered successfully")
 
 	sched := scheduler.New(dg, groqProvider, repo)
 	sched.Start()
@@ -123,40 +126,40 @@ func main() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
 
-	logger.Log.Info("Shutting down gracefully")
+	logger.Info("Shutting down gracefully")
 }
 
 func clearAllCommands(dg *discordgo.Session) {
-	logger.Log.Info("Clearing all commands")
+	logger.Info("Clearing all commands")
 
 	guilds := dg.State.Guilds
 
 	totalDeleted := 0
 
-	logger.Log.Info("Clearing global commands")
+	logger.Info("Clearing global commands")
 	existing, err := dg.ApplicationCommands(dg.State.User.ID, "")
 	if err != nil {
-		logger.Log.Error("Error fetching global commands", zap.Error(err))
+		logger.Error("Error fetching global commands", zap.Error(err))
 	} else {
 		for _, cmd := range existing {
 			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", cmd.ID)
 			if err != nil {
-				logger.Log.Error("Error deleting global command",
+				logger.Error("Error deleting global command",
 					zap.Error(err),
 					zap.String("command", cmd.Name),
 				)
 			} else {
-				logger.Log.Debug("Deleted global command", zap.String("command", cmd.Name))
+				logger.Debug("Deleted global command", zap.String("command", cmd.Name))
 				totalDeleted++
 			}
 		}
 	}
 
 	for _, guild := range guilds {
-		logger.Log.Debug("Clearing commands for guild", zap.String("guild", guild.Name))
+		logger.Debug("Clearing commands for guild", zap.String("guild", guild.Name))
 		existing, err := dg.ApplicationCommands(dg.State.User.ID, guild.ID)
 		if err != nil {
-			logger.Log.Error("Error fetching commands for guild",
+			logger.Error("Error fetching commands for guild",
 				zap.Error(err),
 				zap.String("guild", guild.Name),
 			)
@@ -165,13 +168,13 @@ func clearAllCommands(dg *discordgo.Session) {
 		for _, cmd := range existing {
 			err := dg.ApplicationCommandDelete(dg.State.User.ID, guild.ID, cmd.ID)
 			if err != nil {
-				logger.Log.Error("Error deleting guild command",
+				logger.Error("Error deleting guild command",
 					zap.Error(err),
 					zap.String("command", cmd.Name),
 					zap.String("guild", guild.Name),
 				)
 			} else {
-				logger.Log.Debug("Deleted guild command",
+				logger.Debug("Deleted guild command",
 					zap.String("command", cmd.Name),
 					zap.String("guild", guild.Name),
 				)
@@ -180,5 +183,5 @@ func clearAllCommands(dg *discordgo.Session) {
 		}
 	}
 
-	logger.Log.Info("Commands cleared", zap.Int("total_deleted", totalDeleted))
+	logger.Info("Commands cleared", zap.Int("total_deleted", totalDeleted))
 }

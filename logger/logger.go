@@ -1,9 +1,6 @@
 package logger
 
 import (
-	"os"
-	"strconv"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -13,25 +10,23 @@ var Log *zap.Logger
 var retentionDays int
 
 func init() {
-	encoding := getEnv("LOG_ENCODING", "json")
-	level := getEnv("LOG_LEVEL", "info")
-	retentionStr := getEnv("EVENT_RETENTION_DAYS", "7")
+	cfg := GetConfig()
 
-	retentionDaysInt, err := strconv.Atoi(retentionStr)
-	if err != nil {
-		retentionDaysInt = 7
+	if !cfg.Enabled {
+		Log = zap.NewNop()
+		retentionDays = cfg.RetentionDays
+		return
 	}
-	retentionDays = retentionDaysInt
 
 	var zapConfig zap.Config
-	if encoding == "console" {
+	if cfg.Encoding == "console" {
 		zapConfig = zap.NewDevelopmentConfig()
 		zapConfig.Encoding = "console"
 	} else {
 		zapConfig = zap.NewProductionConfig()
 	}
 
-	zapLevel, err := zapcore.ParseLevel(level)
+	zapLevel, err := zapcore.ParseLevel(cfg.Level)
 	if err != nil {
 		zapLevel = zapcore.InfoLevel
 	}
@@ -42,19 +37,16 @@ func init() {
 		panic(err)
 	}
 
-	Log.Info("Logger initialized",
-		zap.String("encoding", encoding),
-		zap.String("level", level),
-		zap.Int("event_retention_days", retentionDays),
-	)
-}
+	retentionDays = cfg.RetentionDays
 
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
+	Log.Info("Logger initialized",
+		zap.String("encoding", cfg.Encoding),
+		zap.String("level", cfg.Level),
+		zap.Int("event_retention_days", retentionDays),
+		zap.Bool("enabled", cfg.Enabled),
+		zap.Bool("log_to_db", cfg.LogToDB),
+		zap.Bool("event_logging_enabled", cfg.EventLoggingEnabled),
+	)
 }
 
 func Sync() {

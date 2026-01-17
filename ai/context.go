@@ -91,7 +91,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 		} else {
 			userMember, err = cb.session.GuildMember(guildID, messages[idx].Author.ID)
 			if err != nil {
-				logger.Log.Error("Error getting user member",
+				logger.Error("Error getting user member",
 					zap.Error(err),
 					zap.String("user_id", messages[idx].Author.ID),
 					zap.String("guild_id", guildID),
@@ -220,7 +220,7 @@ func (cb *ContextBuilder) processImages(ctx context.Context, imagesToProcess []i
 				Temperature: 0.2,
 			})
 			if err != nil {
-				logger.Log.Error("Error getting image description",
+				logger.Error("Error getting image description",
 					zap.Error(err),
 					zap.String("image_url", img.url),
 				)

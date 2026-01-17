@@ -76,7 +76,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	err = h.repo.SetLastMessage(context.Background(), m.GuildID, time.Now().Unix())
 	if err != nil {
-		logger.Log.Error("Error setting last message time", zap.Error(err))
+		logger.Error("Error setting last message time", zap.Error(err))
 		return
 	}
 
@@ -85,13 +85,13 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	messageCount := h.repo.GetMessagesCount(context.Background(), m.GuildID)
 	messages, err := h.getMessages(s, m.ChannelID, messageCount)
 	if err != nil {
-		logger.Log.Error("Error getting messages", zap.Error(err))
+		logger.Error("Error getting messages", zap.Error(err))
 		return
 	}
 
 	processedMessage, err := h.contextBuilder.BuildContext(context.Background(), messages, m.GuildID, s.State.User.ID)
 	if err != nil {
-		logger.Log.Error("Error building context", zap.Error(err))
+		logger.Error("Error building context", zap.Error(err))
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	}
 
 	if err != nil {
-		logger.Log.Error("Error getting AI response", zap.Error(err))
+		logger.Error("Error getting AI response", zap.Error(err))
 		return
 	}
 

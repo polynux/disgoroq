@@ -49,14 +49,14 @@ func (s *Scheduler) SendFartingFriday() {
 
 	guilds, err := s.repo.GetAllGuilds(context.Background())
 	if err != nil {
-		logger.Log.Error("Error getting guilds", zap.Error(err))
+		logger.Error("Error getting guilds", zap.Error(err))
 		return
 	}
 
 	for _, guild := range guilds {
 		channelID, err := s.repo.GetFartingFridayChannel(context.Background(), guild)
 		if err != nil {
-			logger.Log.Error("Error getting farting friday channel",
+			logger.Error("Error getting farting friday channel",
 				zap.Error(err),
 				zap.String("guild_id", guild),
 			)
@@ -72,7 +72,7 @@ func (s *Scheduler) SendFartingFriday() {
 		})
 
 		if err != nil {
-			logger.Log.Error("Error sending farting friday",
+			logger.Error("Error sending farting friday",
 				zap.Error(err),
 				zap.String("guild_id", guild),
 				zap.String("channel_id", channelID),
@@ -81,5 +81,5 @@ func (s *Scheduler) SendFartingFriday() {
 		}
 	}
 
-	logger.Log.Info("Farting Friday notifications sent", zap.Int("guild_count", len(guilds)))
+	logger.Info("Farting Friday notifications sent", zap.Int("guild_count", len(guilds)))
 }

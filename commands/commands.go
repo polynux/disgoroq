@@ -349,7 +349,7 @@ func messagesCountHandler(repo *database.Repository) func(s *discordgo.Session, 
 func cleanHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	messages, err := s.ChannelMessages(i.ChannelID, 100, "", "", "")
 	if err != nil {
-		logger.Log.Error("Error getting messages for cleanup", zap.Error(err))
+		logger.Error("Error getting messages for cleanup", zap.Error(err))
 		return
 	}
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

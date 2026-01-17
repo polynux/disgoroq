@@ -31,10 +31,10 @@ func (r *Registry) AddCommand(cmd *discordgo.ApplicationCommand, handler func(s 
 func (r *Registry) Register() error {
 	_, err := r.session.ApplicationCommandBulkOverwrite(r.session.State.User.ID, "", r.commands)
 	if err != nil {
-		logger.Log.Error("Error registering commands", zap.Error(err), zap.Int("count", len(r.commands)))
+		logger.Error("Error registering commands", zap.Error(err), zap.Int("count", len(r.commands)))
 		return err
 	}
-	logger.Log.Info("Commands registered successfully", zap.Int("count", len(r.commands)))
+	logger.Info("Commands registered successfully", zap.Int("count", len(r.commands)))
 	return nil
 }
 
@@ -42,18 +42,28 @@ func (r *Registry) HandleCommand(i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	handler, ok := r.handlers[data.Name]
 	if !ok {
-		logger.Log.Warn("Unknown command received",
+		userID := ""
+		if i.Member != nil && i.Member.User != nil {
+			userID = i.Member.User.ID
+		}
+
+		logger.Warn("Unknown command received",
 			zap.String("command", data.Name),
 			zap.String("guild_id", i.GuildID),
-			zap.String("user_id", i.Member.User.ID),
+			zap.String("user_id", userID),
 		)
 		return
 	}
 
-	logger.Log.Debug("Command received",
+	userID := ""
+	if i.Member != nil && i.Member.User != nil {
+		userID = i.Member.User.ID
+	}
+
+	logger.Debug("Command received",
 		zap.String("command", data.Name),
 		zap.String("guild_id", i.GuildID),
-		zap.String("user_id", i.Member.User.ID),
+		zap.String("user_id", userID),
 	)
 
 	handler(r.session, i)
