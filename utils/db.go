@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tursodatabase/go-libsql"
@@ -93,11 +94,58 @@ func LoadSql() string {
 func CreateTables(ctx context.Context) {
 	schema := LoadSql()
 
-	_, err := DB.ExecContext(ctx, schema)
-	if err != nil {
-		log.Fatalf("Error creating tables: %v", err)
-		os.Exit(1)
+	// Split SQL by semicolon and execute each statement separately
+	// This is necessary because libsql's Exec only runs the first statement
+	statements := splitSQL(schema)
+	for i, stmt := range statements {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || strings.HasPrefix(strings.ToUpper(stmt), "--") {
+			continue
+		}
+
+		_, err := DB.ExecContext(ctx, stmt)
+		if err != nil {
+			log.Fatalf("Error creating tables (statement %d): %v\nStatement: %s", i+1, err, stmt[:min(len(stmt), 200)])
+			os.Exit(1)
+		}
 	}
+	log.Printf("Successfully created all database tables")
+}
+
+func splitSQL(sql string) []string {
+	var statements []string
+	var currentStatement strings.Builder
+	inParenthesis := 0
+
+	for _, ch := range sql {
+		currentStatement.WriteRune(ch)
+
+		switch ch {
+		case '(':
+			inParenthesis++
+		case ')':
+			inParenthesis--
+		case ';':
+			if inParenthesis == 0 {
+				statements = append(statements, strings.TrimSpace(currentStatement.String()))
+				currentStatement.Reset()
+			}
+		}
+	}
+
+	// Add last statement if there is one
+	if currentStatement.Len() > 0 {
+		statements = append(statements, strings.TrimSpace(currentStatement.String()))
+	}
+
+	return statements
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func GetEnv(key string) string {
