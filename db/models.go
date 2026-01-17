@@ -4,6 +4,23 @@
 
 package db
 
+import (
+	"database/sql"
+)
+
+type BotEvent struct {
+	ID         int64
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
 type GuildSetting struct {
 	ID      int64
 	GuildID string

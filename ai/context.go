@@ -2,11 +2,13 @@ package ai
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/logger"
 )
 
 type ContextBuilder struct {
@@ -89,7 +91,11 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 		} else {
 			userMember, err = cb.session.GuildMember(guildID, messages[idx].Author.ID)
 			if err != nil {
-				fmt.Println("error getting user member,", err)
+				logger.Log.Error("Error getting user member",
+					zap.Error(err),
+					zap.String("user_id", messages[idx].Author.ID),
+					zap.String("guild_id", guildID),
+				)
 				return nil, err
 			}
 			memberCache[messages[idx].Author.ID] = userMember
@@ -214,8 +220,10 @@ func (cb *ContextBuilder) processImages(ctx context.Context, imagesToProcess []i
 				Temperature: 0.2,
 			})
 			if err != nil {
-				fmt.Println("error getting image description,", err)
-				fmt.Println("Image URL:", img.url)
+				logger.Log.Error("Error getting image description",
+					zap.Error(err),
+					zap.String("image_url", img.url),
+				)
 				ch <- processedImage{
 					id:          img.id,
 					description: "",

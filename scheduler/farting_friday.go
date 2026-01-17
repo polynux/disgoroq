@@ -2,10 +2,11 @@ package scheduler
 
 import (
 	"context"
-	"fmt"
-	"log"
 
 	"github.com/bwmarrin/discordgo"
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/logger"
 )
 
 func (s *Scheduler) SendFartingFriday() {
@@ -48,14 +49,17 @@ func (s *Scheduler) SendFartingFriday() {
 
 	guilds, err := s.repo.GetAllGuilds(context.Background())
 	if err != nil {
-		fmt.Println("error getting guilds,", err)
+		logger.Log.Error("Error getting guilds", zap.Error(err))
 		return
 	}
 
 	for _, guild := range guilds {
 		channelID, err := s.repo.GetFartingFridayChannel(context.Background(), guild)
 		if err != nil {
-			log.Println("error getting farting friday channel,", err)
+			logger.Log.Error("Error getting farting friday channel",
+				zap.Error(err),
+				zap.String("guild_id", guild),
+			)
 			continue
 		}
 
@@ -68,8 +72,14 @@ func (s *Scheduler) SendFartingFriday() {
 		})
 
 		if err != nil {
-			fmt.Println("error sending farting friday,", err)
+			logger.Log.Error("Error sending farting friday",
+				zap.Error(err),
+				zap.String("guild_id", guild),
+				zap.String("channel_id", channelID),
+			)
 			continue
 		}
 	}
+
+	logger.Log.Info("Farting Friday notifications sent", zap.Int("guild_count", len(guilds)))
 }

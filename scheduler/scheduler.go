@@ -1,27 +1,32 @@
 package scheduler
 
 import (
+	"context"
 	"log"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/go-co-op/gocron/v2"
+	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/logger"
+	"polynux/disgoroq/utils"
 )
 
 type Scheduler struct {
 	session   *discordgo.Session
 	provider  ai.Provider
 	repo      *database.Repository
+	events    *database.EventRepository
 	scheduler gocron.Scheduler
 }
 
 func New(session *discordgo.Session, provider ai.Provider, repo *database.Repository) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
-	logger := gocron.NewLogger(gocron.LogLevelInfo)
-	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(logger))
+	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
+	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
 	if schedulerErr != nil {
 		log.Println("error creating scheduler,", schedulerErr)
 	}
@@ -30,6 +35,7 @@ func New(session *discordgo.Session, provider ai.Provider, repo *database.Reposi
 		session:   session,
 		provider:  provider,
 		repo:      repo,
+		events:    database.NewEventRepository(utils.GetDB(), logger.Log),
 		scheduler: scheduler,
 	}
 }
@@ -55,10 +61,37 @@ func (s *Scheduler) Start() {
 		log.Println("error creating farting job,", err)
 	}
 
+	_, err = s.scheduler.NewJob(
+		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(3, 0, 0))),
+		gocron.NewTask(
+			s.CleanupOldEvents,
+		),
+	)
+	if err != nil {
+		log.Println("error creating cleanup job,", err)
+	}
+
 	s.scheduler.Start()
 	log.Println("Scheduler started")
 }
 
 func (s *Scheduler) Shutdown() error {
 	return s.scheduler.Shutdown()
+}
+
+func (s *Scheduler) CleanupOldEvents() {
+	ctx := context.Background()
+	retentionDays := logger.GetRetentionDays()
+
+	logger.Log.Info("Starting event cleanup",
+		zap.Int("retention_days", retentionDays),
+	)
+
+	if err := s.events.DeleteOldEvents(ctx, retentionDays); err != nil {
+		logger.Log.Error("Failed to cleanup old events", zap.Error(err))
+	} else {
+		logger.Log.Info("Event cleanup completed successfully",
+			zap.Int("retention_days", retentionDays),
+		)
+	}
 }

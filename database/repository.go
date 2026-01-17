@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"strconv"
 
 	"polynux/disgoroq/db"
@@ -16,6 +17,10 @@ func NewRepository() *Repository {
 	return &Repository{
 		queries: utils.Q,
 	}
+}
+
+func (r *Repository) GetDB() *sql.DB {
+	return utils.GetDB()
 }
 
 const (

@@ -8,14 +8,22 @@ DisgoroQ is a Discord bot written in Go, integrating with GROQ and SQLite.
 ├── .air.toml
 ├── .env.example
 ├── .gitignore
-├── db/
+├── Makefile
+├── db/                  # SQLc generated code
+├── database/            # Database operations and repository
+├── handlers/            # Discord message handlers
+├── scheduler/           # Scheduled tasks (horoscope, farting friday, event cleanup)
+├── logger/              # Structured logging setup
+├── ai/                  # AI providers and context builders
+├── commands/            # Discord slash commands
+├── horoscope/           # Horoscope scraping functionality
+├── utils/               # Database initialization utilities
 ├── go.mod
 ├── go.sum
 ├── main.go
-├── query.sql
-├── schema.sql
-├── sqlc.yaml
-└── utils/
+├── query.sql            # SQL queries for sqlc
+├── schema.sql           # Database schema
+└── sqlc.yaml            # sqlc configuration
 ```
 
 ## Dependencies
@@ -25,6 +33,12 @@ I use go 1.23.0 for this project. The following libraries are used:
 - groq-go: GROQ client for Go
 - go-libsql: SQLite driver for Go
 - godotenv: Load environment variables from .env files
+- zap: Fast, structured logging library
+- gocron: Job scheduling library
+- go-co-op/gocron: Cron-like job scheduling
+- sqlc: Type-safe SQL generation
+- mockery: Mock generation for interfaces
+- testify: Assertion library for testing
 
 ## Getting Started
 
@@ -41,6 +55,31 @@ Environment variables are used for configuration. See `.env.example` for require
 
 1. Install [Air](https://github.com/air-verse/air) for live reloading: `go install github.com/air-verse/air@latest`
 2. Run `air` in the project directory
+
+## Event Logging
+
+The bot includes comprehensive event logging for debugging and monitoring:
+
+- All bot events are logged to the `bot_events` table
+- Events include: message processing, AI calls, errors, response sending
+- Events are automatically cleaned up based on retention policy (default: 7 days)
+- Configure retention with `EVENT_RETENTION_DAYS` environment variable
+- Scheduled cleanup job runs daily at 3 AM
+
+### Event Types
+
+- `message_received` - Incoming Discord message
+- `threshold_skipped` - Random threshold skipped responding
+- `state_off` - Bot is disabled for this guild
+- `rate_limited` - Rate limit hit
+- `context_built` - Message context prepared for AI
+- `context_failed` - Failed to build context
+- `ai_call_start` - Started AI API call
+- `ai_call_success` - AI call completed successfully
+- `ai_call_failed` - AI call failed
+- `empty_response` - AI returned empty response
+- `response_sent` - Response sent to Discord
+- `response_failed` - Failed to send response
 
 ## Testing
 

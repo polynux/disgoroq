@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 const deleteGuildSetting = `-- name: DeleteGuildSetting :exec
@@ -20,6 +21,16 @@ type DeleteGuildSettingParams struct {
 
 func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSettingParams) error {
 	_, err := q.db.ExecContext(ctx, deleteGuildSetting, arg.GuildID, arg.Name)
+	return err
+}
+
+const deleteOldEvents = `-- name: DeleteOldEvents :exec
+DELETE FROM bot_events
+WHERE timestamp < datetime('now', '-' || ? || ' days')
+`
+
+func (q *Queries) DeleteOldEvents(ctx context.Context, dollar_1 sql.NullString) error {
+	_, err := q.db.ExecContext(ctx, deleteOldEvents, dollar_1)
 	return err
 }
 
@@ -40,6 +51,175 @@ func (q *Queries) GetAllGuilds(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, guild_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEvents = `-- name: GetEvents :many
+SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
+FROM bot_events
+WHERE ? = 0 OR guild_id = ?
+ORDER BY timestamp DESC
+LIMIT ?
+`
+
+type GetEventsParams struct {
+	Column1 interface{}
+	GuildID sql.NullString
+	Limit   int64
+}
+
+type GetEventsRow struct {
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
+func (q *Queries) GetEvents(ctx context.Context, arg GetEventsParams) ([]GetEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, getEvents, arg.Column1, arg.GuildID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetEventsRow
+	for rows.Next() {
+		var i GetEventsRow
+		if err := rows.Scan(
+			&i.Timestamp,
+			&i.EventType,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.Details,
+			&i.DurationMs,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEventsByMessage = `-- name: GetEventsByMessage :many
+SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
+FROM bot_events
+WHERE message_id = ?
+ORDER BY timestamp ASC
+`
+
+type GetEventsByMessageRow struct {
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
+func (q *Queries) GetEventsByMessage(ctx context.Context, messageID sql.NullString) ([]GetEventsByMessageRow, error) {
+	rows, err := q.db.QueryContext(ctx, getEventsByMessage, messageID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetEventsByMessageRow
+	for rows.Next() {
+		var i GetEventsByMessageRow
+		if err := rows.Scan(
+			&i.Timestamp,
+			&i.EventType,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.Details,
+			&i.DurationMs,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getEventsByType = `-- name: GetEventsByType :many
+SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
+FROM bot_events
+WHERE event_type = ?
+ORDER BY timestamp DESC
+LIMIT ?
+`
+
+type GetEventsByTypeParams struct {
+	EventType string
+	Limit     int64
+}
+
+type GetEventsByTypeRow struct {
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
+func (q *Queries) GetEventsByType(ctx context.Context, arg GetEventsByTypeParams) ([]GetEventsByTypeRow, error) {
+	rows, err := q.db.QueryContext(ctx, getEventsByType, arg.EventType, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetEventsByTypeRow
+	for rows.Next() {
+		var i GetEventsByTypeRow
+		if err := rows.Scan(
+			&i.Timestamp,
+			&i.EventType,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.Details,
+			&i.DurationMs,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -96,6 +276,38 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertEvent = `-- name: InsertEvent :exec
+INSERT INTO bot_events (timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertEventParams struct {
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
+func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error {
+	_, err := q.db.ExecContext(ctx, insertEvent,
+		arg.Timestamp,
+		arg.EventType,
+		arg.GuildID,
+		arg.ChannelID,
+		arg.MessageID,
+		arg.UserID,
+		arg.Details,
+		arg.DurationMs,
+		arg.Error,
+	)
+	return err
 }
 
 const setGuildSetting = `-- name: SetGuildSetting :exec

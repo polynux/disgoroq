@@ -17,6 +17,10 @@ import (
 var DB *sql.DB
 var Q *db.Queries
 
+func GetDB() *sql.DB {
+	return DB
+}
+
 func Connect() *sql.DB {
 	dbName := "local.db"
 	dbUrl := GetEnv("DB_URL")

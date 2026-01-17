@@ -9,11 +9,13 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/commands"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/handlers"
+	"polynux/disgoroq/logger"
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
 )
@@ -53,18 +55,21 @@ func init() {
 }
 
 func main() {
+	logger.Log.Info("Starting DisgoroQ bot")
+
 	dg, err := discordgo.New("Bot " + Token)
 	if err != nil {
-		log.Fatal("Error creating Discord session,", err)
+		logger.Log.Fatal("Error creating Discord session", zap.Error(err))
 		return
 	}
 
 	utils.InitializeDB(local)
 	defer func() {
-		log.Println("closing db")
+		logger.Log.Info("Closing database")
 		if err := utils.DB.Close(); err != nil {
-			log.Println("error closing db,", err)
+			logger.Log.Error("Error closing database", zap.Error(err))
 		}
+		defer logger.Sync()
 	}()
 
 	groqProvider := ai.NewGroqProvider(GroqKey)
@@ -78,20 +83,16 @@ func main() {
 	registry := commands.NewRegistry(dg, local)
 	commands.RegisterAll(registry, repo)
 
-	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		registry.HandleCommand(i)
-	})
-
 	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
 
 	err = dg.Open()
 	if err != nil {
-		log.Fatal("Error opening discord connection,", err)
+		logger.Log.Fatal("Error opening discord connection", zap.Error(err))
 		return
 	}
 	defer dg.Close()
 
-	log.Println("Bot is now running. Press CTRL-C to exit.")
+	logger.Log.Info("Bot is now running. Press CTRL-C to exit.")
 
 	if clearCommands {
 		clearAllCommands(dg)
@@ -100,9 +101,9 @@ func main() {
 
 	err = registry.Register()
 	if err != nil {
-		log.Fatal("Error registering commands,", err)
+		logger.Log.Fatal("Error registering commands", zap.Error(err))
 	}
-	log.Println("Commands registered")
+	logger.Log.Info("Commands registered successfully")
 
 	sched := scheduler.New(dg, groqProvider, repo)
 	sched.Start()
@@ -118,48 +119,63 @@ func main() {
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
 	<-sc
+
+	logger.Log.Info("Shutting down gracefully")
 }
 
 func clearAllCommands(dg *discordgo.Session) {
-	log.Println("Clearing all commands...")
+	logger.Log.Info("Clearing all commands")
 
 	guilds := dg.State.Guilds
 
 	totalDeleted := 0
 
-	log.Println("Clearing global commands...")
+	logger.Log.Info("Clearing global commands")
 	existing, err := dg.ApplicationCommands(dg.State.User.ID, "")
 	if err != nil {
-		log.Printf("Error fetching global commands: %v", err)
+		logger.Log.Error("Error fetching global commands", zap.Error(err))
 	} else {
 		for _, cmd := range existing {
 			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", cmd.ID)
 			if err != nil {
-				log.Printf("Error deleting global command %s: %v", cmd.Name, err)
+				logger.Log.Error("Error deleting global command",
+					zap.Error(err),
+					zap.String("command", cmd.Name),
+				)
 			} else {
-				log.Printf("Deleted global command: %s", cmd.Name)
+				logger.Log.Debug("Deleted global command", zap.String("command", cmd.Name))
 				totalDeleted++
 			}
 		}
 	}
 
 	for _, guild := range guilds {
-		log.Printf("Clearing commands for guild: %s", guild.Name)
+		logger.Log.Debug("Clearing commands for guild", zap.String("guild", guild.Name))
 		existing, err := dg.ApplicationCommands(dg.State.User.ID, guild.ID)
 		if err != nil {
-			log.Printf("Error fetching commands for guild %s: %v", guild.Name, err)
+			logger.Log.Error("Error fetching commands for guild",
+				zap.Error(err),
+				zap.String("guild", guild.Name),
+			)
 			continue
 		}
 		for _, cmd := range existing {
 			err := dg.ApplicationCommandDelete(dg.State.User.ID, guild.ID, cmd.ID)
 			if err != nil {
-				log.Printf("Error deleting guild command %s from %s: %v", cmd.Name, guild.Name, err)
+				logger.Log.Error("Error deleting guild command",
+					zap.Error(err),
+					zap.String("command", cmd.Name),
+					zap.String("guild", guild.Name),
+				)
 			} else {
-				log.Printf("Deleted guild command %s from %s", cmd.Name, guild.Name)
+				logger.Log.Debug("Deleted guild command",
+					zap.String("command", cmd.Name),
+					zap.String("guild", guild.Name),
+				)
 				totalDeleted++
 			}
 		}
 	}
 
-	log.Printf("Cleared %d total commands. Exiting.", totalDeleted)
+	logger.Log.Info("Commands cleared", zap.Int("total_deleted", totalDeleted))
 }

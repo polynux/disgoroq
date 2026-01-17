@@ -5,9 +5,11 @@ import (
 	"fmt"
 
 	"github.com/conneroisu/groq-go"
+	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/horoscope"
+	"polynux/disgoroq/logger"
 )
 
 func (s *Scheduler) SendHoroscope() {
@@ -44,7 +46,7 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 	})
 
 	if err != nil {
-		fmt.Println("error getting response,", err)
+		logger.Log.Error("Error getting horoscope response", zap.Error(err))
 		return
 	}
 
@@ -59,25 +61,36 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 
 	guilds, err := s.repo.GetAllGuilds(context.Background())
 	if err != nil {
-		fmt.Println("error getting guilds,", err)
+		logger.Log.Error("Error getting guilds", zap.Error(err))
 		return
 	}
 
 	for _, guild := range guilds {
 		channelID, err := s.repo.GetHoroscopeChannel(context.Background(), guild)
 		if err != nil {
-			fmt.Println("error getting horoscope channel,", err)
+			logger.Log.Error("Error getting horoscope channel",
+				zap.Error(err),
+				zap.String("guild_id", guild),
+			)
 			continue
 		}
 		_, err = s.session.ChannelMessageSend(channelID, "Horoscope du jour:")
 		if err != nil {
-			fmt.Println("error sending horoscope,", err)
+			logger.Log.Error("Error sending horoscope header",
+				zap.Error(err),
+				zap.String("guild_id", guild),
+				zap.String("channel_id", channelID),
+			)
 			continue
 		}
 		for _, value := range responses {
 			_, err = s.session.ChannelMessageSend(channelID, value)
 			if err != nil {
-				fmt.Println("error sending horoscope,", err)
+				logger.Log.Error("Error sending horoscope content",
+					zap.Error(err),
+					zap.String("guild_id", guild),
+					zap.String("channel_id", channelID),
+				)
 				continue
 			}
 		}

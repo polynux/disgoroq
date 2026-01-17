@@ -1,9 +1,10 @@
 package commands
 
 import (
-	"log"
-
 	"github.com/bwmarrin/discordgo"
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/logger"
 )
 
 type Registry struct {
@@ -30,9 +31,10 @@ func (r *Registry) AddCommand(cmd *discordgo.ApplicationCommand, handler func(s 
 func (r *Registry) Register() error {
 	_, err := r.session.ApplicationCommandBulkOverwrite(r.session.State.User.ID, "", r.commands)
 	if err != nil {
+		logger.Log.Error("Error registering commands", zap.Error(err), zap.Int("count", len(r.commands)))
 		return err
 	}
-	log.Printf("Registered %d commands", len(r.commands))
+	logger.Log.Info("Commands registered successfully", zap.Int("count", len(r.commands)))
 	return nil
 }
 
