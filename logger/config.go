@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -16,16 +15,13 @@ type Config struct {
 	Level               string
 	Encoding            string
 	RetentionDays       int
+	DBLogLevel          DBLogLevel
 }
 
 var config *Config
 
 func init() {
-	err := godotenv.Load(".env.local")
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-
+	_ = godotenv.Load(".env.local")
 	config = loadConfig()
 }
 
@@ -37,6 +33,7 @@ func loadConfig() *Config {
 		Level:               getEnv("LOG_LEVEL", "info"),
 		Encoding:            getEnv("LOG_ENCODING", "json"),
 		RetentionDays:       getIntEnv("EVENT_RETENTION_DAYS", 7),
+		DBLogLevel:          ParseDBLogLevel(getEnv("DB_LOG_LEVEL", "info")),
 	}
 }
 
@@ -94,4 +91,8 @@ func IsDBLoggingEnabled() bool {
 
 func IsEventLoggingEnabled() bool {
 	return GetConfig().EventLoggingEnabled
+}
+
+func GetDBLogLevel() DBLogLevel {
+	return GetConfig().DBLogLevel
 }

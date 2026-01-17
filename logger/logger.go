@@ -46,6 +46,7 @@ func init() {
 		zap.Bool("enabled", cfg.Enabled),
 		zap.Bool("log_to_db", cfg.LogToDB),
 		zap.Bool("event_logging_enabled", cfg.EventLoggingEnabled),
+		zap.String("db_log_level", GetDBLogLevelName(cfg.DBLogLevel)),
 	)
 }
 

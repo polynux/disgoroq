@@ -70,6 +70,7 @@ The bot features a comprehensive logging system with environment-based controls:
 | `LOG_TO_DB` | `false` | Enable automatic database event logging |
 | `EVENT_LOGGING_ENABLED` | `true` | Enable event storage in database |
 | `EVENT_RETENTION_DAYS` | `7` | Days to retain events before cleanup |
+| `DB_LOG_LEVEL` | `info` | Database log level: `none`, `error`, `warn`, `info`, `debug`, `all` |
 
 #### Usage Examples
 
@@ -78,20 +79,41 @@ The bot features a comprehensive logging system with environment-based controls:
 LOG_ENABLED=true
 LOG_LEVEL=debug
 LOG_ENCODING=console
+DB_LOG_LEVEL=debug
 
-# Production logging with database events
+# Production logging with database events (errors only)
 LOG_ENABLED=true
 LOG_LEVEL=info
 LOG_ENCODING=json
 LOG_TO_DB=true
 EVENT_LOGGING_ENABLED=true
 EVENT_RETENTION_DAYS=30
+DB_LOG_LEVEL=error
+
+# Production logging with database events (standard)
+LOG_ENABLED=true
+LOG_LEVEL=info
+LOG_ENCODING=json
+LOG_TO_DB=true
+EVENT_LOGGING_ENABLED=true
+EVENT_RETENTION_DAYS=7
+DB_LOG_LEVEL=info
 
 # Minimal logging for performance
 LOG_ENABLED=true
 LOG_LEVEL=warn
 LOG_TO_DB=false
 EVENT_LOGGING_ENABLED=false
+DB_LOG_LEVEL=none
+
+# Complete audit trail
+LOG_ENABLED=true
+LOG_LEVEL=debug
+LOG_ENCODING=json
+LOG_TO_DB=true
+EVENT_LOGGING_ENABLED=true
+EVENT_RETENTION_DAYS=90
+DB_LOG_LEVEL=all
 ```
 
 ## Development
@@ -136,6 +158,59 @@ logger.LogMessageEvent(ctx,
         MessagesCount: 10,
         ImageCount: 2,
     })
+```
+
+### Database Log Levels
+
+The `DB_LOG_LEVEL` environment variable controls which events are stored in the database:
+
+#### Log Level Hierarchy
+
+| Level | Events Logged | Use Case |
+|-------|---------------|----------|
+| `none` | No events | Disable all database logging |
+| `error` | Only errors and failures | Production monitoring |
+| `warn` | Errors + warnings | Enhanced monitoring |
+| `info` | Errors + warnings + info events | Standard logging |
+| `debug` | All events including debug | Development/debugging |
+| `all` | All events (same as debug) | Complete audit trail |
+
+#### Event Type Mapping
+
+**Error Level Events:**
+- `ai_call_failed` - AI API call failed
+- `context_failed` - Failed to build message context
+- `response_failed` - Failed to send response to Discord
+
+**Warning Level Events:**
+- `rate_limited` - Rate limit hit for guild
+- `empty_response` - AI returned empty response
+- `threshold_skipped` - Random threshold skipped responding
+
+**Info Level Events:**
+- `message_received` - Incoming Discord message
+- `context_built` - Message context prepared for AI
+- `response_sent` - Response successfully sent to Discord
+
+**Debug Level Events:**
+- `ai_call_start` - Started AI API call
+- `ai_call_success` - AI call completed successfully
+- `state_off` - Bot is disabled for this guild
+
+#### Usage Examples
+
+```bash
+# Production: Only log errors and failures
+DB_LOG_LEVEL=error
+
+# Development: Log everything for debugging
+DB_LOG_LEVEL=debug
+
+# Performance: Minimal logging
+DB_LOG_LEVEL=warn
+
+# Complete audit trail
+DB_LOG_LEVEL=all
 ```
 
 ### Event Types
@@ -205,6 +280,134 @@ The wrapper functions automatically respect these environment settings:
 - **LOG_LEVEL=warn**: Debug/Info calls are ignored, Warn/Error work normally
 - **LOG_TO_DB=true**: Error logs are automatically stored in database
 - **EVENT_LOGGING_ENABLED=false**: Database event logging is disabled
+- **DB_LOG_LEVEL=none**: No events are stored in database (even if LOG_TO_DB=true)
+
+### Automatic Event Logging
+
+When `LOG_TO_DB=true`, the wrapper functions automatically create and log events to the database:
+
+#### **Error Logging**
+```go
+// This automatically creates a database event
+goog.logger.Error("AI API call failed", 
+    zap.Error(err),
+    zap.String("guild_id", guildID),
+    zap.String("user_id", userID))
+
+// Creates: EventAICallFailed with error details
+```
+
+#### **Warning Logging**
+```go
+// This automatically creates a database event
+goog.logger.Warn("Rate limit exceeded",
+    zap.String("guild_id", guildID),
+    zap.String("channel_id", channelID))
+
+// Creates: EventRateLimited with context
+```
+
+#### **Info Logging**
+```go
+// This creates a database event only if guild context is provided
+goog.logger.Info("User joined guild",
+    zap.String("guild_id", guildID),
+    zap.String("user_id", userID))
+
+// Creates: EventMessageReceived (only with guild context)
+
+// This does NOT create a database event (no context)
+goog.logger.Info("Application started")
+```
+
+#### **Debug Logging**
+```go
+// This creates events only when DB_LOG_LEVEL=debug or all
+goog.logger.Debug("Processing message",
+    zap.String("guild_id", guildID))
+
+// Creates: EventAICallStart (only in debug mode)
+```
+
+#### **Context Extraction**
+The automatic logging extracts these fields from zap fields:
+- `guild_id` → `event.GuildID`
+- `channel_id` → `event.ChannelID` 
+- `message_id` → `event.MessageID`
+- `user_id` → `event.UserID`
+- `error` → `event.Error`
+
+#### **Event Type Mapping**
+| Log Level | Event Type Created | Conditions |
+|-----------|-------------------|------------|
+| `Error()` | `EventAICallFailed` | When error field present |
+| `Error()` | `EventResponseFailed` | When no error field |
+| `Warn()` | `EventRateLimited` | Always |
+| `Info()` | `EventMessageReceived` | Only with guild context |
+| `Debug()` | `EventAICallStart` | Only when DB_LOG_LEVEL=debug/all |
+| `Fatal()` | `EventResponseFailed` | Always (before exit) |
+
+## Technical Implementation
+
+### SQLC Integration
+
+The logging system leverages SQLC-generated type-safe database queries:
+
+- **EventRepository** uses SQLC's `InsertEvent` query for type-safe event insertion
+- **Automatic parameter mapping** from Go structs to SQL parameters
+- **Null safety** with `sql.NullString` and `sql.NullInt64` for optional fields
+- **Transaction support** through SQLC's `WithTx()` method
+
+### Database Log Level Filtering
+
+The `DB_LOG_LEVEL` system implements efficient event filtering:
+
+- **Pre-insertion filtering** - Events are filtered before database operations
+- **Hierarchical levels** - Higher levels automatically include lower level events
+- **Unknown event handling** - Unmapped events default to info level
+- **Performance optimized** - No database calls for filtered-out events
+
+### Configuration System
+
+Environment-based configuration with intelligent defaults:
+
+- **Case-insensitive parsing** for log levels (`ERROR`, `error`, `Error` all work)
+- **Boolean flexibility** - Supports `true`, `1`, `yes`, `on`, `enabled`
+- **Graceful degradation** - Uses sensible defaults if .env file is missing
+- **Runtime validation** - Invalid values fall back to safe defaults
+
+### Performance Considerations
+
+- **Pre-filtering**: Events are filtered before database operations
+- **Context-aware**: Info events only logged when contextual data present
+- **Debug mode**: Debug logging only active when explicitly enabled
+- **Null repository**: Graceful handling when no event repository configured
+
+### Example Usage Scenarios
+
+#### **Production Monitoring**
+```bash
+# Monitor errors and warnings only
+LOG_TO_DB=true
+DB_LOG_LEVEL=warn
+EVENT_RETENTION_DAYS=30
+```
+
+#### **Development Debugging**
+```bash
+# Log everything for debugging
+LOG_TO_DB=true
+DB_LOG_LEVEL=debug
+EVENT_RETENTION_DAYS=7
+```
+
+#### **High Performance**
+```bash
+# Minimal database logging
+LOG_TO_DB=true
+DB_LOG_LEVEL=error
+EVENT_RETENTION_DAYS=3
+```
 
 ## Testing
 

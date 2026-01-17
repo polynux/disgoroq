@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	sqlcdb "polynux/disgoroq/db"
 )
 
 type EventType string
@@ -49,14 +50,16 @@ type BotEvent struct {
 }
 
 type EventRepository struct {
-	db  *sql.DB
-	log *zap.Logger
+	db      *sql.DB
+	log     *zap.Logger
+	queries *sqlcdb.Queries
 }
 
 func NewEventRepository(db *sql.DB, log *zap.Logger) *EventRepository {
 	return &EventRepository{
-		db:  db,
-		log: log,
+		db:      db,
+		log:     log,
+		queries: sqlcdb.New(db),
 	}
 }
 
@@ -75,22 +78,19 @@ func (r *EventRepository) LogEvent(ctx context.Context, event *BotEvent) error {
 		}
 	}
 
-	var durationMS interface{}
-	if event.DurationMS > 0 {
-		durationMS = event.DurationMS
+	params := sqlcdb.InsertEventParams{
+		Timestamp:  event.Timestamp.Unix(),
+		EventType:  string(event.EventType),
+		GuildID:    sql.NullString{String: event.GuildID, Valid: event.GuildID != ""},
+		ChannelID:  sql.NullString{String: event.ChannelID, Valid: event.ChannelID != ""},
+		MessageID:  sql.NullString{String: event.MessageID, Valid: event.MessageID != ""},
+		UserID:     sql.NullString{String: event.UserID, Valid: event.UserID != ""},
+		Details:    sql.NullString{String: detailsJSON, Valid: detailsJSON != ""},
+		DurationMs: sql.NullInt64{Int64: event.DurationMS, Valid: event.DurationMS > 0},
+		Error:      sql.NullString{String: event.Error, Valid: event.Error != ""},
 	}
 
-	var errorText interface{}
-	if event.Error != "" {
-		errorText = event.Error
-	}
-
-	_, err := r.db.ExecContext(ctx, `
-		INSERT INTO bot_events (timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, event.Timestamp.Unix(), string(event.EventType), event.GuildID, event.ChannelID, event.MessageID, event.UserID, detailsJSON, durationMS, errorText)
-
-	if err != nil {
+	if err := r.queries.InsertEvent(ctx, params); err != nil {
 		r.log.Error("Failed to insert event",
 			zap.Error(err),
 			zap.String("event_type", string(event.EventType)),
