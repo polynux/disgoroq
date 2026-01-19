@@ -17,13 +17,13 @@ import (
 
 type Scheduler struct {
 	session   *discordgo.Session
-	provider  ai.Provider
+	aiService *ai.Service
 	repo      *database.Repository
 	events    *database.EventRepository
 	scheduler gocron.Scheduler
 }
 
-func New(session *discordgo.Session, provider ai.Provider, repo *database.Repository) *Scheduler {
+func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -33,7 +33,7 @@ func New(session *discordgo.Session, provider ai.Provider, repo *database.Reposi
 
 	return &Scheduler{
 		session:   session,
-		provider:  provider,
+		aiService: aiService,
 		repo:      repo,
 		events:    database.NewEventRepository(utils.GetDB(), logger.Log),
 		scheduler: scheduler,

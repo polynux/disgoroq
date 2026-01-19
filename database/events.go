@@ -25,6 +25,11 @@ const (
 	EventEmptyResponse    EventType = "empty_response"
 	EventResponseSent     EventType = "response_sent"
 	EventResponseFailed   EventType = "response_failed"
+
+	// New events for retry and fallback tracking
+	EventAIRetrying     EventType = "ai_retrying"
+	EventAIFallback     EventType = "ai_fallback"
+	EventProviderSwitch EventType = "provider_switch"
 )
 
 type EventDetails struct {

@@ -75,10 +75,30 @@ func main() {
 	eventRepo := logger.NewEventRepository(utils.DB, logger.Log)
 	logger.SetEventRepository(eventRepo)
 
-	groqProvider := ai.NewGroqProvider(GroqKey)
+	// Load AI service configuration with retry and fallback support
+	aiConfig := ai.LoadServiceConfig()
+	if err := aiConfig.Validate(); err != nil {
+		logger.Fatal("Invalid AI service configuration", zap.Error(err))
+		return
+	}
+
+	// Create AI service with retry and fallback capabilities
+	aiService := ai.NewService(aiConfig)
+	if aiService == nil {
+		logger.Fatal("Failed to initialize AI service")
+		return
+	}
+
+	// Log AI service configuration
+	logger.Info("AI service initialized",
+		zap.String("primary_provider", "groq"),
+		zap.Bool("fallback_enabled", aiService.IsFallbackAvailable()),
+		zap.Int("max_retries", aiConfig.RetryConfig.MaxRetries),
+		zap.Duration("retry_delay", aiConfig.RetryConfig.InitialDelay))
+
 	repo := database.NewRepository()
 
-	messageHandler := handlers.NewMessageHandler(dg, groqProvider, repo)
+	messageHandler := handlers.NewMessageHandler(dg, aiService, repo)
 	dg.AddHandler(messageHandler.Handle)
 	dg.AddHandler(handlers.HandleGuildCreate)
 	dg.AddHandler(handlers.HandleGuildDelete)
@@ -111,7 +131,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, groqProvider, repo)
+	sched := scheduler.New(dg, aiService, repo)
 	sched.Start()
 	defer sched.Shutdown()
 

@@ -227,6 +227,9 @@ DB_LOG_LEVEL=all
 - `empty_response` - AI returned empty response
 - `response_sent` - Response sent to Discord
 - `response_failed` - Failed to send response
+- `ai_retrying` - AI retry attempt in progress
+- `ai_fallback` - Fallback to secondary provider triggered
+- `provider_switch` - Provider changed during fallback
 
 ### Event Management
 
@@ -346,6 +349,143 @@ The automatic logging extracts these fields from zap fields:
 | `Info()` | `EventMessageReceived` | Only with guild context |
 | `Debug()` | `EventAICallStart` | Only when DB_LOG_LEVEL=debug/all |
 | `Fatal()` | `EventResponseFailed` | Always (before exit) |
+
+## AI Provider Resilience System
+
+DisgoroQ now includes a comprehensive AI provider resilience system with automatic retry logic and fallback support to handle empty responses and API failures.
+
+### Features
+
+- **Automatic Retry Logic**: Retries failed or empty AI responses with exponential backoff
+- **Provider Fallback**: Automatically switches to backup providers (e.g., Ollama) when primary provider fails
+- **Empty Response Detection**: Validates AI responses and retries when content is empty or invalid
+- **Comprehensive Logging**: Detailed logging of retry attempts, fallback switches, and failures
+- **Configurable Behavior**: Full control over retry counts, delays, and fallback behavior via environment variables
+
+### Architecture
+
+```
+Message Handler → AI Service → Retry Wrapper → Provider Chain
+                                           ↓
+                                    Primary: Groq (with retries)
+                                           ↓ (if fails after retries)
+                                    Fallback: Ollama (with retries)
+```
+
+### Configuration
+
+#### Retry Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_MAX_RETRIES` | 2 | Number of retry attempts (0-10) |
+| `AI_RETRY_INITIAL_DELAY_MS` | 500 | Initial retry delay in milliseconds (100-5000) |
+| `AI_RETRY_MAX_DELAY_MS` | 5000 | Maximum retry delay in milliseconds (1000-30000) |
+| `AI_RETRY_BACKOFF` | 2.0 | Exponential backoff multiplier (1.0-5.0) |
+| `AI_RETRY_ON_EMPTY` | true | Retry on empty responses |
+| `AI_RETRY_ON_ERROR` | true | Retry on API errors |
+
+#### Fallback Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AI_FALLBACK_ENABLED` | true | Enable provider fallback |
+| `AI_MIN_RESPONSE_LENGTH` | 1 | Minimum valid response length (1-100) |
+
+#### Ollama Configuration (Optional Fallback)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_ENABLED` | false | Enable Ollama fallback provider |
+| `OLLAMA_API_URL` | http://localhost:11434 | Ollama API URL |
+| `OLLAMA_MODEL` | dolphin3 | Ollama model to use |
+
+### Event Types
+
+The system logs additional events for monitoring retry and fallback behavior:
+
+- `ai_retrying` - Retry attempt in progress (debug level)
+- `ai_fallback` - Fallback to secondary provider triggered (info level)
+- `provider_switch` - Provider changed during fallback (info level)
+
+### Usage Examples
+
+#### Basic Configuration
+```bash
+# Enable retry with 2 attempts and fallback to Ollama
+AI_MAX_RETRIES=2
+AI_FALLBACK_ENABLED=true
+OLLAMA_ENABLED=true
+OLLAMA_API_URL="http://localhost:11434"
+```
+
+#### Production Configuration
+```bash
+# Conservative retry settings for production
+AI_MAX_RETRIES=1
+AI_RETRY_INITIAL_DELAY_MS=1000
+AI_RETRY_MAX_DELAY_MS=3000
+AI_FALLBACK_ENABLED=true
+OLLAMA_ENABLED=true
+```
+
+#### Development Configuration
+```bash
+# Aggressive retry settings for debugging
+AI_MAX_RETRIES=5
+AI_RETRY_INITIAL_DELAY_MS=100
+AI_RETRY_MAX_DELAY_MS=5000
+AI_RETRY_BACKOFF=1.5
+DB_LOG_LEVEL=debug  # Log all retry and fallback events
+```
+
+#### High Availability Configuration
+```bash
+# Maximum resilience configuration
+AI_MAX_RETRIES=3
+AI_RETRY_ON_EMPTY=true
+AI_RETRY_ON_ERROR=true
+AI_FALLBACK_ENABLED=true
+OLLAMA_ENABLED=true
+OLLAMA_MODEL="llama2"  # Use a different model for fallback
+```
+
+### Error Messages
+
+The system provides user-friendly error messages when all retry and fallback attempts are exhausted:
+
+- **Without fallback**: "Désolé, j'ai des soucis techniques là... 🤖💀"
+- **With fallback**: "Désolé, tous mes systèmes sont en rade... 🤖💀"
+
+### Monitoring
+
+Use these database queries to monitor the resilience system:
+
+```sql
+-- Monitor retry success rate
+SELECT 
+  COUNT(CASE WHEN event_type = 'ai_call_success' THEN 1 END) as successes,
+  COUNT(CASE WHEN event_type = 'ai_retrying' THEN 1 END) as retries,
+  COUNT(CASE WHEN event_type = 'ai_fallback' THEN 1 END) as fallbacks
+FROM bot_events 
+WHERE timestamp > unixepoch('now', '-1 day');
+
+-- Monitor fallback usage by provider
+SELECT 
+  JSON_EXTRACT(details, '$.provider') as provider,
+  COUNT(*) as fallback_count
+FROM bot_events 
+WHERE event_type = 'ai_fallback'
+  AND timestamp > unixepoch('now', '-7 days')
+GROUP BY provider;
+
+-- Monitor empty response rate
+SELECT 
+  COUNT(CASE WHEN event_type = 'empty_response' THEN 1 END) as empty_responses,
+  COUNT(CASE WHEN event_type = 'ai_call_success' THEN 1 END) as successful_calls
+FROM bot_events 
+WHERE timestamp > unixepoch('now', '-1 day');
+```
 
 ## Technical Implementation
 

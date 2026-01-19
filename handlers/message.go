@@ -16,18 +16,18 @@ import (
 
 type MessageHandler struct {
 	session        *discordgo.Session
-	provider       ai.Provider
+	aiService      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
 	defaultModel   string
 }
 
-func NewMessageHandler(session *discordgo.Session, provider ai.Provider, repo *database.Repository) *MessageHandler {
+func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository) *MessageHandler {
 	return &MessageHandler{
 		session:        session,
-		provider:       provider,
+		aiService:      aiService,
 		repo:           repo,
-		contextBuilder: ai.NewContextBuilder(session, provider),
+		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
 		defaultModel:   "openai/gpt-oss-20b",
 	}
 }
@@ -105,7 +105,16 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	s.ChannelTyping(m.ChannelID)
 
-	response, err := h.provider.Chat(context.Background(), &ai.ChatRequest{
+	// Start AI call with comprehensive logging and retry/fallback support
+	logger.Debug("Starting AI chat request",
+		zap.String("guild_id", m.GuildID),
+		zap.String("channel_id", m.ChannelID),
+		zap.String("user_id", m.Author.ID),
+		zap.String("model", h.defaultModel),
+		zap.Int("message_count", len(processedMessage.Messages)),
+		zap.Int("image_count", len(processedMessage.Images)))
+
+	response, err := h.aiService.Chat(context.Background(), &ai.ChatRequest{
 		Model:        h.defaultModel,
 		SystemPrompt: instructions,
 		Messages:     processedMessage.Messages,
@@ -121,9 +130,39 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	}
 
 	if err != nil {
-		logger.Error("Error getting AI response", zap.Error(err))
+		// Enhanced error handling with user-friendly messages
+		logger.Error("AI chat failed after all retries and fallbacks",
+			zap.Error(err),
+			zap.String("guild_id", m.GuildID),
+			zap.String("user_id", m.Author.ID))
+
+		// Send user-friendly error message
+		errorMsg := "Désolé, j'ai des soucis techniques là... 🤖💀"
+		if h.aiService.IsFallbackAvailable() {
+			errorMsg = "Désolé, tous mes systèmes sont en rade... 🤖💀"
+		}
+
+		s.ChannelMessageSendReply(m.ChannelID, errorMsg, reference)
 		return
 	}
+
+	// Validate response before sending
+	if response.Content == "" {
+		logger.Error("Received empty response from AI service",
+			zap.String("guild_id", m.GuildID),
+			zap.String("user_id", m.Author.ID))
+
+		s.ChannelMessageSendReply(m.ChannelID, "Euh... j'ai perdu mes mots là 😅", reference)
+		return
+	}
+
+	// Log successful response
+	logger.Info("AI response successful",
+		zap.String("guild_id", m.GuildID),
+		zap.String("user_id", m.Author.ID),
+		zap.String("provider", h.aiService.Name()),
+		zap.Int("response_length", len(response.Content)),
+		zap.Int("tokens_used", response.TokensUsed))
 
 	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
 		Content:   response.Content,

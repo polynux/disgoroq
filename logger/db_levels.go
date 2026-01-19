@@ -30,6 +30,11 @@ var dbLogLevelMapping = map[database.EventType]DBLogLevel{
 	database.EventAICallStart:      DBLogLevelDebug,
 	database.EventAICallSuccess:    DBLogLevelDebug,
 	database.EventStateOff:         DBLogLevelDebug,
+
+	// New events for retry and fallback tracking
+	database.EventAIRetrying:     DBLogLevelDebug,
+	database.EventAIFallback:     DBLogLevelInfo,
+	database.EventProviderSwitch: DBLogLevelInfo,
 }
 
 func ParseDBLogLevel(level string) DBLogLevel {

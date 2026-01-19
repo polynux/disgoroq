@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/conneroisu/groq-go"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
@@ -32,8 +31,8 @@ func (s *Scheduler) SendHoroscope() {
 
 Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
-	response, err := s.provider.Chat(context.Background(), &ai.ChatRequest{
-		Model:        string(groq.ModelLlama3370BVersatile),
+	response, err := s.aiService.Chat(context.Background(), &ai.ChatRequest{
+		Model:        "llama-3-70b-versatile", // Use model name instead of groq constant
 		SystemPrompt: instructions,
 		Messages: []ai.Message{
 			{
@@ -47,6 +46,13 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 
 	if err != nil {
 		logger.Error("Error getting horoscope response", zap.Error(err))
+
+		// Enhanced error handling with fallback awareness
+		errorMsg := "Failed to generate horoscope"
+		if s.aiService.IsFallbackAvailable() {
+			errorMsg = "Failed to generate horoscope (both primary and fallback providers failed)"
+		}
+		logger.Error(errorMsg, zap.Error(err))
 		return
 	}
 
