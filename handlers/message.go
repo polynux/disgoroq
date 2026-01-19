@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -163,6 +164,10 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		zap.String("provider", h.aiService.Name()),
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
+
+	if strings.Contains(response.Content, "feur") {
+		response.Content = strings.ReplaceAll(response.Content, "feur", "fleur")
+	}
 
 	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
 		Content:   response.Content,
