@@ -41,16 +41,6 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 }
 
 func (s *Scheduler) Start() {
-	_, jobErr := s.scheduler.NewJob(
-		gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(12, 0, 0))),
-		gocron.NewTask(
-			s.SendHoroscope,
-		),
-	)
-	if jobErr != nil {
-		log.Println("error creating horoscope job,", jobErr)
-	}
-
 	_, err := s.scheduler.NewJob(
 		gocron.WeeklyJob(1, gocron.NewWeekdays(time.Friday), gocron.NewAtTimes(gocron.NewAtTime(0, 0, 0))),
 		gocron.NewTask(
