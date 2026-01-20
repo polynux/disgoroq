@@ -32,7 +32,6 @@ func (s *Scheduler) SendHoroscope() {
 Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
 	response, err := s.aiService.Chat(context.Background(), &ai.ChatRequest{
-		Model:        "llama-3-70b-versatile", // Use model name instead of groq constant
 		SystemPrompt: instructions,
 		Messages: []ai.Message{
 			{

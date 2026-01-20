@@ -36,7 +36,6 @@ func TestNewContextBuilder(t *testing.T) {
 	require.NotNil(t, cb)
 	assert.Equal(t, mockSession, cb.session)
 	assert.Equal(t, mockProvider, cb.provider)
-	assert.Equal(t, "meta-llama/llama-4-scout-17b-16e-instruct", cb.visionModel)
 	assert.Contains(t, cb.visionInstruction, "Décris cette image")
 }
 

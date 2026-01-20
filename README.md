@@ -365,12 +365,21 @@ DisgoroQ now includes a comprehensive AI provider resilience system with automat
 ### Architecture
 
 ```
-Message Handler → AI Service → Retry Wrapper → Provider Chain
+Message Handler → AI Service → Provider Chain → Retry Wrapper (per provider)
                                            ↓
-                                    Primary: Groq (with retries)
-                                           ↓ (if fails after retries)
-                                    Fallback: Ollama (with retries)
+                                    Primary: Retry Wrapper (Groq, model="llama-3-70b-versatile")
+                                           ↓ (immediate fallback on failure)
+                                    Fallback: Retry Wrapper (Ollama, model="dolphin3")
 ```
+
+#### Model Configuration
+
+Each provider now has its own model configuration:
+
+- **Groq**: Uses `GROQ_MODEL` for chat and `GROQ_VISION_MODEL` for vision
+- **Ollama**: Uses `OLLAMA_MODEL` for chat and `OLLAMA_VISION_MODEL` for vision
+
+Models are configured at service initialization and automatically injected during API calls. Callers no longer need to specify models - the system uses the appropriate model for each provider automatically.
 
 ### Configuration
 
@@ -385,6 +394,13 @@ Message Handler → AI Service → Retry Wrapper → Provider Chain
 | `AI_RETRY_ON_EMPTY` | true | Retry on empty responses |
 | `AI_RETRY_ON_ERROR` | true | Retry on API errors |
 
+#### AI Model Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROQ_MODEL` | llama-3-70b-versatile | Groq chat model |
+| `GROQ_VISION_MODEL` | meta-llama/llama-4-scout-17b-16e-instruct | Groq vision model |
+
 #### Fallback Configuration
 
 | Variable | Default | Description |
@@ -398,7 +414,8 @@ Message Handler → AI Service → Retry Wrapper → Provider Chain
 |----------|---------|-------------|
 | `OLLAMA_ENABLED` | false | Enable Ollama fallback provider |
 | `OLLAMA_API_URL` | http://localhost:11434 | Ollama API URL |
-| `OLLAMA_MODEL` | dolphin3 | Ollama model to use |
+| `OLLAMA_MODEL` | dolphin3 | Ollama chat model |
+| `OLLAMA_VISION_MODEL` | llava | Ollama vision model |
 
 ### Event Types
 
@@ -415,8 +432,12 @@ The system logs additional events for monitoring retry and fallback behavior:
 # Enable retry with 2 attempts and fallback to Ollama
 AI_MAX_RETRIES=2
 AI_FALLBACK_ENABLED=true
+
+# Configure models for each provider
+GROQ_MODEL="llama-3-70b-versatile"
 OLLAMA_ENABLED=true
 OLLAMA_API_URL="http://localhost:11434"
+OLLAMA_MODEL="dolphin3"
 ```
 
 #### Production Configuration
@@ -425,8 +446,12 @@ OLLAMA_API_URL="http://localhost:11434"
 AI_MAX_RETRIES=1
 AI_RETRY_INITIAL_DELAY_MS=1000
 AI_RETRY_MAX_DELAY_MS=3000
+
+# Enable fallback with custom models
 AI_FALLBACK_ENABLED=true
 OLLAMA_ENABLED=true
+GROQ_MODEL="llama-3-70b-versatile"
+OLLAMA_MODEL="dolphin3"
 ```
 
 #### Development Configuration
@@ -436,7 +461,13 @@ AI_MAX_RETRIES=5
 AI_RETRY_INITIAL_DELAY_MS=100
 AI_RETRY_MAX_DELAY_MS=5000
 AI_RETRY_BACKOFF=1.5
+
+# Enable detailed logging
 DB_LOG_LEVEL=debug  # Log all retry and fallback events
+
+# Test different models
+GROQ_MODEL="llama-3-70b-versatile"
+GROQ_VISION_MODEL="meta-llama/llama-4-scout-17b-16e-instruct"
 ```
 
 #### High Availability Configuration
@@ -446,8 +477,12 @@ AI_MAX_RETRIES=3
 AI_RETRY_ON_EMPTY=true
 AI_RETRY_ON_ERROR=true
 AI_FALLBACK_ENABLED=true
+
+# Configure different models for primary and fallback
 OLLAMA_ENABLED=true
+GROQ_MODEL="llama-3-70b-versatile"
 OLLAMA_MODEL="llama2"  # Use a different model for fallback
+GROQ_VISION_MODEL="meta-llama/llama-4-scout-17b-16e-instruct"
 ```
 
 ### Error Messages

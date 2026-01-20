@@ -14,12 +14,15 @@ import (
 // ServiceConfig contains configuration for the AI service
 type ServiceConfig struct {
 	// Primary provider configuration
-	GroqAPIKey string
+	GroqAPIKey      string
+	GroqModel       string // Chat model for Groq
+	GroqVisionModel string // Vision model for Groq
 
 	// Fallback provider configuration
-	OllamaEnabled bool
-	OllamaURL     string
-	OllamaModel   string
+	OllamaEnabled     bool
+	OllamaURL         string
+	OllamaModel       string // Chat model for Ollama
+	OllamaVisionModel string // Vision model for Ollama
 
 	// Retry configuration
 	RetryConfig RetryConfig
@@ -35,9 +38,12 @@ type ServiceConfig struct {
 func LoadServiceConfig() ServiceConfig {
 	config := ServiceConfig{
 		GroqAPIKey:        os.Getenv("GROQ_API_KEY"),
+		GroqModel:         getEnvWithDefault("GROQ_MODEL", "openai/gpt-oss-20b"),
+		GroqVisionModel:   getEnvWithDefault("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
 		OllamaEnabled:     parseBoolEnv(os.Getenv("OLLAMA_ENABLED"), false),
 		OllamaURL:         getEnvWithDefault("OLLAMA_API_URL", "http://localhost:11434"),
 		OllamaModel:       getEnvWithDefault("OLLAMA_MODEL", "dolphin3"),
+		OllamaVisionModel: getEnvWithDefault("OLLAMA_VISION_MODEL", "llava"),
 		RetryConfig:       LoadRetryConfigFromEnv(),
 		MinResponseLength: getIntEnvWithDefault("AI_MIN_RESPONSE_LENGTH", 1),
 		FallbackEnabled:   parseBoolEnv(os.Getenv("AI_FALLBACK_ENABLED"), true),
@@ -85,47 +91,60 @@ func (c *ServiceConfig) Validate() error {
 type Service struct {
 	config   ServiceConfig
 	provider Provider
+	chain    *ProviderChain // Store chain reference for fallback detection
 }
 
 // NewService creates a new AI service with the given configuration
 func NewService(config ServiceConfig) *Service {
-	// Build the provider chain
-	var providers []Provider
+	// Build wrapped providers (with retry logic for each)
+	var wrappedProviders []Provider
 
-	// Always add Groq as primary provider
+	// Always add Groq as primary provider (wrapped with retry)
 	if config.GroqAPIKey != "" {
-		providers = append(providers, NewGroqProvider(config.GroqAPIKey))
+		groqProvider := NewGroqProvider(config.GroqAPIKey)
+		wrappedGroq := NewRetryWrapper(
+			groqProvider,
+			config.RetryConfig,
+			config.GroqModel,
+			config.GroqVisionModel,
+		)
+		wrappedProviders = append(wrappedProviders, wrappedGroq)
 	}
 
 	// Add Ollama as fallback if enabled
 	if config.OllamaEnabled && config.FallbackEnabled {
 		if ollamaProvider, err := NewOllamaProvider(); err == nil {
-			providers = append(providers, ollamaProvider)
+			wrappedOllama := NewRetryWrapper(
+				ollamaProvider,
+				config.RetryConfig,
+				config.OllamaModel,
+				config.OllamaVisionModel,
+			)
+			wrappedProviders = append(wrappedProviders, wrappedOllama)
 		} else {
 			logger.Warn("Failed to create Ollama provider", zap.Error(err))
 		}
 	}
 
-	if len(providers) == 0 {
+	if len(wrappedProviders) == 0 {
 		logger.Error("No AI providers available - check configuration")
 		return nil
 	}
 
 	// Create provider chain if multiple providers
+	var chain *ProviderChain
 	var finalProvider Provider
-	if len(providers) > 1 {
-		chain := NewProviderChain(providers...)
+	if len(wrappedProviders) > 1 {
+		chain = NewProviderChain(wrappedProviders...)
 		finalProvider = chain
 	} else {
-		finalProvider = providers[0]
+		finalProvider = wrappedProviders[0]
 	}
-
-	// Wrap with retry logic
-	retryWrapper := NewRetryWrapper(finalProvider, config.RetryConfig)
 
 	return &Service{
 		config:   config,
-		provider: retryWrapper,
+		provider: finalProvider,
+		chain:    chain,
 	}
 }
 
@@ -231,9 +250,9 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 
 // IsFallbackAvailable returns true if fallback providers are configured
 func (s *Service) IsFallbackAvailable() bool {
-	// Check if the underlying provider is a chain with multiple providers
-	if chain, ok := s.provider.(*ProviderChain); ok {
-		return chain.IsFallbackAvailable()
+	// Use stored chain reference instead of type assertion
+	if s.chain != nil {
+		return s.chain.IsFallbackAvailable()
 	}
 	return false
 }

@@ -14,7 +14,6 @@ import (
 type ContextBuilder struct {
 	session           *discordgo.Session
 	provider          Provider
-	visionModel       string
 	visionInstruction string
 }
 
@@ -22,7 +21,6 @@ func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBu
 	return &ContextBuilder{
 		session:           session,
 		provider:          provider,
-		visionModel:       "meta-llama/llama-4-scout-17b-16e-instruct",
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
 	}
 }
@@ -210,7 +208,6 @@ func (cb *ContextBuilder) processImages(ctx context.Context, imagesToProcess []i
 	for _, img := range imagesToProcess {
 		go func(img imageToProcess) {
 			response, err := cb.provider.Vision(ctx, &VisionRequest{
-				Model:       cb.visionModel,
 				Instruction: cb.visionInstruction,
 				ImageURL:    img.url,
 				ImageType:   img.contentType,
