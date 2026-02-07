@@ -82,26 +82,40 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			}
 		}
 
-		var userMember *discordgo.Member
-		var err error
-		if cachedMember, exists := memberCache[messages[idx].Author.ID]; exists {
-			userMember = cachedMember
+		var nick string
+		// Check if message is from a webhook (webhooks aren't guild members)
+		if messages[idx].WebhookID != "" {
+			nick = messages[idx].Author.Username
+		} else if cachedMember, exists := memberCache[messages[idx].Author.ID]; exists {
+			// Use cached member (nil means we already tried and failed)
+			if cachedMember != nil {
+				nick = cachedMember.Nick
+				if nick == "" {
+					nick = messages[idx].Author.Username
+				}
+			} else {
+				nick = messages[idx].Author.Username
+			}
 		} else {
-			userMember, err = cb.session.GuildMember(guildID, messages[idx].Author.ID)
+			// Try to fetch guild member
+			userMember, err := cb.session.GuildMember(guildID, messages[idx].Author.ID)
 			if err != nil {
-				logger.Error("Error getting user member",
+				// Log warning and fallback to username for non-members (webhooks, cross-server announcements)
+				logger.Warn("Could not get guild member, using username",
 					zap.Error(err),
 					zap.String("user_id", messages[idx].Author.ID),
 					zap.String("guild_id", guildID),
 				)
-				return nil, err
+				nick = messages[idx].Author.Username
+				// Cache nil to avoid repeated failed lookups
+				memberCache[messages[idx].Author.ID] = nil
+			} else {
+				memberCache[messages[idx].Author.ID] = userMember
+				nick = userMember.Nick
+				if nick == "" {
+					nick = messages[idx].Author.Username
+				}
 			}
-			memberCache[messages[idx].Author.ID] = userMember
-		}
-
-		nick := userMember.Nick
-		if nick == "" {
-			nick = messages[idx].Author.Username
 		}
 
 		var content strings.Builder
