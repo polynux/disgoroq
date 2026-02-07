@@ -158,14 +158,15 @@ func (v *ResponseValidator) validateContent(content string) *ValidationResult {
 // hasValidUnicode checks if the string contains valid, printable Unicode characters
 func (v *ResponseValidator) hasValidUnicode(s string) bool {
 	for _, r := range s {
-		// Check if character is printable (not control character)
-		if !unicode.IsPrint(r) && !unicode.IsSpace(r) {
-			return false
-		}
-		// Check if character is a valid Unicode character
+		// Check if character is a valid Unicode character (not replacement char)
 		if r == unicode.ReplacementChar {
 			return false
 		}
+		// Check if it's a control character (but allow common whitespace)
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return false
+		}
+		// Allow all other Unicode characters including emojis
 	}
 	return len(s) > 0 // Ensure we have at least one character
 }
