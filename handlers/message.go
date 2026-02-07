@@ -182,6 +182,10 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		response.Content = strings.ReplaceAll(response.Content, "feur", "fleur")
 	}
 
+	if h.emojiManager != nil {
+		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID)
+	}
+
 	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
 		Content:   response.Content,
 		Reference: reference,
