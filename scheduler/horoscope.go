@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 
 	"go.uber.org/zap"
 
@@ -30,6 +32,27 @@ func (s *Scheduler) SendHoroscope() {
 7. Évite tout conseil sérieux - plus c'est absurde, mieux c'est!
 
 Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
+
+	// Check if emoji inclusion is enabled (default: true)
+	includeEmojis := true
+	if envVal := os.Getenv("HOROSCOPE_INCLUDE_EMOJIS"); envVal != "" {
+		if val, err := strconv.ParseBool(envVal); err == nil {
+			includeEmojis = val
+		}
+	}
+
+	// Append custom emojis to system prompt if enabled
+	if includeEmojis && s.emojiManager != nil {
+		allEmojis := s.emojiManager.GetAllEmojis()
+		// Limit to 50 emojis to avoid prompt bloat
+		if len(allEmojis) > 50 {
+			allEmojis = allEmojis[:50]
+		}
+		if len(allEmojis) > 0 {
+			emojiList := s.emojiManager.FormatEmojiList(allEmojis)
+			instructions = instructions + "\n\nTu peux aussi utiliser ces emojis personnalisés: " + emojiList
+		}
+	}
 
 	response, err := s.aiService.Chat(context.Background(), &ai.ChatRequest{
 		SystemPrompt: instructions,
