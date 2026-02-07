@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,6 +72,12 @@ func (dp *DocumentProcessor) extractText(ctx context.Context, docURL, format str
 		return dp.extractXLSX(data)
 	case "pptx":
 		return dp.extractPPTX(data)
+	case "txt":
+		return dp.extractTXT(data)
+	case "csv":
+		return dp.extractCSV(data)
+	case "md":
+		return dp.extractMarkdown(data)
 	default:
 		return "", fmt.Errorf("unsupported format: %s", format)
 	}
@@ -200,4 +207,32 @@ func (dp *DocumentProcessor) extractPPTX(data []byte) (string, error) {
 	}
 
 	return text, nil
+}
+
+func (dp *DocumentProcessor) extractTXT(data []byte) (string, error) {
+	return string(data), nil
+}
+
+func (dp *DocumentProcessor) extractCSV(data []byte) (string, error) {
+	reader := csv.NewReader(bytes.NewReader(data))
+	records, err := reader.ReadAll()
+	if err != nil {
+		return "", fmt.Errorf("failed to parse CSV: %w", err)
+	}
+
+	var result strings.Builder
+	for i, record := range records {
+		if i >= 100 {
+			result.WriteString("\n... [truncated after 100 rows]")
+			break
+		}
+		result.WriteString(strings.Join(record, " | "))
+		result.WriteString("\n")
+	}
+
+	return result.String(), nil
+}
+
+func (dp *DocumentProcessor) extractMarkdown(data []byte) (string, error) {
+	return string(data), nil
 }
