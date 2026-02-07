@@ -53,7 +53,7 @@ func TestGetImagesToProcess_NoImages(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 0)
 }
 
@@ -80,7 +80,7 @@ func TestGetImagesToProcess_ValidImage(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 1)
 	assert.Equal(t, "1", images[0].id)
 	assert.Equal(t, "https://example.com/image.jpg", images[0].url)
@@ -111,7 +111,7 @@ func TestGetImagesToProcess_NonImageAttachment(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 0)
 }
 
@@ -138,7 +138,7 @@ func TestGetImagesToProcess_UnsupportedImageType(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 0)
 }
 
@@ -165,7 +165,7 @@ func TestGetImagesToProcess_ImageTooLarge(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 0)
 }
 
@@ -192,7 +192,7 @@ func TestGetImagesToProcess_ImageResolutionTooHigh(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 0)
 }
 
@@ -227,7 +227,7 @@ func TestGetImagesToProcess_MultipleImages(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 2)
 	assert.Equal(t, "https://example.com/image1.jpg", images[0].url)
 	assert.Equal(t, "https://example.com/image2.png", images[1].url)
@@ -259,7 +259,7 @@ func TestGetImagesToProcess_LimitToSixImages(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Equal(t, 6, len(images))
 }
 
@@ -300,7 +300,7 @@ func TestGetImagesToProcess_ReversedOrder(t *testing.T) {
 		},
 	}
 
-	images := cb.getImagesToProcess(messages)
+	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 2)
 	assert.Equal(t, "2", images[0].id, "Should process images in reverse order")
 	assert.Equal(t, "1", images[1].id, "Should process images in reverse order")

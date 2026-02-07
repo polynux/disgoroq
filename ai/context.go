@@ -15,6 +15,7 @@ type ContextBuilder struct {
 	session           *discordgo.Session
 	provider          Provider
 	visionInstruction string
+	gifProcessor      *GIFProcessor
 }
 
 func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBuilder {
@@ -22,6 +23,7 @@ func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBu
 		session:           session,
 		provider:          provider,
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
+		gifProcessor:      NewGIFProcessor(),
 	}
 }
 
@@ -39,7 +41,7 @@ var supportedImageTypes = []string{
 }
 
 func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordgo.Message, guildID string, botID string) (*ProcessedMessage, error) {
-	imagesToProcess := cb.getImagesToProcess(messages)
+	imagesToProcess := cb.getImagesToProcess(ctx, messages)
 	describedImages := cb.processImages(ctx, imagesToProcess)
 
 	formattedMessages := make([]Message, 0, len(messages))
@@ -174,7 +176,7 @@ type imageToProcess struct {
 	size        int64
 }
 
-func (cb *ContextBuilder) getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
+func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*discordgo.Message) []imageToProcess {
 	attachmentCount := 0
 	imagesToProcess := make([]imageToProcess, 0)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
@@ -194,10 +196,23 @@ func (cb *ContextBuilder) getImagesToProcess(messages []*discordgo.Message) []im
 			if attachment.Width*attachment.Height > 33000000 {
 				continue
 			}
+
+			// Process animated GIFs
+			url := attachment.URL
+			contentType := attachment.ContentType
+			if attachment.ContentType == "image/gif" && cb.gifProcessor != nil {
+				base64Grid, err := cb.gifProcessor.ProcessGIF(ctx, attachment.URL)
+				if err == nil && base64Grid != "" {
+					// Replace with base64 data URI
+					url = "data:image/jpeg;base64," + base64Grid
+					contentType = "image/jpeg"
+				}
+			}
+
 			imagesToProcess = append(imagesToProcess, imageToProcess{
 				id:          messages[idx].ID,
-				url:         attachment.URL,
-				contentType: attachment.ContentType,
+				url:         url,
+				contentType: contentType,
 				width:       attachment.Width,
 				height:      attachment.Height,
 				size:        int64(attachment.Size),

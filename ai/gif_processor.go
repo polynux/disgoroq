@@ -10,6 +10,7 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"io"
+	"net/http"
 )
 
 // GIFProcessor handles animated GIF processing for vision models
@@ -39,8 +40,46 @@ func (gp *GIFProcessor) IsAnimatedGIF(r io.Reader) (bool, error) {
 
 // ProcessGIF processes an animated GIF and returns a base64 encoded JPEG grid
 func (gp *GIFProcessor) ProcessGIF(ctx context.Context, gifURL string) (string, error) {
-	// TODO: Implement in Tasks 3-4
-	return "", nil
+	req, err := http.NewRequestWithContext(ctx, "GET", gifURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to download GIF: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download GIF: status %d", resp.StatusCode)
+	}
+
+	gifData, err := gif.DecodeAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode GIF: %w", err)
+	}
+
+	if len(gifData.Image) < 2 {
+		return "", nil
+	}
+
+	frames, err := gp.extractFrames(gifData)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract frames: %w", err)
+	}
+
+	grid, err := gp.createGrid(frames)
+	if err != nil {
+		return "", fmt.Errorf("failed to create grid: %w", err)
+	}
+
+	base64Data, err := gp.encodeToBase64(grid)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode grid: %w", err)
+	}
+
+	return base64Data, nil
 }
 
 // extractFrames extracts evenly spaced frames from an animated GIF
