@@ -34,12 +34,12 @@ var supportedDocuments = map[string]string{
 	"text/markdown": "md",
 }
 
-// NewDocumentProcessor creates a new DocumentProcessor with default configuration
+// NewDocumentProcessor creates a new DocumentProcessor with configuration from environment variables
 func NewDocumentProcessor(provider Provider) *DocumentProcessor {
 	return &DocumentProcessor{
-		maxSizeMB:        50,
-		maxSummaryTokens: 500,
-		summaryModel:     "llama-3.1-8b-instant",
+		maxSizeMB:        getIntEnvWithDefault("DOCUMENT_MAX_SIZE_MB", 50),
+		maxSummaryTokens: getIntEnvWithDefault("DOCUMENT_SUMMARY_MAX_TOKENS", 500),
+		summaryModel:     getEnvWithDefault("DOCUMENT_SUMMARY_MODEL", "llama-3.1-8b-instant"),
 		provider:         provider,
 	}
 }
