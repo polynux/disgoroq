@@ -16,6 +16,7 @@ type ContextBuilder struct {
 	provider          Provider
 	visionInstruction string
 	gifProcessor      *GIFProcessor
+	docProcessor      *DocumentProcessor
 }
 
 func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBuilder {
@@ -24,6 +25,7 @@ func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBu
 		provider:          provider,
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
 		gifProcessor:      NewGIFProcessor(),
+		docProcessor:      NewDocumentProcessor(provider),
 	}
 }
 
@@ -43,6 +45,7 @@ var supportedImageTypes = []string{
 func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordgo.Message, guildID string, botID string) (*ProcessedMessage, error) {
 	imagesToProcess := cb.getImagesToProcess(ctx, messages)
 	describedImages := cb.processImages(ctx, imagesToProcess)
+	documentSummaries := cb.getDocumentSummaries(ctx, messages)
 
 	formattedMessages := make([]Message, 0, len(messages))
 	imageContexts := make([]ImageContext, 0)
@@ -132,6 +135,13 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			content.WriteString(strings.ReplaceAll(imageDescription, "\n", ""))
 			content.WriteString("</IMAGE_DESC>\n")
 		}
+
+		if docSummary, exists := documentSummaries[messages[idx].ID]; exists {
+			content.WriteString("[Document Summary]\n")
+			content.WriteString(docSummary)
+			content.WriteString("\n\n")
+		}
+
 		content.WriteString(messages[idx].Content)
 		content.WriteString("\n\n")
 
@@ -222,6 +232,23 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*di
 	}
 
 	return imagesToProcess
+}
+
+func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []*discordgo.Message) map[string]string {
+	summaries := make(map[string]string)
+
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		for _, attachment := range messages[idx].Attachments {
+			if cb.docProcessor != nil && cb.docProcessor.CanProcess(attachment.ContentType) {
+				summary, err := cb.docProcessor.ProcessDocument(ctx, attachment.URL, attachment.Filename)
+				if err == nil && summary != "" {
+					summaries[messages[idx].ID] = summary
+				}
+			}
+		}
+	}
+
+	return summaries
 }
 
 type processedImage struct {
