@@ -1,7 +1,14 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/ledongthuc/pdf"
 )
 
 // DocumentProcessor handles document text extraction and summarization
@@ -47,8 +54,17 @@ func (dp *DocumentProcessor) ProcessDocument(ctx context.Context, docURL, filena
 
 // extractText extracts text from a document based on its format
 func (dp *DocumentProcessor) extractText(ctx context.Context, docURL, format string) (string, error) {
-	// TODO: Implement in Tasks 2-5
-	return "", nil
+	data, err := dp.downloadDocument(ctx, docURL)
+	if err != nil {
+		return "", err
+	}
+
+	switch format {
+	case "pdf":
+		return dp.extractPDF(data)
+	default:
+		return "", fmt.Errorf("unsupported format: %s", format)
+	}
 }
 
 // summarizeText summarizes extracted text using AI
@@ -59,6 +75,69 @@ func (dp *DocumentProcessor) summarizeText(ctx context.Context, text, filename s
 
 // downloadDocument downloads a document from URL
 func (dp *DocumentProcessor) downloadDocument(ctx context.Context, docURL string) ([]byte, error) {
-	// TODO: Implement
-	return nil, nil
+	req, err := http.NewRequestWithContext(ctx, "GET", docURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to download document: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download document: status %d", resp.StatusCode)
+	}
+
+	if resp.ContentLength > int64(dp.maxSizeMB)*1024*1024 {
+		return nil, fmt.Errorf("document too large: %d MB > %d MB limit",
+			resp.ContentLength/1024/1024, dp.maxSizeMB)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read document: %w", err)
+	}
+
+	if len(data) > dp.maxSizeMB*1024*1024 {
+		return nil, fmt.Errorf("document too large: %d MB > %d MB limit",
+			len(data)/1024/1024, dp.maxSizeMB)
+	}
+
+	return data, nil
+}
+
+// extractPDF extracts text from PDF data
+func (dp *DocumentProcessor) extractPDF(data []byte) (string, error) {
+	r := bytes.NewReader(data)
+	pdfReader, err := pdf.NewReader(r, int64(len(data)))
+	if err != nil {
+		return "", fmt.Errorf("failed to open PDF: %w", err)
+	}
+
+	var text strings.Builder
+	numPages := pdfReader.NumPage()
+
+	for pageNum := 1; pageNum <= numPages; pageNum++ {
+		page := pdfReader.Page(pageNum)
+		if page.V.IsNull() {
+			continue
+		}
+
+		rows, err := page.GetTextByRow()
+		if err != nil {
+			continue
+		}
+
+		for _, row := range rows {
+			for _, word := range row.Content {
+				text.WriteString(word.S)
+				text.WriteString(" ")
+			}
+			text.WriteString("\n")
+		}
+	}
+
+	return text.String(), nil
 }
