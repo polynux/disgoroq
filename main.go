@@ -14,6 +14,7 @@ import (
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/commands"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/scheduler"
@@ -98,7 +99,9 @@ func main() {
 
 	repo := database.NewRepository()
 
-	messageHandler := handlers.NewMessageHandler(dg, aiService, repo)
+	emojiManager := emoji.NewManager(dg)
+
+	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, emojiManager)
 	dg.AddHandler(messageHandler.Handle)
 	dg.AddHandler(handlers.HandleGuildCreate)
 	dg.AddHandler(handlers.HandleGuildDelete)
@@ -131,7 +134,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, aiService, repo)
+	sched := scheduler.New(dg, aiService, repo, emojiManager)
 	sched.Start()
 	defer sched.Shutdown()
 

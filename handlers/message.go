@@ -12,6 +12,7 @@ import (
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 )
 
@@ -20,15 +21,22 @@ type MessageHandler struct {
 	aiService      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
+	emojiManager   *emoji.Manager
 }
 
-func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository) *MessageHandler {
+func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager) *MessageHandler {
 	return &MessageHandler{
 		session:        session,
 		aiService:      aiService,
 		repo:           repo,
-		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
+		contextBuilder: ai.NewContextBuilder(session, aiService),
+		emojiManager:   emojiManager,
 	}
+}
+
+// GetDefaultPrompt returns the default system prompt with the bot's nickname
+func GetDefaultPrompt(botNick string) string {
+	return fmt.Sprintf(`yo, t'es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀`, botNick)
 }
 
 func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -96,10 +104,19 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	temperature := h.repo.GetTemperature(context.Background(), m.GuildID)
 
-	instructions := fmt.Sprintf(`yo, t'es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀`, botMember.Nick)
+	instructions := GetDefaultPrompt(botMember.Nick)
 
 	if prompt, ok := h.repo.GetPrompt(context.Background(), m.GuildID); ok {
 		instructions = prompt
+	}
+
+	// Append available emojis to system prompt
+	if h.emojiManager != nil {
+		emojis := h.emojiManager.GetEmojisForGuild(m.GuildID)
+		if len(emojis) > 0 {
+			emojiList := h.emojiManager.FormatEmojiList(emojis)
+			instructions = instructions + "\n\n" + emojiList
+		}
 	}
 
 	s.ChannelTyping(m.ChannelID)
