@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"image"
+	"image/draw"
 	"image/gif"
 	"image/jpeg"
 	"io"
@@ -91,14 +92,64 @@ func (gp *GIFProcessor) calculateEvenIndices(totalFrames, frameCount int) []int 
 
 // calculateGridDimensions determines grid size based on frame count
 func (gp *GIFProcessor) calculateGridDimensions(frameCount int) (rows, cols int) {
-	// TODO: Implement in Task 3
-	return 0, 0
+	switch {
+	case frameCount <= 4:
+		return 2, 2
+	case frameCount <= 6:
+		return 2, 3
+	case frameCount <= 9:
+		return 3, 3
+	default:
+		return 3, 3
+	}
 }
 
 // createGrid creates a grid image from frames
 func (gp *GIFProcessor) createGrid(frames []image.Image) (image.Image, error) {
-	// TODO: Implement in Task 3
-	return nil, nil
+	if len(frames) == 0 {
+		return nil, fmt.Errorf("no frames to create grid")
+	}
+
+	rows, cols := gp.calculateGridDimensions(len(frames))
+	padding := 5
+
+	// Find max frame dimensions
+	maxWidth, maxHeight := 0, 0
+	for _, frame := range frames {
+		bounds := frame.Bounds()
+		if bounds.Dx() > maxWidth {
+			maxWidth = bounds.Dx()
+		}
+		if bounds.Dy() > maxHeight {
+			maxHeight = bounds.Dy()
+		}
+	}
+
+	// Calculate grid dimensions
+	gridWidth := cols*maxWidth + (cols+1)*padding
+	gridHeight := rows*maxHeight + (rows+1)*padding
+
+	// Create destination image with white background
+	dst := image.NewRGBA(image.Rect(0, 0, gridWidth, gridHeight))
+	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
+
+	// Place frames in grid
+	for i, frame := range frames {
+		row := i / cols
+		col := i % cols
+
+		// Calculate position with padding
+		x := padding + col*(maxWidth+padding)
+		y := padding + row*(maxHeight+padding)
+
+		// Define destination rectangle
+		dstRect := image.Rect(x, y, x+maxWidth, y+maxHeight)
+
+		// Draw frame
+		draw.Draw(dst, dstRect, frame, frame.Bounds().Min, draw.Over)
+	}
+
+	return dst, nil
 }
 
 // encodeToBase64 encodes an image to base64 JPEG string

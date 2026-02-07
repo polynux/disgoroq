@@ -166,6 +166,73 @@ func encodeTestGIF(g *gif.GIF) *bytes.Buffer {
 	return &buf
 }
 
+func TestGIFProcessor_calculateGridDimensions(t *testing.T) {
+	gp := NewGIFProcessor()
+
+	tests := []struct {
+		frameCount   int
+		expectedRows int
+		expectedCols int
+	}{
+		{4, 2, 2},
+		{5, 2, 3},
+		{6, 2, 3},
+		{7, 3, 3},
+		{8, 3, 3},
+		{9, 3, 3},
+	}
+
+	for _, tt := range tests {
+		rows, cols := gp.calculateGridDimensions(tt.frameCount)
+		if rows != tt.expectedRows {
+			t.Errorf("frameCount=%d: expected rows=%d, got %d", tt.frameCount, tt.expectedRows, rows)
+		}
+		if cols != tt.expectedCols {
+			t.Errorf("frameCount=%d: expected cols=%d, got %d", tt.frameCount, tt.expectedCols, cols)
+		}
+	}
+}
+
+func TestGIFProcessor_createGrid(t *testing.T) {
+	gp := NewGIFProcessor()
+
+	// Create 4 test frames
+	frames := make([]image.Image, 4)
+	for i := 0; i < 4; i++ {
+		frames[i] = image.NewRGBA(image.Rect(0, 0, 100, 100))
+	}
+
+	grid, err := gp.createGrid(frames)
+	if err != nil {
+		t.Fatalf("createGrid failed: %v", err)
+	}
+
+	// Check grid is not nil
+	if grid == nil {
+		t.Fatal("createGrid returned nil image")
+	}
+
+	// Check dimensions (2x2 grid with 5px padding)
+	// Expected: (2*100 + 3*5) = 215px width/height
+	bounds := grid.Bounds()
+	expectedSize := 2*100 + 3*5 // 215
+	if bounds.Dx() != expectedSize {
+		t.Errorf("expected width %d, got %d", expectedSize, bounds.Dx())
+	}
+	if bounds.Dy() != expectedSize {
+		t.Errorf("expected height %d, got %d", expectedSize, bounds.Dy())
+	}
+}
+
+func TestGIFProcessor_createGrid_EmptyFrames(t *testing.T) {
+	gp := NewGIFProcessor()
+
+	_, err := gp.createGrid([]image.Image{})
+	if err == nil {
+		t.Error("Expected error for empty frames, got nil")
+	}
+}
+
 func TestGIFProcessor_ProcessGIF(t *testing.T) {
-	// TODO: Add tests in Task 4 after grid composition is implemented
+	// TODO: Add tests in Task 4 after full integration
 }
