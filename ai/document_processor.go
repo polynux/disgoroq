@@ -52,8 +52,41 @@ func (dp *DocumentProcessor) CanProcess(contentType string) bool {
 
 // ProcessDocument processes a document and returns a markdown summary
 func (dp *DocumentProcessor) ProcessDocument(ctx context.Context, docURL, filename string) (string, error) {
-	// TODO: Implement in Tasks 2-6
-	return "", nil
+	format := dp.getFormatFromFilename(filename)
+	if format == "" {
+		return "", fmt.Errorf("unsupported document format: %s", filename)
+	}
+
+	text, err := dp.extractText(ctx, docURL, format)
+	if err != nil {
+		return "", fmt.Errorf("failed to extract text: %w", err)
+	}
+
+	summary, err := dp.summarizeText(ctx, text, filename)
+	if err != nil {
+		return fmt.Sprintf("[Document: %s]", filename), nil
+	}
+
+	return summary, nil
+}
+
+func (dp *DocumentProcessor) getFormatFromFilename(filename string) string {
+	extensions := map[string]string{
+		".pdf":  "pdf",
+		".docx": "docx",
+		".xlsx": "xlsx",
+		".pptx": "pptx",
+		".txt":  "txt",
+		".csv":  "csv",
+		".md":   "md",
+	}
+
+	for ext, format := range extensions {
+		if strings.HasSuffix(strings.ToLower(filename), ext) {
+			return format
+		}
+	}
+	return ""
 }
 
 // extractText extracts text from a document based on its format
@@ -85,8 +118,33 @@ func (dp *DocumentProcessor) extractText(ctx context.Context, docURL, format str
 
 // summarizeText summarizes extracted text using AI
 func (dp *DocumentProcessor) summarizeText(ctx context.Context, text, filename string) (string, error) {
-	// TODO: Implement in Task 6
-	return "", nil
+	if len(text) > 12000 {
+		text = text[:12000] + "\n...[truncated]"
+	}
+
+	prompt := fmt.Sprintf(`Summarize the following document in markdown format.
+Use headers, bullet points, and bold text for structure.
+Capture key information concisely.
+Maximum length: %d tokens.
+
+Document: %s
+
+Content:
+%s`, dp.maxSummaryTokens, filename, text)
+
+	req := &ChatRequest{
+		Model:       dp.summaryModel,
+		Messages:    []Message{{Role: "user", Content: prompt}},
+		MaxTokens:   dp.maxSummaryTokens,
+		Temperature: 0.3,
+	}
+
+	resp, err := dp.provider.Chat(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("failed to summarize: %w", err)
+	}
+
+	return resp.Content, nil
 }
 
 // downloadDocument downloads a document from URL
