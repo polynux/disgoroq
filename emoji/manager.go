@@ -166,3 +166,30 @@ func (e *Emoji) FormatDiscordEmoji() string {
 	}
 	return "<:" + e.Name + ":" + e.ID + ">"
 }
+
+// ConvertShortcodesToDiscordEmojis replaces :name: shortcodes with Discord emoji format
+// It searches through the guild's emojis to find matches and replaces them
+func (m *Manager) ConvertShortcodesToDiscordEmojis(text string, guildID string) string {
+	if m == nil || guildID == "" {
+		return text
+	}
+
+	emojis := m.GetEmojisForGuild(guildID)
+	if len(emojis) == 0 {
+		return text
+	}
+
+	emojiMap := make(map[string]Emoji)
+	for _, emoji := range emojis {
+		emojiMap[emoji.Name] = emoji
+	}
+
+	result := text
+	for name, emoji := range emojiMap {
+		shortcode := ":" + name + ":"
+		discordFormat := emoji.FormatDiscordEmoji()
+		result = strings.ReplaceAll(result, shortcode, discordFormat)
+	}
+
+	return result
+}
