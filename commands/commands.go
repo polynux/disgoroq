@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
 )
@@ -160,8 +161,27 @@ func RegisterAll(registry *Registry, repo *database.Repository) {
 	registry.AddCommand(
 		&discordgo.ApplicationCommand{
 			Name:        "prompt",
-			Description: "Set the prompt for the bot",
+			Description: "Manage the bot's system prompt",
 			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "see",
+					Description: "View the current prompt",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+				},
+				{
+					Name:        "append",
+					Description: "Append text to the current prompt",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Name:        "text",
+							Description: "Text to append to the prompt",
+							Type:        discordgo.ApplicationCommandOptionString,
+							Required:    true,
+							MaxLength:   1000,
+						},
+					},
+				},
 				{
 					Name:        "set",
 					Description: "Set a custom prompt for the bot",
@@ -377,44 +397,104 @@ func cleanHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 func promptHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		options := i.ApplicationCommandData().Options
-		if options[0].Name != "set" {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Wrong option!",
-				},
-			})
-			return
-		}
+		subcommand := options[0].Name
 
-		options = options[0].Options
-		if options[0].Name == "default" {
-			content := "Prompt set to default"
-			err := repo.DeleteGuildSetting(context.Background(), i.GuildID, "prompt")
-			if err != nil {
-				content = "Error setting prompt"
-			}
+		switch subcommand {
+		case "see":
+			handlePromptSee(s, i, repo)
+		case "append":
+			handlePromptAppend(s, i, repo)
+		case "set":
+			handlePromptSet(s, i, repo)
+		default:
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: content,
+					Content: "Unknown subcommand!",
 				},
 			})
-			return
 		}
+	}
+}
 
-		if options[0].Name != "custom" {
+func handlePromptSee(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	prompt, hasCustom := repo.GetPrompt(ctx, i.GuildID)
+
+	if !hasCustom {
+		botMember, err := s.GuildMember(i.GuildID, s.State.User.ID)
+		if err != nil {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Wrong option!",
+					Content: "Error getting bot information",
 				},
 			})
 			return
 		}
-		value := options[0].Options[0].StringValue()
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "prompt", value)
-		content := "Prompt correctly set"
+		prompt = handlers.GetDefaultPrompt(botMember.Nick)
+	}
+
+	// Truncate if too long for Discord message (max 2000, leave room for prefix)
+	content := prompt
+	if len(content) > 1900 {
+		content = content[:1900] + "\n... (truncated)"
+	}
+
+	prefix := "**Current prompt:**\n"
+	if !hasCustom {
+		prefix = "**Current prompt (default):**\n"
+	}
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: prefix + content,
+		},
+	})
+}
+
+func handlePromptAppend(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	textToAppend := i.ApplicationCommandData().Options[0].Options[0].StringValue()
+
+	currentPrompt, hasCustom := repo.GetPrompt(ctx, i.GuildID)
+	if !hasCustom {
+		botMember, err := s.GuildMember(i.GuildID, s.State.User.ID)
+		if err != nil {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Error getting bot information",
+				},
+			})
+			return
+		}
+		currentPrompt = handlers.GetDefaultPrompt(botMember.Nick)
+	}
+
+	newPrompt := currentPrompt + "\n" + textToAppend
+
+	err := repo.SetGuildSetting(ctx, i.GuildID, "prompt", newPrompt)
+	content := "Prompt updated successfully"
+	if err != nil {
+		content = "Error updating prompt"
+	}
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
+func handlePromptSet(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	options := i.ApplicationCommandData().Options[0].Options
+
+	if options[0].Name == "default" {
+		content := "Prompt set to default"
+		err := repo.DeleteGuildSetting(context.Background(), i.GuildID, "prompt")
 		if err != nil {
 			content = "Error setting prompt"
 		}
@@ -424,5 +504,29 @@ func promptHandler(repo *database.Repository) func(s *discordgo.Session, i *disc
 				Content: content,
 			},
 		})
+		return
 	}
+
+	if options[0].Name != "custom" {
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "Wrong option!",
+			},
+		})
+		return
+	}
+
+	value := options[0].Options[0].StringValue()
+	err := repo.SetGuildSetting(context.Background(), i.GuildID, "prompt", value)
+	content := "Prompt correctly set"
+	if err != nil {
+		content = "Error setting prompt"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
 }
