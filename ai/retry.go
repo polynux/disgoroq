@@ -117,7 +117,7 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				Timestamp: time.Now(),
 				EventType: database.EventEmptyResponse,
 				Details: &database.EventDetails{
-					Model:   req.Model,
+					Model:   requestWithModel.Model,
 					Context: validation.Reason,
 				},
 				DurationMS: duration.Milliseconds(),
