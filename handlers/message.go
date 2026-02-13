@@ -12,6 +12,7 @@ import (
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
 )
@@ -23,9 +24,10 @@ type MessageHandler struct {
 	contextBuilder *ai.ContextBuilder
 	defaultModel   string
 	memoryService  memory.Service
+	emojiManager   *emoji.Manager
 }
 
-func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service) *MessageHandler {
+func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager) *MessageHandler {
 	return &MessageHandler{
 		session:        session,
 		aiservice:      aiService,
@@ -33,6 +35,7 @@ func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *
 		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
 		defaultModel:   "openai/gpt-oss-20b",
 		memoryService:  memoryService,
+		emojiManager:   emojiManager,
 	}
 }
 
@@ -210,6 +213,11 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	if strings.Contains(response.Content, "feur") {
 		response.Content = strings.ReplaceAll(response.Content, "feur", "fleur")
+	}
+
+	// Convert emoji shortcodes to Discord format (if emoji manager is available)
+	if h.emojiManager != nil {
+		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID)
 	}
 
 	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{

@@ -17,6 +17,7 @@ import (
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/commands"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
@@ -192,7 +193,11 @@ func main() {
 
 	repo := database.NewRepository()
 
-	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService)
+	// Initialize emoji manager for shortcode conversion
+	emojiManager := emoji.NewManager(dg)
+	logger.Info("Emoji manager initialized")
+
+	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService, emojiManager)
 	dg.AddHandler(messageHandler.Handle)
 	dg.AddHandler(handlers.HandleGuildCreate)
 	dg.AddHandler(handlers.HandleGuildDelete)
