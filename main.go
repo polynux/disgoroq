@@ -230,7 +230,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, aiService, repo)
+	sched := scheduler.New(dg, aiService, repo, emojiManager)
 	sched.Start()
 	defer sched.Shutdown()
 

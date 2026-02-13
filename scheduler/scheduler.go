@@ -11,19 +11,21 @@ import (
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/utils"
 )
 
 type Scheduler struct {
-	session   *discordgo.Session
-	aiService *ai.Service
-	repo      *database.Repository
-	events    *database.EventRepository
-	scheduler gocron.Scheduler
+	session      *discordgo.Session
+	aiservice    *ai.Service
+	repo         *database.Repository
+	events       *database.EventRepository
+	scheduler    gocron.Scheduler
+	emojiManager *emoji.Manager
 }
 
-func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository) *Scheduler {
+func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -32,11 +34,12 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 	}
 
 	return &Scheduler{
-		session:   session,
-		aiService: aiService,
-		repo:      repo,
-		events:    database.NewEventRepository(utils.GetDB(), logger.Log),
-		scheduler: scheduler,
+		session:      session,
+		aiservice:    aiService,
+		repo:         repo,
+		events:       database.NewEventRepository(utils.GetDB(), logger.Log),
+		scheduler:    scheduler,
+		emojiManager: emojiManager,
 	}
 }
 
