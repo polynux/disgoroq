@@ -14,12 +14,15 @@ import (
 // ServiceConfig contains configuration for the AI service
 type ServiceConfig struct {
 	// Primary provider configuration
-	GroqAPIKey string
+	GroqAPIKey      string
+	GroqModel       string
+	GroqVisionModel string
 
 	// Fallback provider configuration
-	OllamaEnabled bool
-	OllamaURL     string
-	OllamaModel   string
+	OllamaEnabled     bool
+	OllamaURL         string
+	OllamaModel       string
+	OllamaVisionModel string
 
 	// Retry configuration
 	RetryConfig RetryConfig
@@ -35,9 +38,12 @@ type ServiceConfig struct {
 func LoadServiceConfig() ServiceConfig {
 	config := ServiceConfig{
 		GroqAPIKey:        os.Getenv("GROQ_API_KEY"),
+		GroqModel:         getEnvWithDefault("GROQ_MODEL", "llama-3.3-70b-versatile"),
+		GroqVisionModel:   getEnvWithDefault("GROQ_VISION_MODEL", "llama-3.2-11b-vision-preview"),
 		OllamaEnabled:     parseBoolEnv(os.Getenv("OLLAMA_ENABLED"), false),
 		OllamaURL:         getEnvWithDefault("OLLAMA_API_URL", "http://localhost:11434"),
 		OllamaModel:       getEnvWithDefault("OLLAMA_MODEL", "dolphin3"),
+		OllamaVisionModel: getEnvWithDefault("OLLAMA_VISION_MODEL", "llava:13b"),
 		RetryConfig:       LoadRetryConfigFromEnv(),
 		MinResponseLength: getIntEnvWithDefault("AI_MIN_RESPONSE_LENGTH", 1),
 		FallbackEnabled:   parseBoolEnv(os.Getenv("AI_FALLBACK_ENABLED"), true),
@@ -85,47 +91,42 @@ func (c *ServiceConfig) Validate() error {
 type Service struct {
 	config   ServiceConfig
 	provider Provider
+	chain    *ProviderChain
 }
 
 // NewService creates a new AI service with the given configuration
 func NewService(config ServiceConfig) *Service {
-	// Build the provider chain
-	var providers []Provider
+	var wrappedProviders []Provider
 
-	// Always add Groq as primary provider
+	// Groq as primary provider
 	if config.GroqAPIKey != "" {
-		providers = append(providers, NewGroqProvider(config.GroqAPIKey))
+		groq := NewGroqProvider(config.GroqAPIKey)
+		wrappedGroq := NewRetryWrapper(groq, config.RetryConfig, config.GroqModel, config.GroqVisionModel)
+		wrappedProviders = append(wrappedProviders, wrappedGroq)
 	}
 
-	// Add Ollama as fallback if enabled
+	// Ollama as fallback if enabled
 	if config.OllamaEnabled && config.FallbackEnabled {
-		if ollamaProvider, err := NewOllamaProvider(); err == nil {
-			providers = append(providers, ollamaProvider)
+		if ollama, err := NewOllamaProvider(); err == nil {
+			wrappedOllama := NewRetryWrapper(ollama, config.RetryConfig, config.OllamaModel, config.OllamaVisionModel)
+			wrappedProviders = append(wrappedProviders, wrappedOllama)
 		} else {
 			logger.Warn("Failed to create Ollama provider", zap.Error(err))
 		}
 	}
 
-	if len(providers) == 0 {
+	if len(wrappedProviders) == 0 {
 		logger.Error("No AI providers available - check configuration")
 		return nil
 	}
 
-	// Create provider chain if multiple providers
-	var finalProvider Provider
-	if len(providers) > 1 {
-		chain := NewProviderChain(providers...)
-		finalProvider = chain
-	} else {
-		finalProvider = providers[0]
-	}
-
-	// Wrap with retry logic
-	retryWrapper := NewRetryWrapper(finalProvider, config.RetryConfig)
+	// Create chain from wrapped providers
+	chain := NewProviderChain(wrappedProviders...)
 
 	return &Service{
 		config:   config,
-		provider: retryWrapper,
+		provider: chain,
+		chain:    chain,
 	}
 }
 
@@ -231,9 +232,8 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 
 // IsFallbackAvailable returns true if fallback providers are configured
 func (s *Service) IsFallbackAvailable() bool {
-	// Check if the underlying provider is a chain with multiple providers
-	if chain, ok := s.provider.(*ProviderChain); ok {
-		return chain.IsFallbackAvailable()
+	if s.chain != nil {
+		return s.chain.IsFallbackAvailable()
 	}
 	return false
 }

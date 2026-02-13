@@ -12,17 +12,21 @@ import (
 
 // RetryWrapper wraps a Provider with retry logic including exponential backoff
 type RetryWrapper struct {
-	provider  Provider
-	config    RetryConfig
-	validator *ResponseValidator
+	provider    Provider
+	config      RetryConfig
+	validator   *ResponseValidator
+	chatModel   string // Provider-specific chat model
+	visionModel string // Provider-specific vision model
 }
 
 // NewRetryWrapper creates a new retry wrapper around a provider
-func NewRetryWrapper(provider Provider, config RetryConfig) *RetryWrapper {
+func NewRetryWrapper(provider Provider, config RetryConfig, chatModel, visionModel string) *RetryWrapper {
 	return &RetryWrapper{
-		provider:  provider,
-		config:    config,
-		validator: NewResponseValidator(WithMinLength(1)),
+		provider:    provider,
+		config:      config,
+		validator:   NewResponseValidator(WithMinLength(1)),
+		chatModel:   chatModel,
+		visionModel: visionModel,
 	}
 }
 
@@ -40,6 +44,10 @@ func (r *RetryWrapper) AvailableModels() []ModelInfo {
 func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	var lastErr error
 
+	// Use provider-specific model
+	requestWithModel := *req
+	requestWithModel.Model = r.chatModel
+
 	// Attempt up to MaxRetries + 1 times (initial attempt + retries)
 	maxAttempts := r.config.MaxRetries + 1
 
@@ -48,11 +56,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 			zap.Int("attempt", attempt),
 			zap.Int("max_attempts", maxAttempts),
 			zap.String("provider", r.provider.Name()),
-			zap.String("model", req.Model))
+			zap.String("model", requestWithModel.Model))
 
 		// Make the API call
 		start := time.Now()
-		response, err := r.provider.Chat(ctx, req)
+		response, err := r.provider.Chat(ctx, &requestWithModel)
 		duration := time.Since(start)
 
 		// Handle API error
@@ -151,6 +159,10 @@ func (r *RetryWrapper) waitBeforeRetry(attempt int) {
 func (r *RetryWrapper) Vision(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
 	var lastErr error
 
+	// Use provider-specific model
+	requestWithModel := *req
+	requestWithModel.Model = r.visionModel
+
 	maxAttempts := r.config.MaxRetries + 1
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -158,9 +170,9 @@ func (r *RetryWrapper) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 			zap.Int("attempt", attempt),
 			zap.Int("max_attempts", maxAttempts),
 			zap.String("provider", r.provider.Name()),
-			zap.String("model", req.Model))
+			zap.String("model", requestWithModel.Model))
 
-		response, err := r.provider.Vision(ctx, req)
+		response, err := r.provider.Vision(ctx, &requestWithModel)
 
 		if err != nil {
 			lastErr = err

@@ -46,17 +46,15 @@ func newMockRepository() *mockRepository {
 }
 
 type mockSummarizer struct {
-	aiService  *mockAIService
-	model      string
+	aiService *mockAIService
+	model     string
 }
 
-func newMockSummarizer() *mockSummarizer {
-	return &mockSummarizer{
-		aiService: &mockAIService{
-			response: "This is a summary.",
-		},
-		model: "gpt-4",
+func newMockSummarizer() *Summarizer {
+	aiService := &mockAIService{
+		response: "This is a summary.",
 	}
+	return NewSummarizer(aiService, "gpt-4")
 }
 
 func (m *mockRepository) CreateMessageBufferEntry(ctx context.Context, entry *MessageBufferEntry) error {
