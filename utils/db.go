@@ -62,11 +62,17 @@ func ConnectLocal() *sql.DB {
 
 	dbPath := filepath.Join(dir, dbName)
 
-	db, err := sql.Open("libsql", "file:"+dbPath)
+	// Open with WAL mode for better concurrency
+	db, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		log.Fatalf("Error opening local db: %v", err)
 		os.Exit(1)
 	}
+
+	// Set connection pool settings for better concurrency
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(time.Hour)
 
 	return db
 }
@@ -97,12 +103,40 @@ func CreateTables(ctx context.Context) {
 	// Split SQL by semicolon and execute each statement separately
 	// This is necessary because libsql's Exec only runs the first statement
 	statements := splitSQL(schema)
+	log.Printf("Found %d SQL statements to execute", len(statements))
+
+	executedCount := 0
 	for i, stmt := range statements {
 		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(strings.ToUpper(stmt), "--") {
+		if stmt == "" {
+			log.Printf("Skipping statement %d/%d (empty)", i+1, len(statements))
 			continue
 		}
 
+		// Remove comments from the statement for checking
+		lines := strings.Split(stmt, "\n")
+		var nonCommentLines []string
+		for _, line := range lines {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine != "" && !strings.HasPrefix(trimmedLine, "--") {
+				nonCommentLines = append(nonCommentLines, line)
+			}
+		}
+
+		// If there are no non-comment lines, skip this statement
+		if len(nonCommentLines) == 0 {
+			log.Printf("Skipping statement %d/%d (comment only)", i+1, len(statements))
+			continue
+		}
+
+		// Skip vector index creation in local mode (requires Turso)
+		if strings.Contains(stmt, "libsql_vector_idx") {
+			log.Printf("Skipping statement %d/%d (vector index - requires Turso)", i+1, len(statements))
+			continue
+		}
+
+		executedCount++
+		log.Printf("Executing statement %d/%d (exec #%d): %s...", i+1, len(statements), executedCount, stmt[:min(50, len(stmt))])
 		_, err := DB.ExecContext(ctx, stmt)
 		if err != nil {
 			log.Fatalf("Error creating tables (statement %d): %v\nStatement: %s", i+1, err, stmt[:min(len(stmt), 200)])

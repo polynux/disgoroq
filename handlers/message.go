@@ -13,29 +13,43 @@ import (
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/memory"
 )
 
 type MessageHandler struct {
 	session        *discordgo.Session
-	aiService      *ai.Service
+	aiservice      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
 	defaultModel   string
+	memoryService  memory.Service
 }
 
-func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository) *MessageHandler {
+func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service) *MessageHandler {
 	return &MessageHandler{
 		session:        session,
-		aiService:      aiService,
+		aiservice:      aiService,
 		repo:           repo,
 		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
 		defaultModel:   "openai/gpt-oss-20b",
+		memoryService:  memoryService,
 	}
 }
 
 func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author.ID == s.State.User.ID {
 		return
+	}
+
+	// Buffer ALL messages for memory processing (non-blocking) - do this first!
+	if h.memoryService != nil && m.GuildID != "" {
+		go func() {
+			ctx := context.Background()
+			if err := h.memoryService.BufferMessage(ctx, m.Author.ID, m.GuildID, m.Content); err != nil {
+				// Use fmt instead of logger to avoid database locks
+				fmt.Printf("[Memory] Failed to buffer message for user %s: %v\n", m.Author.ID, err)
+			}
+		}()
 	}
 
 	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
@@ -98,7 +112,36 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	temperature := h.repo.GetTemperature(context.Background(), m.GuildID)
 
+	// Build memory context if available
+	var memoryContext string
+	if h.memoryService != nil {
+		ctx := context.Background()
+		memoryCtx, err := h.memoryService.GetMemoryContext(ctx, m.Author.ID, m.GuildID, m.Content)
+		if err == nil && memoryCtx != nil && len(memoryCtx.Summaries) > 0 {
+			memoryContext = "\n\n**Contexte de conversation:**\n"
+			for i, summary := range memoryCtx.Summaries {
+				if i < 2 { // Limit to top 2 summaries
+					memoryContext += fmt.Sprintf("- %s\n", summary.Content)
+				}
+			}
+			if memoryCtx.ConfidenceScore > 0.7 {
+				memoryContext += "(contexte pertinent pour cette conversation)"
+			}
+			// Log to console only in debug mode
+			if logger.IsDebugMode() {
+				fmt.Printf("\n🧠 [MEMORY] Using %d summaries for user %s (confidence: %.2f)\n", len(memoryCtx.Summaries), m.Author.Username, memoryCtx.ConfidenceScore)
+				for i, summary := range memoryCtx.Summaries {
+					fmt.Printf("   Summary %d: %.60s...\n", i+1, summary.Content)
+				}
+				fmt.Println()
+			}
+		} else if logger.IsDebugMode() {
+			fmt.Printf("📭 [MEMORY] No summaries available for user %s\n", m.Author.Username)
+		}
+	}
+
 	instructions := fmt.Sprintf(`yo, t'es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀`, botMember.Nick)
+	instructions += memoryContext
 
 	if prompt, ok := h.repo.GetPrompt(context.Background(), m.GuildID); ok {
 		instructions = prompt
@@ -115,7 +158,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		zap.Int("message_count", len(processedMessage.Messages)),
 		zap.Int("image_count", len(processedMessage.Images)))
 
-	response, err := h.aiService.Chat(context.Background(), &ai.ChatRequest{
+	response, err := h.aiservice.Chat(context.Background(), &ai.ChatRequest{
 		Model:        h.defaultModel,
 		SystemPrompt: instructions,
 		Messages:     processedMessage.Messages,
@@ -139,7 +182,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 		// Send user-friendly error message
 		errorMsg := "Désolé, j'ai des soucis techniques là... 🤖💀"
-		if h.aiService.IsFallbackAvailable() {
+		if h.aiservice.IsFallbackAvailable() {
 			errorMsg = "Désolé, tous mes systèmes sont en rade... 🤖💀"
 		}
 
@@ -161,7 +204,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 	logger.Info("AI response successful",
 		zap.String("guild_id", m.GuildID),
 		zap.String("user_id", m.Author.ID),
-		zap.String("provider", h.aiService.Name()),
+		zap.String("provider", h.aiservice.Name()),
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
 

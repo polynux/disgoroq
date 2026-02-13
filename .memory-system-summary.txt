@@ -1,0 +1,217 @@
+================================================================================
+MEMORY SYSTEM IMPLEMENTATION PLAN - QUICK REFERENCE
+================================================================================
+
+Document: MEMORY_SYSTEM_PLAN.md
+Status: Planning Phase Complete
+Date: 2026-01-20
+Lines: 1200+ (comprehensive guide)
+
+================================================================================
+USER REQUIREMENTS CONFIRMED
+================================================================================
+
+1. Embedding Provider:    Ollama (nomic-embed-text, 768 dimensions)
+2. Default Threshold:     10 messages before summarization
+3. Summary Format:        Compressed text only (no timestamps)
+4. Function Calling:      SKIP for initial implementation (future Phase 9)
+5. Testing Priority:      Focus on unit tests
+
+================================================================================
+ARCHITECTURE SUMMARY
+================================================================================
+
+Database Tables:
+  - conversation_summaries (with F32_BLOB vector embeddings)
+  - message_buffer (temporary storage before summarization)
+  - guild_settings (existing, add memory config keys)
+
+Code Structure:
+  memory/
+    ├── types.go          Type definitions, interfaces
+    ├── repository.go     Database operations (SQLC)
+    ├── service.go        Main service orchestrator
+    ├── summarizer.go     AI-powered summarization
+    ├── embeddings.go     Ollama integration + F32_BLOB conversion
+    └── service_test.go   Unit tests
+
+Integration Points:
+  - handlers/message.go   Buffer messages, trigger summarization, include summaries
+  - main.go               Initialize memory service
+  - commands/commands.go  Add /memory slash commands
+
+================================================================================
+IMPLEMENTATION PHASES (15-20 hours total)
+================================================================================
+
+Phase 1: Database & Core Infrastructure (4-6h)
+  [ ] Add tables to schema.sql
+  [ ] Add queries to query.sql
+  [ ] Run sqlc generate
+  [ ] Implement types.go and repository.go
+  [ ] Test with in-memory database
+
+Phase 2: Embeddings & Ollama Integration (3-4h)
+  [ ] Implement embeddings.go (Ollama HTTP client)
+  [ ] Implement F32_BLOB conversion functions
+  [ ] Test embedding generation locally
+  [ ] Verify Turso vector compatibility
+
+Phase 3: Summarization Logic (3-4h)
+  [ ] Implement summarizer.go
+  [ ] Build prompt construction (OLD + NEW messages)
+  [ ] Test with mock AI responses
+  [ ] Validate summary quality
+
+Phase 4: Memory Service & Async Processing (3-4h)
+  [ ] Implement service.go
+  [ ] Implement goroutine-based summarization
+  [ ] Test concurrent safety (sync.Map + sync.Once)
+  [ ] Verify no goroutine leaks
+
+Phase 5: Integration & Message Handler (2-3h)
+  [ ] Update handlers/message.go
+  [ ] Update main.go initialization
+  [ ] Test end-to-end flow with Discord
+
+Phase 6: Slash Commands & UI (2-3h)
+  [ ] Implement /memory commands
+  [ ] Add permission checks
+  [ ] Test all commands in Discord
+
+Phase 7: Vector Search (Optional, 2-3h)
+  [ ] Implement vector_search.go
+  [ ] Test with Turso DiskANN index
+  [ ] Validate search relevance
+
+Phase 8: Testing & Documentation (2-3h)
+  [ ] Write unit tests (>70% coverage)
+  [ ] Update README.md
+  [ ] Create troubleshooting guide
+
+Phase 9: Function Calling (FUTURE)
+  [ ] Research GROQ function calling (DONE - see appendix)
+  [ ] Implement when base system is stable
+
+================================================================================
+PREREQUISITES CHECKLIST
+================================================================================
+
+Before starting implementation:
+  [ ] Ollama installed (curl https://ollama.ai/install.sh | sh)
+  [ ] Model downloaded (ollama pull nomic-embed-text)
+  [ ] Verify Ollama running (curl http://localhost:11434/api/version)
+  [ ] Turso database supports vectors (check libsql version)
+  [ ] Review current codebase patterns (see appendix)
+
+================================================================================
+KEY TECHNICAL DECISIONS
+================================================================================
+
+✅ Embedding Model:        nomic-embed-text (768 dims, 8192 token context)
+✅ Vector Storage:         F32_BLOB in Turso (DiskANN index)
+✅ Async Pattern:          Goroutines + sync.Once (proven in image processing)
+✅ Memory Scope:           Per-user, per-guild isolation
+✅ Vector Search:          Guild-wide (all users)
+✅ Summarization:          Incremental (combine OLD + NEW)
+✅ Cleanup Strategy:       NONE (continuous updates)
+✅ Error Handling:         Graceful degradation (continue without embeddings)
+
+================================================================================
+CONFIGURATION
+================================================================================
+
+Environment Variables (.env.example):
+  MEMORY_ENABLED=true
+  MEMORY_SUMMARIZATION_THRESHOLD=10
+  MEMORY_MAX_SUMMARIES_IN_CONTEXT=2
+  MEMORY_VECTOR_SEARCH_ENABLED=true
+  OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+
+Guild Settings (via /memory commands):
+  memory_enabled              "true" | "false"
+  memory_threshold            "10" (5-100)
+  memory_embedding_model      "nomic-embed-text"
+  memory_max_summaries        "2"
+  memory_vector_search        "true" | "false"
+
+================================================================================
+PERFORMANCE TARGETS
+================================================================================
+
+Latency:
+  - Message buffering:          < 10ms
+  - Threshold check:            < 5ms
+  - Summarization (async):      2-5s (non-blocking)
+  - Embedding generation:       500ms-1s
+  - Vector search:              50-200ms
+  - Context building:           100-300ms
+
+Storage:
+  - 1 summary:                  ~3.5KB (500 bytes text + 3KB embedding)
+  - 10,000 summaries:           ~35MB
+  - Very manageable for large servers
+
+================================================================================
+TESTING STRATEGY
+================================================================================
+
+Unit Tests (Priority):
+  ✓ embeddings_test.go    F32_BLOB conversion, Ollama API
+  ✓ summarizer_test.go    Prompt building, AI integration
+  ✓ repository_test.go    Database operations
+  ✓ service_test.go       Async processing, context building
+
+Manual Testing:
+  ✓ Message buffering works
+  ✓ Summarization triggers at threshold
+  ✓ Summaries update incrementally
+  ✓ Context includes user summaries
+  ✓ Vector search returns relevant results
+  ✓ No goroutine leaks (monitor with pprof)
+
+================================================================================
+RESEARCH FINDINGS (Background Agents)
+================================================================================
+
+✅ LibSQL Vector Capabilities:
+   - Native F32_BLOB support (no extensions)
+   - DiskANN vector index (libsql_vector_idx)
+   - Cosine similarity (vector_distance_cos)
+   - No existing BLOB columns in schema
+
+✅ Current Message Handling:
+   - Async goroutines for image processing (proven pattern)
+   - Channel-based synchronization (no WaitGroup)
+   - Retry + fallback architecture (Groq → Ollama)
+   - Context caching (members, messages)
+
+✅ GROQ Function Calling:
+   - FULLY SUPPORTED (OpenAI-compatible)
+   - groq-go library has complete types
+   - Ready for Phase 9 implementation
+
+✅ Ollama Embedding Models:
+   - nomic-embed-text: 768 dims, 8192 context, 274MB
+   - Official Go client: github.com/ollama/ollama/api
+   - Performance: ~500ms-1s per embedding
+
+✅ Turso Vector Search:
+   - F32_BLOB format: [type][dim][floats]
+   - DiskANN index for ~O(log N) search
+   - No GPU required (CPU-based)
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Review MEMORY_SYSTEM_PLAN.md (complete planning document)
+2. Confirm prerequisites are met
+3. When ready to implement, start with Phase 1
+4. Follow phase-by-phase approach
+5. Test after each phase before proceeding
+
+================================================================================
+READY TO IMPLEMENT: NO (waiting for user approval)
+PLAN STATUS: COMPLETE AND DOCUMENTED
+================================================================================

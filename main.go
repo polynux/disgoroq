@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
@@ -16,6 +19,7 @@ import (
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/memory"
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
 )
@@ -96,15 +100,105 @@ func main() {
 		zap.Int("max_retries", aiConfig.RetryConfig.MaxRetries),
 		zap.Duration("retry_delay", aiConfig.RetryConfig.InitialDelay))
 
+	// Initialize memory service for conversation context
+	var memoryService memory.Service
+	if os.Getenv("MEMORY_ENABLED") != "false" {
+		// Create memory repository using the existing database connection
+		memoryRepo := memory.NewRepository(utils.DB)
+
+		// Create Ollama embedding provider for vector search
+		ollamaURL := os.Getenv("MEMORY_OLLAMA_URL")
+		if ollamaURL == "" {
+			ollamaURL = os.Getenv("OLLAMA_API_URL")
+			if ollamaURL == "" {
+				ollamaURL = "http://localhost:11434"
+			}
+		}
+		embeddingModel := os.Getenv("MEMORY_EMBEDDING_MODEL")
+		if embeddingModel == "" {
+			embeddingModel = "nomic-embed-text"
+		}
+		embeddingProvider, err := memory.NewOllamaEmbeddingProviderWithConfig(ollamaURL, embeddingModel)
+		if err != nil {
+			logger.Warn("Failed to create embedding provider, continuing without memory",
+				zap.Error(err),
+				zap.String("ollama_url", ollamaURL))
+			memoryService = nil
+		}
+
+		// Create AI service adapter for memory system
+		memoryAIService := &aiServiceAdapter{service: aiService}
+
+		// Create AI summarizer using the existing AI service
+		summaryModel := os.Getenv("MEMORY_SUMMARY_MODEL")
+		if summaryModel == "" {
+			summaryModel = "llama3-8b-8192" // Default model for summarization
+		}
+		summarizer := memory.NewSummarizer(memoryAIService, summaryModel)
+
+		// Configure memory service
+		memoryConfig := memory.ServiceConfig{
+			BufferThreshold:    10,            // Summarize after 10 messages
+			SummaryInterval:    1 * time.Hour, // Minimum 1 hour between summaries
+			MaxContextMessages: 5,             // Include last 5 messages in context
+			MaxSummaryContext:  3,             // Include top 3 relevant summaries
+		}
+
+		// Override config from environment if provided
+		if threshold := os.Getenv("MEMORY_BUFFER_THRESHOLD"); threshold != "" {
+			if val, err := strconv.Atoi(threshold); err == nil && val > 0 {
+				memoryConfig.BufferThreshold = val
+			}
+		}
+		if interval := os.Getenv("MEMORY_SUMMARY_INTERVAL"); interval != "" {
+			if val, err := strconv.Atoi(interval); err == nil && val > 0 {
+				memoryConfig.SummaryInterval = time.Duration(val) * time.Second
+			}
+		}
+		if maxMsgs := os.Getenv("MEMORY_MAX_CONTEXT_MESSAGES"); maxMsgs != "" {
+			if val, err := strconv.Atoi(maxMsgs); err == nil && val > 0 {
+				memoryConfig.MaxContextMessages = val
+			}
+		}
+		if maxSummaries := os.Getenv("MEMORY_MAX_SUMMARY_CONTEXT"); maxSummaries != "" {
+			if val, err := strconv.Atoi(maxSummaries); err == nil && val > 0 {
+				memoryConfig.MaxSummaryContext = val
+			}
+		}
+
+		memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryConfig)
+
+		// Test memory service health
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := embeddingProvider.HealthCheck(ctx); err != nil {
+			logger.Warn("Memory service embedding provider unavailable, continuing without memory",
+				zap.Error(err),
+				zap.String("ollama_url", ollamaURL),
+				zap.String("embedding_model", embeddingModel))
+			memoryService = nil
+		} else {
+			logger.Info("Memory service initialized",
+				zap.String("ollama_url", ollamaURL),
+				zap.String("embedding_model", embeddingModel),
+				zap.String("summary_model", summaryModel),
+				zap.Int("buffer_threshold", memoryConfig.BufferThreshold),
+				zap.Duration("summary_interval", memoryConfig.SummaryInterval))
+		}
+	} else {
+		logger.Info("Memory service disabled by configuration")
+	}
+
 	repo := database.NewRepository()
 
-	messageHandler := handlers.NewMessageHandler(dg, aiService, repo)
+	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService)
 	dg.AddHandler(messageHandler.Handle)
 	dg.AddHandler(handlers.HandleGuildCreate)
 	dg.AddHandler(handlers.HandleGuildDelete)
 
 	registry := commands.NewRegistry(dg, local)
-	commands.RegisterAll(registry, repo)
+	commands.RegisterAll(registry, repo, memoryService)
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		registry.HandleCommand(i)
 	})
@@ -147,6 +241,35 @@ func main() {
 	<-sc
 
 	logger.Info("Shutting down gracefully")
+}
+
+// aiServiceAdapter adapts the existing ai.Service to memory.AIService interface
+type aiServiceAdapter struct {
+	service *ai.Service
+}
+
+// Chat implements the memory.AIService interface
+func (a *aiServiceAdapter) Chat(ctx context.Context, messages []memory.Message, model string) (string, error) {
+	// Convert memory.Message format to ai.ChatRequest format
+	aiMessages := make([]ai.Message, len(messages))
+	for i, msg := range messages {
+		aiMessages[i] = ai.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+	}
+
+	request := &ai.ChatRequest{
+		Model:    model,
+		Messages: aiMessages,
+	}
+
+	response, err := a.service.Chat(ctx, request)
+	if err != nil {
+		return "", err
+	}
+
+	return response.Content, nil
 }
 
 func clearAllCommands(dg *discordgo.Session) {

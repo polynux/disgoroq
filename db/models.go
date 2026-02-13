@@ -21,9 +21,36 @@ type BotEvent struct {
 	Error      sql.NullString
 }
 
+type ConversationSummary struct {
+	ID             int64
+	GuildID        string
+	UserID         string
+	SummaryText    string
+	MessageCount   int64
+	StartMessageID sql.NullString
+	EndMessageID   sql.NullString
+	CreatedAt      int64
+	UpdatedAt      int64
+	Embedding      interface{}
+}
+
 type GuildSetting struct {
 	ID      int64
 	GuildID string
 	Name    string
 	Value   string
+}
+
+type MessageBuffer struct {
+	ID               int64
+	GuildID          string
+	ChannelID        string
+	MessageID        string
+	UserID           string
+	AuthorNick       string
+	Content          string
+	HasImage         sql.NullBool
+	ImageDescription sql.NullString
+	Timestamp        int64
+	Processed        sql.NullBool
 }

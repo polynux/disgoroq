@@ -12,11 +12,12 @@ import (
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/memory"
 )
 
 var defaultMemberPermissions int64 = discordgo.PermissionManageMessages
 
-func RegisterAll(registry *Registry, repo *database.Repository) {
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service) {
 	registry.AddCommand(
 		&discordgo.ApplicationCommand{
 			Name:        "ping",
@@ -174,17 +175,11 @@ func RegisterAll(registry *Registry, repo *database.Repository) {
 							Options: []*discordgo.ApplicationCommandOption{
 								{
 									Name:        "prompt",
-									Description: "The custom prompt for the bot",
+									Description: "The custom prompt",
 									Type:        discordgo.ApplicationCommandOptionString,
 									Required:    true,
-									MaxLength:   1000,
 								},
 							},
-						},
-						{
-							Name:        "default",
-							Description: "Put back the default prompt",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
 						},
 					},
 				},
@@ -192,6 +187,26 @@ func RegisterAll(registry *Registry, repo *database.Repository) {
 		},
 		promptHandler(repo),
 	)
+
+	// Memory management commands
+	if memoryService != nil {
+		registry.AddCommand(
+			&discordgo.ApplicationCommand{
+				Name:                     "forcesummary",
+				Description:              "Force create a summary for a user (admin only)",
+				DefaultMemberPermissions: &defaultMemberPermissions,
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "user",
+						Description: "The user to summarize",
+						Required:    true,
+					},
+				},
+			},
+			forceSummaryHandler(memoryService),
+		)
+	}
 }
 
 func pingHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -423,6 +438,55 @@ func promptHandler(repo *database.Repository) func(s *discordgo.Session, i *disc
 			Data: &discordgo.InteractionResponseData{
 				Content: content,
 			},
+		})
+	}
+}
+
+func forceSummaryHandler(memoryService memory.Service) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		options := i.ApplicationCommandData().Options
+		if len(options) == 0 {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Please specify a user to summarize!",
+				},
+			})
+			return
+		}
+
+		user := options[0].UserValue(s)
+		if user == nil {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Invalid user!",
+				},
+			})
+			return
+		}
+
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("🔄 Creating summary for <@%s>...", user.ID),
+			},
+		})
+
+		ctx := context.Background()
+		err := memoryService.ForceSummarize(ctx, user.ID, i.GuildID)
+
+		if err != nil {
+			errorMsg := fmt.Sprintf("❌ Failed to create summary: %v", err)
+			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+				Content: &errorMsg,
+			})
+			return
+		}
+
+		successMsg := fmt.Sprintf("✅ Summary created successfully for <@%s>!", user.ID)
+		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Content: &successMsg,
 		})
 	}
 }

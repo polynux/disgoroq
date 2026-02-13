@@ -34,6 +34,31 @@ func (q *Queries) DeleteOldEvents(ctx context.Context, dollar_1 sql.NullString) 
 	return err
 }
 
+const deleteProcessedMessages = `-- name: DeleteProcessedMessages :exec
+DELETE FROM message_buffer 
+WHERE processed = 1 AND timestamp < ?
+`
+
+func (q *Queries) DeleteProcessedMessages(ctx context.Context, timestamp int64) error {
+	_, err := q.db.ExecContext(ctx, deleteProcessedMessages, timestamp)
+	return err
+}
+
+const deleteSummariesForUser = `-- name: DeleteSummariesForUser :exec
+DELETE FROM conversation_summaries 
+WHERE guild_id = ? AND user_id = ?
+`
+
+type DeleteSummariesForUserParams struct {
+	GuildID string
+	UserID  string
+}
+
+func (q *Queries) DeleteSummariesForUser(ctx context.Context, arg DeleteSummariesForUserParams) error {
+	_, err := q.db.ExecContext(ctx, deleteSummariesForUser, arg.GuildID, arg.UserID)
+	return err
+}
+
 const getAllGuilds = `-- name: GetAllGuilds :many
 SELECT DISTINCT guild_id FROM guild_settings
 `
@@ -278,6 +303,237 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 	return items, nil
 }
 
+const getLatestSummariesForUsers = `-- name: GetLatestSummariesForUsers :many
+SELECT cs.id, cs.guild_id, cs.user_id, cs.summary_text, cs.message_count, 
+       cs.start_message_id, cs.end_message_id, cs.created_at, cs.updated_at, cs.embedding
+FROM conversation_summaries cs
+INNER JOIN (
+    SELECT user_id, MAX(updated_at) as max_updated_at
+    FROM conversation_summaries 
+    WHERE conversation_summaries.guild_id = ? AND conversation_summaries.user_id IN (/*SLICE:user_ids*/?)
+    GROUP BY user_id
+) latest ON cs.user_id = latest.user_id AND cs.updated_at = latest.max_updated_at
+WHERE cs.guild_id = ?
+`
+
+type GetLatestSummariesForUsersParams struct {
+	GuildID   string
+	UserID    string
+	GuildID_2 string
+}
+
+func (q *Queries) GetLatestSummariesForUsers(ctx context.Context, arg GetLatestSummariesForUsersParams) ([]ConversationSummary, error) {
+	rows, err := q.db.QueryContext(ctx, getLatestSummariesForUsers, arg.GuildID, arg.UserID, arg.GuildID_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConversationSummary
+	for rows.Next() {
+		var i ConversationSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SummaryText,
+			&i.MessageCount,
+			&i.StartMessageID,
+			&i.EndMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Embedding,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getLatestSummaryForUser = `-- name: GetLatestSummaryForUser :one
+SELECT id, guild_id, user_id, summary_text, message_count, 
+       start_message_id, end_message_id, created_at, updated_at, embedding
+FROM conversation_summaries 
+WHERE guild_id = ? AND user_id = ? 
+ORDER BY updated_at DESC 
+LIMIT 1
+`
+
+type GetLatestSummaryForUserParams struct {
+	GuildID string
+	UserID  string
+}
+
+func (q *Queries) GetLatestSummaryForUser(ctx context.Context, arg GetLatestSummaryForUserParams) (ConversationSummary, error) {
+	row := q.db.QueryRowContext(ctx, getLatestSummaryForUser, arg.GuildID, arg.UserID)
+	var i ConversationSummary
+	err := row.Scan(
+		&i.ID,
+		&i.GuildID,
+		&i.UserID,
+		&i.SummaryText,
+		&i.MessageCount,
+		&i.StartMessageID,
+		&i.EndMessageID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Embedding,
+	)
+	return i, err
+}
+
+const getSummariesByGuild = `-- name: GetSummariesByGuild :many
+SELECT id, guild_id, user_id, summary_text, message_count, 
+       start_message_id, end_message_id, created_at, updated_at, embedding
+FROM conversation_summaries 
+WHERE guild_id = ? 
+ORDER BY updated_at DESC 
+LIMIT ? OFFSET ?
+`
+
+type GetSummariesByGuildParams struct {
+	GuildID string
+	Limit   int64
+	Offset  int64
+}
+
+func (q *Queries) GetSummariesByGuild(ctx context.Context, arg GetSummariesByGuildParams) ([]ConversationSummary, error) {
+	rows, err := q.db.QueryContext(ctx, getSummariesByGuild, arg.GuildID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConversationSummary
+	for rows.Next() {
+		var i ConversationSummary
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SummaryText,
+			&i.MessageCount,
+			&i.StartMessageID,
+			&i.EndMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Embedding,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getSummaryStatsByGuild = `-- name: GetSummaryStatsByGuild :one
+SELECT 
+    COUNT(*) as total_summaries,
+    COUNT(DISTINCT user_id) as unique_users,
+    SUM(message_count) as total_messages_summarized,
+    MAX(updated_at) as last_summary_update
+FROM conversation_summaries 
+WHERE guild_id = ?
+`
+
+type GetSummaryStatsByGuildRow struct {
+	TotalSummaries          int64
+	UniqueUsers             int64
+	TotalMessagesSummarized sql.NullFloat64
+	LastSummaryUpdate       interface{}
+}
+
+func (q *Queries) GetSummaryStatsByGuild(ctx context.Context, guildID string) (GetSummaryStatsByGuildRow, error) {
+	row := q.db.QueryRowContext(ctx, getSummaryStatsByGuild, guildID)
+	var i GetSummaryStatsByGuildRow
+	err := row.Scan(
+		&i.TotalSummaries,
+		&i.UniqueUsers,
+		&i.TotalMessagesSummarized,
+		&i.LastSummaryUpdate,
+	)
+	return i, err
+}
+
+const getUnprocessedMessageCount = `-- name: GetUnprocessedMessageCount :one
+SELECT COUNT(*) as count
+FROM message_buffer 
+WHERE guild_id = ? AND user_id = ? AND processed = 0
+`
+
+type GetUnprocessedMessageCountParams struct {
+	GuildID string
+	UserID  string
+}
+
+func (q *Queries) GetUnprocessedMessageCount(ctx context.Context, arg GetUnprocessedMessageCountParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getUnprocessedMessageCount, arg.GuildID, arg.UserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getUnprocessedMessages = `-- name: GetUnprocessedMessages :many
+SELECT id, guild_id, channel_id, message_id, user_id, author_nick, 
+       content, has_image, image_description, timestamp, processed
+FROM message_buffer 
+WHERE guild_id = ? AND user_id = ? AND processed = 0
+ORDER BY timestamp ASC
+LIMIT ?
+`
+
+type GetUnprocessedMessagesParams struct {
+	GuildID string
+	UserID  string
+	Limit   int64
+}
+
+func (q *Queries) GetUnprocessedMessages(ctx context.Context, arg GetUnprocessedMessagesParams) ([]MessageBuffer, error) {
+	rows, err := q.db.QueryContext(ctx, getUnprocessedMessages, arg.GuildID, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageBuffer
+	for rows.Next() {
+		var i MessageBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.AuthorNick,
+			&i.Content,
+			&i.HasImage,
+			&i.ImageDescription,
+			&i.Timestamp,
+			&i.Processed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertEvent = `-- name: InsertEvent :exec
 INSERT INTO bot_events (timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -310,6 +566,102 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) error 
 	return err
 }
 
+const insertMessageBuffer = `-- name: InsertMessageBuffer :exec
+
+INSERT INTO message_buffer (
+    guild_id, channel_id, message_id, user_id, author_nick, 
+    content, has_image, image_description, timestamp, processed
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertMessageBufferParams struct {
+	GuildID          string
+	ChannelID        string
+	MessageID        string
+	UserID           string
+	AuthorNick       string
+	Content          string
+	HasImage         sql.NullBool
+	ImageDescription sql.NullString
+	Timestamp        int64
+	Processed        sql.NullBool
+}
+
+// Message Buffer Queries
+func (q *Queries) InsertMessageBuffer(ctx context.Context, arg InsertMessageBufferParams) error {
+	_, err := q.db.ExecContext(ctx, insertMessageBuffer,
+		arg.GuildID,
+		arg.ChannelID,
+		arg.MessageID,
+		arg.UserID,
+		arg.AuthorNick,
+		arg.Content,
+		arg.HasImage,
+		arg.ImageDescription,
+		arg.Timestamp,
+		arg.Processed,
+	)
+	return err
+}
+
+const insertSummary = `-- name: InsertSummary :exec
+
+INSERT INTO conversation_summaries (
+    guild_id, user_id, summary_text, message_count, 
+    start_message_id, end_message_id, created_at, updated_at, embedding
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertSummaryParams struct {
+	GuildID        string
+	UserID         string
+	SummaryText    string
+	MessageCount   int64
+	StartMessageID sql.NullString
+	EndMessageID   sql.NullString
+	CreatedAt      int64
+	UpdatedAt      int64
+	Embedding      interface{}
+}
+
+// Summary Queries
+func (q *Queries) InsertSummary(ctx context.Context, arg InsertSummaryParams) error {
+	_, err := q.db.ExecContext(ctx, insertSummary,
+		arg.GuildID,
+		arg.UserID,
+		arg.SummaryText,
+		arg.MessageCount,
+		arg.StartMessageID,
+		arg.EndMessageID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+		arg.Embedding,
+	)
+	return err
+}
+
+const markMessagesAsProcessed = `-- name: MarkMessagesAsProcessed :exec
+UPDATE message_buffer 
+SET processed = 1 
+WHERE id IN (
+    SELECT id FROM message_buffer mb 
+    WHERE mb.guild_id = ? AND mb.user_id = ? AND mb.processed = 0 
+    ORDER BY mb.timestamp ASC 
+    LIMIT ?
+)
+`
+
+type MarkMessagesAsProcessedParams struct {
+	GuildID string
+	UserID  string
+	Limit   int64
+}
+
+func (q *Queries) MarkMessagesAsProcessed(ctx context.Context, arg MarkMessagesAsProcessedParams) error {
+	_, err := q.db.ExecContext(ctx, markMessagesAsProcessed, arg.GuildID, arg.UserID, arg.Limit)
+	return err
+}
+
 const setGuildSetting = `-- name: SetGuildSetting :exec
 INSERT OR REPLACE INTO guild_settings (guild_id, name, value) VALUES (?, ?, ?)
 `
@@ -323,4 +675,163 @@ type SetGuildSettingParams struct {
 func (q *Queries) SetGuildSetting(ctx context.Context, arg SetGuildSettingParams) error {
 	_, err := q.db.ExecContext(ctx, setGuildSetting, arg.GuildID, arg.Name, arg.Value)
 	return err
+}
+
+const updateSummary = `-- name: UpdateSummary :exec
+UPDATE conversation_summaries 
+SET summary_text = ?, message_count = ?, end_message_id = ?, updated_at = ?, embedding = ?
+WHERE id = ?
+`
+
+type UpdateSummaryParams struct {
+	SummaryText  string
+	MessageCount int64
+	EndMessageID sql.NullString
+	UpdatedAt    int64
+	Embedding    interface{}
+	ID           int64
+}
+
+func (q *Queries) UpdateSummary(ctx context.Context, arg UpdateSummaryParams) error {
+	_, err := q.db.ExecContext(ctx, updateSummary,
+		arg.SummaryText,
+		arg.MessageCount,
+		arg.EndMessageID,
+		arg.UpdatedAt,
+		arg.Embedding,
+		arg.ID,
+	)
+	return err
+}
+
+const vectorSearchSummaries = `-- name: VectorSearchSummaries :many
+SELECT id, guild_id, user_id, summary_text, message_count, 
+       start_message_id, end_message_id, created_at, updated_at,
+       vector_distance_cos(embedding, vector32(?)) as distance
+FROM conversation_summaries
+WHERE guild_id = ? AND embedding IS NOT NULL
+ORDER BY distance ASC
+LIMIT ?
+`
+
+type VectorSearchSummariesParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Limit    int64
+}
+
+type VectorSearchSummariesRow struct {
+	ID             int64
+	GuildID        string
+	UserID         string
+	SummaryText    string
+	MessageCount   int64
+	StartMessageID sql.NullString
+	EndMessageID   sql.NullString
+	CreatedAt      int64
+	UpdatedAt      int64
+	Distance       interface{}
+}
+
+func (q *Queries) VectorSearchSummaries(ctx context.Context, arg VectorSearchSummariesParams) ([]VectorSearchSummariesRow, error) {
+	rows, err := q.db.QueryContext(ctx, vectorSearchSummaries, arg.Vector32, arg.GuildID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VectorSearchSummariesRow
+	for rows.Next() {
+		var i VectorSearchSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SummaryText,
+			&i.MessageCount,
+			&i.StartMessageID,
+			&i.EndMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const vectorSearchSummariesByUser = `-- name: VectorSearchSummariesByUser :many
+SELECT id, guild_id, user_id, summary_text, message_count, 
+       start_message_id, end_message_id, created_at, updated_at,
+       vector_distance_cos(embedding, vector32(?)) as distance
+FROM conversation_summaries
+WHERE guild_id = ? AND user_id = ? AND embedding IS NOT NULL
+ORDER BY distance ASC
+LIMIT ?
+`
+
+type VectorSearchSummariesByUserParams struct {
+	Vector32 interface{}
+	GuildID  string
+	UserID   string
+	Limit    int64
+}
+
+type VectorSearchSummariesByUserRow struct {
+	ID             int64
+	GuildID        string
+	UserID         string
+	SummaryText    string
+	MessageCount   int64
+	StartMessageID sql.NullString
+	EndMessageID   sql.NullString
+	CreatedAt      int64
+	UpdatedAt      int64
+	Distance       interface{}
+}
+
+func (q *Queries) VectorSearchSummariesByUser(ctx context.Context, arg VectorSearchSummariesByUserParams) ([]VectorSearchSummariesByUserRow, error) {
+	rows, err := q.db.QueryContext(ctx, vectorSearchSummariesByUser,
+		arg.Vector32,
+		arg.GuildID,
+		arg.UserID,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VectorSearchSummariesByUserRow
+	for rows.Next() {
+		var i VectorSearchSummariesByUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SummaryText,
+			&i.MessageCount,
+			&i.StartMessageID,
+			&i.EndMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -96,3 +96,8 @@ func IsEventLoggingEnabled() bool {
 func GetDBLogLevel() DBLogLevel {
 	return GetConfig().DBLogLevel
 }
+
+// IsDebugMode returns true if log level is set to debug
+func IsDebugMode() bool {
+	return strings.ToLower(GetConfig().Level) == "debug"
+}
