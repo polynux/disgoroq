@@ -14,16 +14,18 @@ import (
 type ContextBuilder struct {
 	session           *discordgo.Session
 	provider          Provider
-	visionModel       string
 	visionInstruction string
+	gifProcessor      *GIFProcessor
+	docProcessor      *DocumentProcessor
 }
 
 func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBuilder {
 	return &ContextBuilder{
 		session:           session,
 		provider:          provider,
-		visionModel:       "meta-llama/llama-4-scout-17b-16e-instruct",
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
+		gifProcessor:      NewGIFProcessor(),
+		docProcessor:      NewDocumentProcessor(provider),
 	}
 }
 
@@ -41,8 +43,9 @@ var supportedImageTypes = []string{
 }
 
 func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordgo.Message, guildID string, botID string) (*ProcessedMessage, error) {
-	imagesToProcess := cb.getImagesToProcess(messages)
+	imagesToProcess := cb.getImagesToProcess(ctx, messages)
 	describedImages := cb.processImages(ctx, imagesToProcess)
+	documentSummaries := cb.getDocumentSummaries(ctx, messages)
 
 	formattedMessages := make([]Message, 0, len(messages))
 	imageContexts := make([]ImageContext, 0)
@@ -84,26 +87,40 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			}
 		}
 
-		var userMember *discordgo.Member
-		var err error
-		if cachedMember, exists := memberCache[messages[idx].Author.ID]; exists {
-			userMember = cachedMember
+		var nick string
+		// Check if message is from a webhook (webhooks aren't guild members)
+		if messages[idx].WebhookID != "" {
+			nick = messages[idx].Author.Username
+		} else if cachedMember, exists := memberCache[messages[idx].Author.ID]; exists {
+			// Use cached member (nil means we already tried and failed)
+			if cachedMember != nil {
+				nick = cachedMember.Nick
+				if nick == "" {
+					nick = messages[idx].Author.Username
+				}
+			} else {
+				nick = messages[idx].Author.Username
+			}
 		} else {
-			userMember, err = cb.session.GuildMember(guildID, messages[idx].Author.ID)
+			// Try to fetch guild member
+			userMember, err := cb.session.GuildMember(guildID, messages[idx].Author.ID)
 			if err != nil {
-				logger.Error("Error getting user member",
+				// Log warning and fallback to username for non-members (webhooks, cross-server announcements)
+				logger.Warn("Could not get guild member, using username",
 					zap.Error(err),
 					zap.String("user_id", messages[idx].Author.ID),
 					zap.String("guild_id", guildID),
 				)
-				return nil, err
+				nick = messages[idx].Author.Username
+				// Cache nil to avoid repeated failed lookups
+				memberCache[messages[idx].Author.ID] = nil
+			} else {
+				memberCache[messages[idx].Author.ID] = userMember
+				nick = userMember.Nick
+				if nick == "" {
+					nick = messages[idx].Author.Username
+				}
 			}
-			memberCache[messages[idx].Author.ID] = userMember
-		}
-
-		nick := userMember.Nick
-		if nick == "" {
-			nick = messages[idx].Author.Username
 		}
 
 		var content strings.Builder
@@ -118,6 +135,13 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			content.WriteString(strings.ReplaceAll(imageDescription, "\n", ""))
 			content.WriteString("</IMAGE_DESC>\n")
 		}
+
+		if docSummary, exists := documentSummaries[messages[idx].ID]; exists {
+			content.WriteString("[Document Summary]\n")
+			content.WriteString(docSummary)
+			content.WriteString("\n\n")
+		}
+
 		content.WriteString(messages[idx].Content)
 		content.WriteString("\n\n")
 
@@ -162,7 +186,7 @@ type imageToProcess struct {
 	size        int64
 }
 
-func (cb *ContextBuilder) getImagesToProcess(messages []*discordgo.Message) []imageToProcess {
+func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*discordgo.Message) []imageToProcess {
 	attachmentCount := 0
 	imagesToProcess := make([]imageToProcess, 0)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
@@ -182,10 +206,23 @@ func (cb *ContextBuilder) getImagesToProcess(messages []*discordgo.Message) []im
 			if attachment.Width*attachment.Height > 33000000 {
 				continue
 			}
+
+			// Process animated GIFs
+			url := attachment.URL
+			contentType := attachment.ContentType
+			if attachment.ContentType == "image/gif" && cb.gifProcessor != nil {
+				base64Grid, err := cb.gifProcessor.ProcessGIF(ctx, attachment.URL)
+				if err == nil && base64Grid != "" {
+					// Replace with base64 data URI
+					url = "data:image/jpeg;base64," + base64Grid
+					contentType = "image/jpeg"
+				}
+			}
+
 			imagesToProcess = append(imagesToProcess, imageToProcess{
 				id:          messages[idx].ID,
-				url:         attachment.URL,
-				contentType: attachment.ContentType,
+				url:         url,
+				contentType: contentType,
 				width:       attachment.Width,
 				height:      attachment.Height,
 				size:        int64(attachment.Size),
@@ -195,6 +232,23 @@ func (cb *ContextBuilder) getImagesToProcess(messages []*discordgo.Message) []im
 	}
 
 	return imagesToProcess
+}
+
+func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []*discordgo.Message) map[string]string {
+	summaries := make(map[string]string)
+
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		for _, attachment := range messages[idx].Attachments {
+			if cb.docProcessor != nil && cb.docProcessor.CanProcess(attachment.ContentType) {
+				summary, err := cb.docProcessor.ProcessDocument(ctx, attachment.URL, attachment.Filename)
+				if err == nil && summary != "" {
+					summaries[messages[idx].ID] = summary
+				}
+			}
+		}
+	}
+
+	return summaries
 }
 
 type processedImage struct {
@@ -210,7 +264,6 @@ func (cb *ContextBuilder) processImages(ctx context.Context, imagesToProcess []i
 	for _, img := range imagesToProcess {
 		go func(img imageToProcess) {
 			response, err := cb.provider.Vision(ctx, &VisionRequest{
-				Model:       cb.visionModel,
 				Instruction: cb.visionInstruction,
 				ImageURL:    img.url,
 				ImageType:   img.contentType,
