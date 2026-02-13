@@ -22,7 +22,6 @@ type MessageHandler struct {
 	aiservice      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
-	defaultModel   string
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
 }
@@ -33,7 +32,6 @@ func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *
 		aiservice:      aiService,
 		repo:           repo,
 		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
-		defaultModel:   "openai/gpt-oss-20b",
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
 	}
@@ -157,12 +155,10 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		zap.String("guild_id", m.GuildID),
 		zap.String("channel_id", m.ChannelID),
 		zap.String("user_id", m.Author.ID),
-		zap.String("model", h.defaultModel),
 		zap.Int("message_count", len(processedMessage.Messages)),
 		zap.Int("image_count", len(processedMessage.Images)))
 
 	response, err := h.aiservice.Chat(context.Background(), &ai.ChatRequest{
-		Model:        h.defaultModel,
 		SystemPrompt: instructions,
 		Messages:     processedMessage.Messages,
 		Images:       processedMessage.Images,
