@@ -12,6 +12,7 @@ import (
 	"github.com/tursodatabase/go-libsql"
 	_ "github.com/tursodatabase/go-libsql"
 
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/db"
 )
 
@@ -22,18 +23,21 @@ func GetDB() *sql.DB {
 	return DB
 }
 
-func Connect() *sql.DB {
+// Connect connects to a remote Turso database using the provided configuration.
+func Connect(cfg *config.DatabaseConfig) *sql.DB {
 	dbName := "local.db"
-	dbUrl := GetEnv("DB_URL")
-	dbToken := GetEnv("DB_TOKEN")
+	dbUrl := cfg.URL
+	dbToken := cfg.Token
+
 	if dbUrl == "" {
-		log.Fatal("DB_URL is not set")
+		log.Fatal("Database URL is not set")
 		os.Exit(1)
 	}
 	if dbToken == "" {
-		log.Fatal("DB_TOKEN is not set")
+		log.Fatal("Database token is not set")
 		os.Exit(1)
 	}
+
 	dir, err := os.MkdirTemp("", "libsql-*")
 	if err != nil {
 		log.Fatalf("Error creating temp directory: %v", err)
@@ -53,6 +57,7 @@ func Connect() *sql.DB {
 	return db
 }
 
+// ConnectLocal connects to a local SQLite database.
 func ConnectLocal() *sql.DB {
 	dbName := "local.db"
 	dir := "tmp"
@@ -77,9 +82,13 @@ func ConnectLocal() *sql.DB {
 	return db
 }
 
-func InitializeDB(local bool) {
-	if !local {
-		DB = Connect()
+// InitializeDB initializes the database connection.
+// The local parameter overrides the config.Local setting for backward compatibility.
+func InitializeDB(cfg *config.DatabaseConfig, localOverride bool) {
+	useLocal := localOverride || cfg.Local
+
+	if !useLocal {
+		DB = Connect(cfg)
 	} else {
 		DB = ConnectLocal()
 	}
@@ -180,8 +189,4 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func GetEnv(key string) string {
-	return os.Getenv(key)
 }

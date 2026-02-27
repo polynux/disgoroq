@@ -1,0 +1,124 @@
+# DisgoroQ Configuration File
+# Copy this file to config.yaml and fill in your values.
+# Environment variables can be interpolated using ${VAR_NAME} or ${VAR_NAME:-default} syntax.
+
+discord:
+  # Required: Discord bot token (use environment variable for security)
+  token: "${DISCORD_TOKEN}"
+
+database:
+  # Database URL (required for remote Turso database)
+  # Use ${DB_URL} for security
+  url: "${DB_URL}"
+
+  # Database authentication token (required for remote Turso database)
+  # Use ${DB_TOKEN} for security
+  token: "${DB_TOKEN}"
+
+  # Set to true to use local SQLite database instead of Turso
+  # When true, url and token are not required
+  local: false
+
+ai:
+  groq:
+    # Required: Groq API key (use environment variable for security)
+    api_key: "${GROQ_API_KEY}"
+
+    # Model to use for chat completions
+    model: "openai/gpt-oss-20b"
+
+    # Model to use for vision requests
+    vision_model: "meta-llama/llama-4-scout-17b-16e-instruct"
+
+  ollama:
+    # Enable Ollama as fallback provider
+    enabled: false
+
+    # Ollama server URL
+    url: "http://localhost:11434"
+
+    # Model to use for chat completions
+    model: "dolphin3"
+
+    # Model to use for vision requests
+    vision_model: "llava"
+
+  retry:
+    # Maximum number of retry attempts
+    max_retries: 2
+
+    # Initial delay between retries in milliseconds
+    initial_delay_ms: 500
+
+    # Maximum delay between retries in milliseconds
+    max_delay_ms: 5000
+
+    # Exponential backoff factor
+    backoff_factor: 2.0
+
+    # Retry when response is empty
+    retry_on_empty: true
+
+    # Retry when API returns an error
+    retry_on_error: true
+
+  # Enable fallback to Ollama when Groq fails
+  fallback_enabled: true
+
+  # Minimum response length to accept
+  min_response_length: 1
+
+logging:
+  # Enable logging
+  enabled: true
+
+  # Log to database (requires database to be configured)
+  log_to_db: false
+
+  # Enable event logging
+  event_logging_enabled: true
+
+  # Log level: debug, info, warn, error
+  level: "info"
+
+  # Log encoding: json, console
+  encoding: "json"
+
+  # Number of days to retain logs
+  retention_days: 7
+
+  # Database log level: none, error, warn, info, debug, all
+  db_log_level: "info"
+
+memory:
+  # Enable conversation memory service
+  enabled: true
+
+  # Ollama URL for embeddings
+  ollama_url: "http://localhost:11434"
+
+  # Embedding model for vector search
+  embedding_model: "nomic-embed-text"
+
+  # Model for summarization
+  summary_model: "llama3-8b-8192"
+
+  # Number of messages to buffer before summarizing
+  buffer_threshold: 10
+
+  # Minimum interval between summaries in seconds
+  summary_interval_seconds: 3600
+
+  # Maximum recent messages to include in context
+  max_context_messages: 5
+
+  # Maximum number of summaries to include in context
+  max_summary_context: 3
+
+emoji:
+  # Cache TTL for emoji data in minutes
+  cache_ttl_minutes: 60
+
+horoscope:
+  # Include custom emojis in horoscope messages
+  include_emojis: true

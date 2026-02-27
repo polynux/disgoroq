@@ -1,139 +1,144 @@
 package logger
 
 import (
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	cfg "polynux/disgoroq/config"
 )
 
-func TestGetBoolEnv(t *testing.T) {
+func TestInitFromConfig(t *testing.T) {
 	tests := []struct {
-		name         string
-		envValue     string
-		defaultValue bool
-		expected     bool
+		name     string
+		cfgVal   cfg.LoggingConfig
+		expected Config
 	}{
-		{"true string", "true", false, true},
-		{"TRUE uppercase", "TRUE", false, true},
-		{"1 string", "1", false, true},
-		{"yes string", "yes", false, true},
-		{"on string", "on", false, true},
-		{"enabled string", "enabled", false, true},
-		{"false string", "false", true, false},
-		{"FALSE uppercase", "FALSE", true, false},
-		{"0 string", "0", true, false},
-		{"no string", "no", true, false},
-		{"off string", "off", true, false},
-		{"disabled string", "disabled", true, false},
-		{"empty string uses default", "", true, true},
-		{"invalid string uses default", "invalid", true, true},
+		{
+			name: "custom config",
+			cfgVal: cfg.LoggingConfig{
+				Enabled:             false,
+				LogToDB:             true,
+				EventLoggingEnabled: false,
+				Level:               "debug",
+				Encoding:            "console",
+				RetentionDays:       14,
+				DBLogLevel:          "debug",
+			},
+			expected: Config{
+				Enabled:             false,
+				LogToDB:             true,
+				EventLoggingEnabled: false,
+				Level:               "debug",
+				Encoding:            "console",
+				RetentionDays:       14,
+				DBLogLevel:          DBLogLevelDebug,
+			},
+		},
+		{
+			name: "default config",
+			cfgVal: cfg.LoggingConfig{
+				Enabled:             true,
+				LogToDB:             false,
+				EventLoggingEnabled: true,
+				Level:               "info",
+				Encoding:            "json",
+				RetentionDays:       7,
+				DBLogLevel:          "info",
+			},
+			expected: Config{
+				Enabled:             true,
+				LogToDB:             false,
+				EventLoggingEnabled: true,
+				Level:               "info",
+				Encoding:            "json",
+				RetentionDays:       7,
+				DBLogLevel:          DBLogLevelInfo,
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := "TEST_BOOL_ENV"
-			os.Setenv(key, tt.envValue)
-			defer os.Unsetenv(key)
+			// Reset global config
+			logConfig = nil
 
-			result := getBoolEnv(key, tt.defaultValue)
-			assert.Equal(t, tt.expected, result)
+			InitFromConfig(&tt.cfgVal)
+			result := GetConfig()
+
+			assert.Equal(t, tt.expected.Enabled, result.Enabled)
+			assert.Equal(t, tt.expected.LogToDB, result.LogToDB)
+			assert.Equal(t, tt.expected.EventLoggingEnabled, result.EventLoggingEnabled)
+			assert.Equal(t, tt.expected.Level, result.Level)
+			assert.Equal(t, tt.expected.Encoding, result.Encoding)
+			assert.Equal(t, tt.expected.RetentionDays, result.RetentionDays)
+			assert.Equal(t, tt.expected.DBLogLevel, result.DBLogLevel)
 		})
 	}
 }
 
-func TestGetIntEnv(t *testing.T) {
+func TestGetConfig_WithoutInit(t *testing.T) {
+	// Reset global config to nil
+	logConfig = nil
+
+	// GetConfig should return defaults when not initialized
+	result := GetConfig()
+
+	// Should return default values
+	assert.True(t, result.Enabled)
+	assert.False(t, result.LogToDB)
+	assert.True(t, result.EventLoggingEnabled)
+	assert.Equal(t, "info", result.Level)
+	assert.Equal(t, "json", result.Encoding)
+	assert.Equal(t, 7, result.RetentionDays)
+}
+
+func TestAccessors(t *testing.T) {
+	// Reset and initialize with custom config
+	logConfig = nil
+	testCfg := &cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             true,
+		EventLoggingEnabled: true,
+		Level:               "debug",
+		Encoding:            "console",
+		RetentionDays:       14,
+		DBLogLevel:          "all",
+	}
+	InitFromConfig(testCfg)
+
+	assert.True(t, IsEnabled())
+	assert.True(t, IsDBLoggingEnabled())
+	assert.True(t, IsEventLoggingEnabled())
+	assert.True(t, IsDebugMode())
+	assert.Equal(t, DBLogLevelAll, GetDBLogLevel())
+}
+
+func TestIsDebugMode(t *testing.T) {
 	tests := []struct {
-		name         string
-		envValue     string
-		defaultValue int
-		expected     int
+		name     string
+		level    string
+		expected bool
 	}{
-		{"valid integer", "42", 0, 42},
-		{"zero value", "0", 10, 0},
-		{"negative value", "-5", 0, -5},
-		{"empty string uses default", "", 99, 99},
-		{"invalid string uses default", "invalid", 88, 88},
+		{"debug lowercase", "debug", true},
+		{"DEBUG uppercase", "DEBUG", true},
+		{"Debug mixed case", "Debug", true},
+		{"info level", "info", false},
+		{"warn level", "warn", false},
+		{"error level", "error", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := "TEST_INT_ENV"
-			os.Setenv(key, tt.envValue)
-			defer os.Unsetenv(key)
+			logConfig = nil
+			testCfg := &cfg.LoggingConfig{
+				Enabled: true,
+				Level:   tt.level,
+			}
+			InitFromConfig(testCfg)
 
-			result := getIntEnv(key, tt.defaultValue)
+			result := IsDebugMode()
 			assert.Equal(t, tt.expected, result)
 		})
 	}
-}
-
-func TestLoadConfig(t *testing.T) {
-	originalLogEnabled := os.Getenv("LOG_ENABLED")
-	originalLogToDB := os.Getenv("LOG_TO_DB")
-	originalEventLogging := os.Getenv("EVENT_LOGGING_ENABLED")
-	originalLogLevel := os.Getenv("LOG_LEVEL")
-	originalLogEncoding := os.Getenv("LOG_ENCODING")
-	originalRetentionDays := os.Getenv("EVENT_RETENTION_DAYS")
-
-	defer func() {
-		os.Setenv("LOG_ENABLED", originalLogEnabled)
-		os.Setenv("LOG_TO_DB", originalLogToDB)
-		os.Setenv("EVENT_LOGGING_ENABLED", originalEventLogging)
-		os.Setenv("LOG_LEVEL", originalLogLevel)
-		os.Setenv("LOG_ENCODING", originalLogEncoding)
-		os.Setenv("EVENT_RETENTION_DAYS", originalRetentionDays)
-		config = nil
-	}()
-
-	os.Setenv("LOG_ENABLED", "false")
-	os.Setenv("LOG_TO_DB", "true")
-	os.Setenv("EVENT_LOGGING_ENABLED", "false")
-	os.Setenv("LOG_LEVEL", "debug")
-	os.Setenv("LOG_ENCODING", "console")
-	os.Setenv("EVENT_RETENTION_DAYS", "14")
-
-	cfg := loadConfig()
-
-	assert.False(t, cfg.Enabled)
-	assert.True(t, cfg.LogToDB)
-	assert.False(t, cfg.EventLoggingEnabled)
-	assert.Equal(t, "debug", cfg.Level)
-	assert.Equal(t, "console", cfg.Encoding)
-	assert.Equal(t, 14, cfg.RetentionDays)
-}
-
-func TestLoadConfig_Defaults(t *testing.T) {
-	originalLogEnabled := os.Getenv("LOG_ENABLED")
-	originalLogToDB := os.Getenv("LOG_TO_DB")
-	originalEventLogging := os.Getenv("EVENT_LOGGING_ENABLED")
-	originalLogLevel := os.Getenv("LOG_LEVEL")
-	originalLogEncoding := os.Getenv("LOG_ENCODING")
-	originalRetentionDays := os.Getenv("EVENT_RETENTION_DAYS")
-
-	defer func() {
-		os.Setenv("LOG_ENABLED", originalLogEnabled)
-		os.Setenv("LOG_TO_DB", originalLogToDB)
-		os.Setenv("EVENT_LOGGING_ENABLED", originalEventLogging)
-		os.Setenv("LOG_LEVEL", originalLogLevel)
-		os.Setenv("LOG_ENCODING", originalLogEncoding)
-		os.Setenv("EVENT_RETENTION_DAYS", originalRetentionDays)
-		config = nil
-	}()
-
-	os.Unsetenv("LOG_ENABLED")
-	os.Unsetenv("LOG_TO_DB")
-	os.Unsetenv("EVENT_LOGGING_ENABLED")
-	os.Unsetenv("LOG_LEVEL")
-	os.Unsetenv("LOG_ENCODING")
-	os.Unsetenv("EVENT_RETENTION_DAYS")
-
-	cfg := loadConfig()
-
-	assert.True(t, cfg.Enabled)
-	assert.False(t, cfg.LogToDB)
-	assert.True(t, cfg.EventLoggingEnabled)
-	assert.Equal(t, "info", cfg.Level)
-	assert.Equal(t, "json", cfg.Encoding)
-	assert.Equal(t, 7, cfg.RetentionDays)
 }

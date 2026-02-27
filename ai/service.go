@@ -3,8 +3,6 @@ package ai
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 	"time"
 
 	"go.uber.org/zap"
@@ -32,42 +30,6 @@ type ServiceConfig struct {
 
 	// Fallback configuration
 	FallbackEnabled bool
-}
-
-// LoadServiceConfig loads AI service configuration from environment variables
-func LoadServiceConfig() ServiceConfig {
-	config := ServiceConfig{
-		GroqAPIKey:        os.Getenv("GROQ_API_KEY"),
-		GroqModel:         getEnvWithDefault("GROQ_MODEL", "openai/gpt-oss-20b"),
-		GroqVisionModel:   getEnvWithDefault("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct"),
-		OllamaEnabled:     parseBoolEnv(os.Getenv("OLLAMA_ENABLED"), false),
-		OllamaURL:         getEnvWithDefault("OLLAMA_API_URL", "http://localhost:11434"),
-		OllamaModel:       getEnvWithDefault("OLLAMA_MODEL", "dolphin3"),
-		OllamaVisionModel: getEnvWithDefault("OLLAMA_VISION_MODEL", "llava"),
-		RetryConfig:       LoadRetryConfigFromEnv(),
-		MinResponseLength: getIntEnvWithDefault("AI_MIN_RESPONSE_LENGTH", 1),
-		FallbackEnabled:   parseBoolEnv(os.Getenv("AI_FALLBACK_ENABLED"), true),
-	}
-
-	return config
-}
-
-// getEnvWithDefault returns the environment variable value or default if not set
-func getEnvWithDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// getIntEnvWithDefault returns the environment variable as int or default if not set/invalid
-func getIntEnvWithDefault(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil && intVal >= 0 {
-			return intVal
-		}
-	}
-	return defaultValue
 }
 
 // Validate checks if the service configuration is valid

@@ -3,8 +3,6 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"os"
-	"strconv"
 
 	"go.uber.org/zap"
 
@@ -33,13 +31,8 @@ func (s *Scheduler) SendHoroscope() {
 
 Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
-	// Check if emoji inclusion is enabled (default: true)
-	includeEmojis := true
-	if envVal := os.Getenv("HOROSCOPE_INCLUDE_EMOJIS"); envVal != "" {
-		if val, err := strconv.ParseBool(envVal); err == nil {
-			includeEmojis = val
-		}
-	}
+	// Check if emoji inclusion is enabled from config
+	includeEmojis := s.horoscopeCfg.IncludeEmojis
 
 	// Append custom emojis to system prompt if enabled
 	if includeEmojis && s.emojiManager != nil {

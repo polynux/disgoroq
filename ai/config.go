@@ -30,64 +30,6 @@ func DefaultRetryConfig() RetryConfig {
 	}
 }
 
-// LoadRetryConfigFromEnv loads retry configuration from environment variables
-func LoadRetryConfigFromEnv() RetryConfig {
-	config := DefaultRetryConfig()
-
-	// Load max retries
-	if val := os.Getenv("AI_MAX_RETRIES"); val != "" {
-		if retries, err := strconv.Atoi(val); err == nil && retries >= 0 {
-			config.MaxRetries = retries
-		}
-	}
-
-	// Load initial delay
-	if val := os.Getenv("AI_RETRY_INITIAL_DELAY_MS"); val != "" {
-		if delay, err := strconv.ParseInt(val, 10, 64); err == nil && delay >= 0 {
-			config.InitialDelay = time.Duration(delay) * time.Millisecond
-		}
-	}
-
-	// Load max delay
-	if val := os.Getenv("AI_RETRY_MAX_DELAY_MS"); val != "" {
-		if delay, err := strconv.ParseInt(val, 10, 64); err == nil && delay >= 0 {
-			config.MaxDelay = time.Duration(delay) * time.Millisecond
-		}
-	}
-
-	// Load backoff factor
-	if val := os.Getenv("AI_RETRY_BACKOFF"); val != "" {
-		if backoff, err := strconv.ParseFloat(val, 64); err == nil && backoff >= 1.0 {
-			config.BackoffFactor = backoff
-		}
-	}
-
-	// Load retry on empty
-	if val := os.Getenv("AI_RETRY_ON_EMPTY"); val != "" {
-		config.RetryOnEmpty = parseBoolEnv(val, true)
-	}
-
-	// Load retry on error
-	if val := os.Getenv("AI_RETRY_ON_ERROR"); val != "" {
-		config.RetryOnError = parseBoolEnv(val, true)
-	}
-
-	return config
-}
-
-// parseBoolEnv parses a boolean environment variable value
-func parseBoolEnv(value string, defaultValue bool) bool {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "true", "1", "yes", "on", "enabled":
-		return true
-	case "false", "0", "no", "off", "disabled":
-		return false
-	default:
-		return defaultValue
-	}
-}
-
 // Validate checks if the retry configuration is valid
 func (c *RetryConfig) Validate() error {
 	if c.MaxRetries < 0 {
@@ -143,4 +85,35 @@ func (c RetryConfig) String() string {
 // GetDefaultRetryConfig returns the default retry configuration as a convenience function
 func GetDefaultRetryConfig() RetryConfig {
 	return DefaultRetryConfig()
+}
+
+// getEnvWithDefault returns the environment variable value or default if not set
+func getEnvWithDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// getIntEnvWithDefault returns the environment variable as int or default if not set/invalid
+func getIntEnvWithDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intVal, err := strconv.Atoi(value); err == nil && intVal >= 0 {
+			return intVal
+		}
+	}
+	return defaultValue
+}
+
+// parseBoolEnv parses a boolean environment variable value
+func parseBoolEnv(value string, defaultValue bool) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "true", "1", "yes", "on", "enabled":
+		return true
+	case "false", "0", "no", "off", "disabled":
+		return false
+	default:
+		return defaultValue
+	}
 }

@@ -3,19 +3,27 @@ package logger
 import (
 	"bytes"
 	"context"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	cfg "polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 )
 
 func TestWrapperFunctions_Disabled(t *testing.T) {
-	os.Setenv("LOG_ENABLED", "false")
-	defer os.Unsetenv("LOG_ENABLED")
-	config = nil
+	// Initialize with disabled logging
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             false,
+		LogToDB:             false,
+		EventLoggingEnabled: false,
+		Level:               "info",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "info",
+	})
 
 	var buf bytes.Buffer
 	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
@@ -34,13 +42,21 @@ func TestWrapperFunctions_Disabled(t *testing.T) {
 	Error("error message")
 
 	output := buf.String()
-	assert.Empty(t, output, "No logs should be written when LOG_ENABLED=false")
+	assert.Empty(t, output, "No logs should be written when logging is disabled")
 }
 
 func TestWrapperFunctions_Enabled(t *testing.T) {
-	os.Setenv("LOG_ENABLED", "true")
-	defer os.Unsetenv("LOG_ENABLED")
-	config = nil
+	// Initialize with enabled logging
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             false,
+		EventLoggingEnabled: true,
+		Level:               "debug",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "info",
+	})
 
 	var buf bytes.Buffer
 	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
@@ -65,9 +81,17 @@ func TestWrapperFunctions_Enabled(t *testing.T) {
 }
 
 func TestLogEvent_Disabled(t *testing.T) {
-	os.Setenv("EVENT_LOGGING_ENABLED", "false")
-	defer os.Unsetenv("EVENT_LOGGING_ENABLED")
-	config = nil
+	// Initialize with event logging disabled
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             false,
+		EventLoggingEnabled: false,
+		Level:               "info",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "info",
+	})
 
 	ctx := context.Background()
 	event := &database.BotEvent{
@@ -79,9 +103,17 @@ func TestLogEvent_Disabled(t *testing.T) {
 }
 
 func TestLogEvent_Enabled_NoRepo(t *testing.T) {
-	os.Setenv("EVENT_LOGGING_ENABLED", "true")
-	defer os.Unsetenv("EVENT_LOGGING_ENABLED")
-	config = nil
+	// Initialize with event logging enabled
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             false,
+		EventLoggingEnabled: true,
+		Level:               "info",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "info",
+	})
 
 	SetEventRepository(nil)
 
@@ -95,9 +127,17 @@ func TestLogEvent_Enabled_NoRepo(t *testing.T) {
 }
 
 func TestLogMessageEvent(t *testing.T) {
-	os.Setenv("EVENT_LOGGING_ENABLED", "true")
-	defer os.Unsetenv("EVENT_LOGGING_ENABLED")
-	config = nil
+	// Initialize with event logging enabled
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             false,
+		EventLoggingEnabled: true,
+		Level:               "info",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "info",
+	})
 
 	ctx := context.Background()
 	details := &database.EventDetails{

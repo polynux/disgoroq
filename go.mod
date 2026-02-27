@@ -7,7 +7,6 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/conneroisu/groq-go v0.9.5
 	github.com/go-co-op/gocron/v2 v2.14.2
-	github.com/joho/godotenv v1.5.1
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/ollama/ollama v0.5.7
@@ -15,6 +14,7 @@ require (
 	github.com/tursodatabase/go-libsql v0.0.0-20240916111504-922dfa87e1e6
 	github.com/young2j/oxmltotext v1.0.3
 	go.uber.org/zap v1.27.1
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -40,5 +40,4 @@ require (
 	golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

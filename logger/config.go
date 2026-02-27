@@ -1,13 +1,12 @@
 package logger
 
 import (
-	"os"
-	"strconv"
 	"strings"
 
-	"github.com/joho/godotenv"
+	configpkg "polynux/disgoroq/config"
 )
 
+// Config holds logging configuration (kept for backward compatibility)
 type Config struct {
 	Enabled             bool
 	LogToDB             bool
@@ -18,67 +17,39 @@ type Config struct {
 	DBLogLevel          DBLogLevel
 }
 
-var config *Config
+var logConfig *Config
 
-func init() {
-	_ = godotenv.Load(".env.local")
-	config = loadConfig()
-}
-
-func loadConfig() *Config {
-	return &Config{
-		Enabled:             getBoolEnv("LOG_ENABLED", true),
-		LogToDB:             getBoolEnv("LOG_TO_DB", false),
-		EventLoggingEnabled: getBoolEnv("EVENT_LOGGING_ENABLED", true),
-		Level:               getEnv("LOG_LEVEL", "info"),
-		Encoding:            getEnv("LOG_ENCODING", "json"),
-		RetentionDays:       getIntEnv("EVENT_RETENTION_DAYS", 7),
-		DBLogLevel:          ParseDBLogLevel(getEnv("DB_LOG_LEVEL", "info")),
+// InitFromConfig initializes the logger configuration from the central config package.
+// This should be called during application startup.
+func InitFromConfig(cfg *configpkg.LoggingConfig) {
+	logConfig = &Config{
+		Enabled:             cfg.Enabled,
+		LogToDB:             cfg.LogToDB,
+		EventLoggingEnabled: cfg.EventLoggingEnabled,
+		Level:               cfg.Level,
+		Encoding:            cfg.Encoding,
+		RetentionDays:       cfg.RetentionDays,
+		DBLogLevel:          ParseDBLogLevel(cfg.DBLogLevel),
 	}
 }
 
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-func getBoolEnv(key string, defaultValue bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-
-	switch strings.ToLower(value) {
-	case "true", "1", "yes", "on", "enabled":
-		return true
-	case "false", "0", "no", "off", "disabled":
-		return false
-	default:
-		return defaultValue
-	}
-}
-
-func getIntEnv(key string, defaultValue int) int {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-
-	intValue, err := strconv.Atoi(value)
-	if err != nil {
-		return defaultValue
-	}
-	return intValue
-}
-
+// GetConfig returns the current logging configuration.
+// Returns a default configuration if InitFromConfig has not been called.
 func GetConfig() *Config {
-	if config == nil {
-		config = loadConfig()
+	if logConfig == nil {
+		// Return default config if not initialized
+		defaults := configpkg.GetLoggingConfigDefaults()
+		return &Config{
+			Enabled:             defaults.Enabled,
+			LogToDB:             defaults.LogToDB,
+			EventLoggingEnabled: defaults.EventLoggingEnabled,
+			Level:               defaults.Level,
+			Encoding:            defaults.Encoding,
+			RetentionDays:       defaults.RetentionDays,
+			DBLogLevel:          ParseDBLogLevel(defaults.DBLogLevel),
+		}
 	}
-	return config
+	return logConfig
 }
 
 func IsEnabled() bool {

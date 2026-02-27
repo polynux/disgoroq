@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
@@ -23,9 +24,10 @@ type Scheduler struct {
 	events       *database.EventRepository
 	scheduler    gocron.Scheduler
 	emojiManager *emoji.Manager
+	horoscopeCfg config.HoroscopeConfig
 }
 
-func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager) *Scheduler {
+func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -40,6 +42,7 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 		events:       database.NewEventRepository(utils.GetDB(), logger.Log),
 		scheduler:    scheduler,
 		emojiManager: emojiManager,
+		horoscopeCfg: horoscopeCfg,
 	}
 }
 

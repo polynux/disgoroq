@@ -1,13 +1,13 @@
 package emoji
 
 import (
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"polynux/disgoroq/config"
 )
 
 // Emoji represents a Discord emoji
@@ -32,13 +32,12 @@ type Manager struct {
 	ttl     time.Duration
 }
 
-// NewManager creates a new emoji manager
-func NewManager(session *discordgo.Session) *Manager {
-	ttlMinutes := 60
-	if envTTL := os.Getenv("EMOJI_CACHE_TTL_MINUTES"); envTTL != "" {
-		if minutes, err := strconv.Atoi(envTTL); err == nil && minutes > 0 {
-			ttlMinutes = minutes
-		}
+// NewManager creates a new emoji manager.
+// If cfg is nil, default configuration is used.
+func NewManager(session *discordgo.Session, cfg config.EmojiConfig) *Manager {
+	ttlMinutes := cfg.CacheTTLMinutes
+	if ttlMinutes <= 0 {
+		ttlMinutes = 60 // Default to 60 minutes
 	}
 
 	return &Manager{

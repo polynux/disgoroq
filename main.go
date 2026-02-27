@@ -6,16 +6,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/commands"
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/handlers"
@@ -26,8 +25,7 @@ import (
 )
 
 var (
-	Token   string
-	GroqKey string
+	cfg *config.Config
 
 	local                   bool
 	sendDirectHoroscope     bool
@@ -36,22 +34,6 @@ var (
 )
 
 func init() {
-	err := godotenv.Load(".env.local")
-	if err != nil {
-		log.Fatal("Error loading .env file")
-	}
-
-	Token = os.Getenv("DISCORD_TOKEN")
-	GroqKey = os.Getenv("GROQ_API_KEY")
-
-	if Token == "" {
-		log.Fatal("No discord token found in .env file")
-	}
-
-	if GroqKey == "" {
-		log.Fatal("No Groq key found in .env file")
-	}
-
 	flag.BoolVar(&local, "local", false, "Use local database")
 	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
 	flag.BoolVar(&sendDirectFartingFriday, "sendFartingFriday", false, "Send farting friday directly")
@@ -60,15 +42,26 @@ func init() {
 }
 
 func main() {
+	// Load configuration
+	var configErr error
+	cfg, configErr = config.Load(config.DefaultConfigPath)
+	if configErr != nil {
+		log.Fatalf("Failed to load configuration: %v", configErr)
+	}
+
 	logger.Info("Starting DisgoroQ bot")
 
-	dg, err := discordgo.New("Bot " + Token)
+	// Initialize logger with configuration
+	logger.InitFromConfig(&cfg.Logging)
+
+	dg, err := discordgo.New("Bot " + cfg.Discord.Token)
 	if err != nil {
 		logger.Fatal("Error creating Discord session", zap.Error(err))
 		return
 	}
 
-	utils.InitializeDB(local)
+	// Initialize database
+	utils.InitializeDB(&cfg.Database, local)
 	defer func() {
 		logger.Info("Closing database")
 		if err := utils.DB.Close(); err != nil {
@@ -80,15 +73,34 @@ func main() {
 	eventRepo := logger.NewEventRepository(utils.DB, logger.Log)
 	logger.SetEventRepository(eventRepo)
 
-	// Load AI service configuration with retry and fallback support
-	aiConfig := ai.LoadServiceConfig()
-	if err := aiConfig.Validate(); err != nil {
+	// Create AI service configuration from central config
+	aiServiceConfig := ai.ServiceConfig{
+		GroqAPIKey:        cfg.AI.Groq.APIKey,
+		GroqModel:         cfg.AI.Groq.Model,
+		GroqVisionModel:   cfg.AI.Groq.VisionModel,
+		OllamaEnabled:     cfg.AI.Ollama.Enabled,
+		OllamaURL:         cfg.AI.Ollama.URL,
+		OllamaModel:       cfg.AI.Ollama.Model,
+		OllamaVisionModel: cfg.AI.Ollama.VisionModel,
+		RetryConfig: ai.RetryConfig{
+			MaxRetries:    cfg.AI.Retry.MaxRetries,
+			InitialDelay:  cfg.AI.Retry.InitialDelay,
+			MaxDelay:      cfg.AI.Retry.MaxDelay,
+			BackoffFactor: cfg.AI.Retry.BackoffFactor,
+			RetryOnEmpty:  cfg.AI.Retry.RetryOnEmpty,
+			RetryOnError:  cfg.AI.Retry.RetryOnError,
+		},
+		MinResponseLength: cfg.AI.MinResponseLength,
+		FallbackEnabled:   cfg.AI.FallbackEnabled,
+	}
+
+	if err := aiServiceConfig.Validate(); err != nil {
 		logger.Fatal("Invalid AI service configuration", zap.Error(err))
 		return
 	}
 
 	// Create AI service with retry and fallback capabilities
-	aiService := ai.NewService(aiConfig)
+	aiService := ai.NewService(aiServiceConfig)
 	if aiService == nil {
 		logger.Fatal("Failed to initialize AI service")
 		return
@@ -98,94 +110,60 @@ func main() {
 	logger.Info("AI service initialized",
 		zap.String("primary_provider", "groq"),
 		zap.Bool("fallback_enabled", aiService.IsFallbackAvailable()),
-		zap.Int("max_retries", aiConfig.RetryConfig.MaxRetries),
-		zap.Duration("retry_delay", aiConfig.RetryConfig.InitialDelay))
+		zap.Int("max_retries", aiServiceConfig.RetryConfig.MaxRetries),
+		zap.Duration("retry_delay", aiServiceConfig.RetryConfig.InitialDelay))
 
 	// Initialize memory service for conversation context
 	var memoryService memory.Service
-	if os.Getenv("MEMORY_ENABLED") != "false" {
+	if cfg.Memory.Enabled {
 		// Create memory repository using the existing database connection
 		memoryRepo := memory.NewRepository(utils.DB)
 
 		// Create Ollama embedding provider for vector search
-		ollamaURL := os.Getenv("MEMORY_OLLAMA_URL")
-		if ollamaURL == "" {
-			ollamaURL = os.Getenv("OLLAMA_API_URL")
-			if ollamaURL == "" {
-				ollamaURL = "http://localhost:11434"
-			}
-		}
-		embeddingModel := os.Getenv("MEMORY_EMBEDDING_MODEL")
-		if embeddingModel == "" {
-			embeddingModel = "nomic-embed-text"
-		}
-		embeddingProvider, err := memory.NewOllamaEmbeddingProviderWithConfig(ollamaURL, embeddingModel)
+		embeddingProvider, err := memory.NewOllamaEmbeddingProviderWithConfig(
+			cfg.Memory.OllamaURL,
+			cfg.Memory.EmbeddingModel,
+		)
 		if err != nil {
 			logger.Warn("Failed to create embedding provider, continuing without memory",
 				zap.Error(err),
-				zap.String("ollama_url", ollamaURL))
-			memoryService = nil
-		}
-
-		// Create AI service adapter for memory system
-		memoryAIService := &aiServiceAdapter{service: aiService}
-
-		// Create AI summarizer using the existing AI service
-		summaryModel := os.Getenv("MEMORY_SUMMARY_MODEL")
-		if summaryModel == "" {
-			summaryModel = "llama3-8b-8192" // Default model for summarization
-		}
-		summarizer := memory.NewSummarizer(memoryAIService, summaryModel)
-
-		// Configure memory service
-		memoryConfig := memory.ServiceConfig{
-			BufferThreshold:    10,            // Summarize after 10 messages
-			SummaryInterval:    1 * time.Hour, // Minimum 1 hour between summaries
-			MaxContextMessages: 5,             // Include last 5 messages in context
-			MaxSummaryContext:  3,             // Include top 3 relevant summaries
-		}
-
-		// Override config from environment if provided
-		if threshold := os.Getenv("MEMORY_BUFFER_THRESHOLD"); threshold != "" {
-			if val, err := strconv.Atoi(threshold); err == nil && val > 0 {
-				memoryConfig.BufferThreshold = val
-			}
-		}
-		if interval := os.Getenv("MEMORY_SUMMARY_INTERVAL"); interval != "" {
-			if val, err := strconv.Atoi(interval); err == nil && val > 0 {
-				memoryConfig.SummaryInterval = time.Duration(val) * time.Second
-			}
-		}
-		if maxMsgs := os.Getenv("MEMORY_MAX_CONTEXT_MESSAGES"); maxMsgs != "" {
-			if val, err := strconv.Atoi(maxMsgs); err == nil && val > 0 {
-				memoryConfig.MaxContextMessages = val
-			}
-		}
-		if maxSummaries := os.Getenv("MEMORY_MAX_SUMMARY_CONTEXT"); maxSummaries != "" {
-			if val, err := strconv.Atoi(maxSummaries); err == nil && val > 0 {
-				memoryConfig.MaxSummaryContext = val
-			}
-		}
-
-		memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryConfig)
-
-		// Test memory service health
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := embeddingProvider.HealthCheck(ctx); err != nil {
-			logger.Warn("Memory service embedding provider unavailable, continuing without memory",
-				zap.Error(err),
-				zap.String("ollama_url", ollamaURL),
-				zap.String("embedding_model", embeddingModel))
+				zap.String("ollama_url", cfg.Memory.OllamaURL))
 			memoryService = nil
 		} else {
-			logger.Info("Memory service initialized",
-				zap.String("ollama_url", ollamaURL),
-				zap.String("embedding_model", embeddingModel),
-				zap.String("summary_model", summaryModel),
-				zap.Int("buffer_threshold", memoryConfig.BufferThreshold),
-				zap.Duration("summary_interval", memoryConfig.SummaryInterval))
+			// Create AI service adapter for memory system
+			memoryAIService := &aiServiceAdapter{service: aiService}
+
+			// Create AI summarizer using the existing AI service
+			summarizer := memory.NewSummarizer(memoryAIService, cfg.Memory.SummaryModel)
+
+			// Configure memory service from central config
+			memoryServiceConfig := memory.ServiceConfig{
+				BufferThreshold:    cfg.Memory.BufferThreshold,
+				SummaryInterval:    cfg.Memory.SummaryInterval,
+				MaxContextMessages: cfg.Memory.MaxContextMessages,
+				MaxSummaryContext:  cfg.Memory.MaxSummaryContext,
+			}
+
+			memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryServiceConfig)
+
+			// Test memory service health
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			if err := embeddingProvider.HealthCheck(ctx); err != nil {
+				logger.Warn("Memory service embedding provider unavailable, continuing without memory",
+					zap.Error(err),
+					zap.String("ollama_url", cfg.Memory.OllamaURL),
+					zap.String("embedding_model", cfg.Memory.EmbeddingModel))
+				memoryService = nil
+			} else {
+				logger.Info("Memory service initialized",
+					zap.String("ollama_url", cfg.Memory.OllamaURL),
+					zap.String("embedding_model", cfg.Memory.EmbeddingModel),
+					zap.String("summary_model", cfg.Memory.SummaryModel),
+					zap.Int("buffer_threshold", memoryServiceConfig.BufferThreshold),
+					zap.Duration("summary_interval", memoryServiceConfig.SummaryInterval))
+			}
 		}
 	} else {
 		logger.Info("Memory service disabled by configuration")
@@ -194,7 +172,7 @@ func main() {
 	repo := database.NewRepository()
 
 	// Initialize emoji manager for shortcode conversion
-	emojiManager := emoji.NewManager(dg)
+	emojiManager := emoji.NewManager(dg, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
 	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService, emojiManager)
@@ -230,7 +208,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, aiService, repo, emojiManager)
+	sched := scheduler.New(dg, aiService, repo, emojiManager, cfg.Horoscope)
 	sched.Start()
 	defer sched.Shutdown()
 
