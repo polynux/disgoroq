@@ -275,6 +275,20 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					},
 				},
 				{
+					Name:        "message",
+					Description: "Set the reengage message prompt",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionString,
+							Name:        "text",
+							Description: "The message appended to the prompt when reengaging",
+							Required:    true,
+							MaxLength:   500,
+						},
+					},
+				},
+				{
 					Name:        "status",
 					Description: "Show current reengage settings for this channel",
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
@@ -663,6 +677,8 @@ func reengageHandler(repo *database.Repository) func(s *discordgo.Session, i *di
 			handleReengageChance(s, i, repo)
 		case "threshold":
 			handleReengageThreshold(s, i, repo)
+		case "message":
+			handleReengageMessage(s, i, repo)
 		case "status":
 			handleReengageStatus(s, i, repo)
 		default:
@@ -739,6 +755,22 @@ func handleReengageThreshold(s *discordgo.Session, i *discordgo.InteractionCreat
 	})
 }
 
+func handleReengageMessage(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	message := i.ApplicationCommandData().Options[0].Options[0].StringValue()
+	err := repo.SetReengageMessage(ctx, i.GuildID, message)
+	content := fmt.Sprintf("✅ Reengage message set!\n```\n%s\n```", message)
+	if err != nil {
+		content = "❌ Error setting reengage message"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
 func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
 	ctx := context.Background()
 	enabled, chance, threshold := repo.GetReengageConfig(ctx, i.GuildID, i.ChannelID)
@@ -748,7 +780,17 @@ func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, 
 		status = "✅ Enabled"
 	}
 
-	content := fmt.Sprintf("**Reengage Settings for this channel:**\nStatus: %s\nChance: %.2f%%\nThreshold: %d minutes", status, chance*100, threshold)
+	message, hasMessage := repo.GetReengageMessage(ctx, i.GuildID)
+	messageDisplay := "(using default)"
+	if hasMessage {
+		if len(message) > 100 {
+			messageDisplay = message[:100] + "..."
+		} else {
+			messageDisplay = message
+		}
+	}
+
+	content := fmt.Sprintf("**Reengage Settings for this channel:**\nStatus: %s\nChance: %.2f%%\nThreshold: %d minutes\nMessage: %s", status, chance*100, threshold, messageDisplay)
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{

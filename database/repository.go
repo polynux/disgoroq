@@ -328,3 +328,22 @@ func (r *Repository) GetAllReengageChannels(ctx context.Context, guildID string)
 	}
 	return channels, nil
 }
+
+func (r *Repository) SetReengageMessage(ctx context.Context, guildID, message string) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_message",
+		Value:   message,
+	})
+}
+
+func (r *Repository) GetReengageMessage(ctx context.Context, guildID string) (string, bool) {
+	message, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "reengage_message",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return "", false
+	}
+	return message, true
+}

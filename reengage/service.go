@@ -129,11 +129,16 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		return fmt.Errorf("failed to build context: %w", err)
 	}
 
+	reengageMessage := s.config.ReengageMessage
+	if msg, ok := s.repo.GetReengageMessage(ctx, guildID); ok {
+		reengageMessage = msg
+	}
+
 	var systemPrompt string
 	if prompt, ok := s.repo.GetPrompt(ctx, guildID); ok {
-		systemPrompt = prompt + s.config.ReengageMessage
+		systemPrompt = prompt + reengageMessage
 	} else {
-		systemPrompt = handlers.GetDefaultPrompt(botNick) + s.config.ReengageMessage
+		systemPrompt = handlers.GetDefaultPrompt(botNick) + reengageMessage
 	}
 
 	if s.memoryService != nil {
