@@ -31,7 +31,7 @@ type Scheduler struct {
 	reengageCfg     config.ReengageConfig
 }
 
-func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig) *Scheduler {
+func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -39,7 +39,7 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 		log.Println("error creating scheduler,", schedulerErr)
 	}
 
-	reengageService := reengage.NewService(session, aiService, repo, memoryService, emojiManager, reengageCfg)
+	reengageService := reengage.NewService(session, aiService, repo, memoryService, emojiManager, reengageCfg, defaultPrompt)
 
 	return &Scheduler{
 		session:         session,

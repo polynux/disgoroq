@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/database"
-	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
@@ -18,7 +19,10 @@ import (
 
 var defaultMemberPermissions int64 = discordgo.PermissionManageMessages
 
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service) {
+var defaultPrompt string
+
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string) {
+	defaultPrompt = cfgDefaultPrompt
 	registry.AddCommand(
 		&discordgo.ApplicationCommand{
 			Name:        "ping",
@@ -517,7 +521,7 @@ func handlePromptSee(s *discordgo.Session, i *discordgo.InteractionCreate, repo 
 			})
 			return
 		}
-		prompt = handlers.GetDefaultPrompt(botMember.Nick)
+		prompt = getDefaultPrompt(botMember.Nick)
 	}
 
 	// Truncate if too long for Discord message (max 2000, leave room for prefix)
@@ -555,7 +559,7 @@ func handlePromptAppend(s *discordgo.Session, i *discordgo.InteractionCreate, re
 			})
 			return
 		}
-		currentPrompt = handlers.GetDefaultPrompt(botMember.Nick)
+		currentPrompt = getDefaultPrompt(botMember.Nick)
 	}
 
 	newPrompt := currentPrompt + "\n" + textToAppend
@@ -797,4 +801,18 @@ func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, 
 			Content: content,
 		},
 	})
+}
+
+func getDefaultPrompt(botNick string) string {
+	tmpl, err := template.New("prompt").Parse(defaultPrompt)
+	if err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+
+	var result strings.Builder
+	data := map[string]string{"BotNick": botNick}
+	if err := tmpl.Execute(&result, data); err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+	return result.String()
 }

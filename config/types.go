@@ -14,11 +14,17 @@ type Config struct {
 	Emoji     EmojiConfig     `yaml:"emoji"`
 	Horoscope HoroscopeConfig `yaml:"horoscope"`
 	Reengage  ReengageConfig  `yaml:"reengage"`
+	Bot       BotConfig       `yaml:"bot"`
 }
 
 // DiscordConfig contains Discord-related configuration.
 type DiscordConfig struct {
 	Token string `yaml:"token"`
+}
+
+// BotConfig contains bot personality configuration.
+type BotConfig struct {
+	DefaultPrompt string `yaml:"default_prompt"`
 }
 
 // DatabaseConfig contains database-related configuration.
@@ -180,6 +186,9 @@ func DefaultConfig() *Config {
 			DefaultInactivityMinutes: 30,
 			DefaultChance:            0.01,
 			ReengageMessage:          "\n\nLe chat est calme, relance la discussion avec quelque chose de fun! Pose une question, raconte une anecdote, fais une vanne ou lance un sujet de discussion. Reste dans ton personnage!",
+		},
+		Bot: BotConfig{
+			DefaultPrompt: "yo, t'es {{.BotNick}}, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀",
 		},
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"strings"
+	"text/template"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -13,7 +15,6 @@ import (
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
-	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
 )
@@ -26,9 +27,10 @@ type Service struct {
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
 	config         config.ReengageConfig
+	defaultPrompt  string
 }
 
-func NewService(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig) *Service {
+func NewService(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig, defaultPrompt string) *Service {
 	return &Service{
 		session:        session,
 		aiService:      aiService,
@@ -37,6 +39,7 @@ func NewService(session *discordgo.Session, aiService *ai.Service, repo *databas
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
 		config:         cfg,
+		defaultPrompt:  defaultPrompt,
 	}
 }
 
@@ -138,7 +141,7 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 	if prompt, ok := s.repo.GetPrompt(ctx, guildID); ok {
 		systemPrompt = prompt + reengageMessage
 	} else {
-		systemPrompt = handlers.GetDefaultPrompt(botNick) + reengageMessage
+		systemPrompt = s.getDefaultPrompt(botNick) + reengageMessage
 	}
 
 	if s.memoryService != nil {
@@ -199,4 +202,18 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 	)
 
 	return nil
+}
+
+func (s *Service) getDefaultPrompt(botNick string) string {
+	tmpl, err := template.New("prompt").Parse(s.defaultPrompt)
+	if err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+
+	var result strings.Builder
+	data := map[string]string{"BotNick": botNick}
+	if err := tmpl.Execute(&result, data); err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+	return result.String()
 }

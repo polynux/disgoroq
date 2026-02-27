@@ -175,13 +175,13 @@ func main() {
 	emojiManager := emoji.NewManager(dg, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService, emojiManager)
+	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt)
 	dg.AddHandler(messageHandler.Handle)
 	dg.AddHandler(handlers.HandleGuildCreate)
 	dg.AddHandler(handlers.HandleGuildDelete)
 
 	registry := commands.NewRegistry(dg, local)
-	commands.RegisterAll(registry, repo, memoryService)
+	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt)
 	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		registry.HandleCommand(i)
 	})
@@ -208,7 +208,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage)
+	sched := scheduler.New(dg, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt)
 	sched.Start()
 	defer sched.Shutdown()
 

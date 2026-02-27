@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -24,16 +25,18 @@ type MessageHandler struct {
 	contextBuilder *ai.ContextBuilder
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
+	defaultPrompt  string
 }
 
-func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager) *MessageHandler {
+func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string) *MessageHandler {
 	return &MessageHandler{
 		session:        session,
 		aiservice:      aiService,
 		repo:           repo,
-		contextBuilder: ai.NewContextBuilder(session, aiService), // Use aiService as provider
+		contextBuilder: ai.NewContextBuilder(session, aiService),
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
+		defaultPrompt:  defaultPrompt,
 	}
 }
 
@@ -143,7 +146,7 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		}
 	}
 
-	instructions := fmt.Sprintf(`yo, t'es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀`, botMember.Nick)
+	instructions := h.GetDefaultPrompt(botMember.Nick)
 	instructions += memoryContext
 
 	if prompt, ok := h.repo.GetPrompt(context.Background(), m.GuildID); ok {
@@ -269,7 +272,16 @@ func min(a, b int) int {
 	return b
 }
 
-// GetDefaultPrompt returns the default system prompt with the bot's nickname
-func GetDefaultPrompt(botNick string) string {
-	return fmt.Sprintf(`yo, t'es %s, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀`, botNick)
+func (h *MessageHandler) GetDefaultPrompt(botNick string) string {
+	tmpl, err := template.New("prompt").Parse(h.defaultPrompt)
+	if err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+
+	var result strings.Builder
+	data := map[string]string{"BotNick": botNick}
+	if err := tmpl.Execute(&result, data); err != nil {
+		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
+	}
+	return result.String()
 }
