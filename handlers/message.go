@@ -96,6 +96,8 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		return
 	}
 
+	h.repo.SetChannelLastMessage(context.Background(), m.GuildID, m.ChannelID, time.Now().Unix())
+
 	s.ChannelTyping(m.ChannelID)
 
 	messageCount := h.repo.GetMessagesCount(context.Background(), m.GuildID)

@@ -100,6 +100,15 @@ func GetHoroscopeConfigDefaults() HoroscopeConfig {
 	}
 }
 
+// GetReengageConfigDefaults returns the default reengage configuration.
+func GetReengageConfigDefaults() ReengageConfig {
+	return ReengageConfig{
+		CheckIntervalSeconds:     300,
+		DefaultInactivityMinutes: 30,
+		DefaultChance:            0.01,
+	}
+}
+
 // Environment variable names for reference.
 const (
 	// Discord
@@ -116,9 +125,9 @@ const (
 
 	// AI - Ollama
 	EnvOllamaEnabled     = "OLLAMA_ENABLED"
-	EnvOllamaURL          = "OLLAMA_API_URL"
-	EnvOllamaModel        = "OLLAMA_MODEL"
-	EnvOllamaVisionModel  = "OLLAMA_VISION_MODEL"
+	EnvOllamaURL         = "OLLAMA_API_URL"
+	EnvOllamaModel       = "OLLAMA_MODEL"
+	EnvOllamaVisionModel = "OLLAMA_VISION_MODEL"
 
 	// AI - Retry
 	EnvAIMaxRetries          = "AI_MAX_RETRIES"
@@ -133,29 +142,34 @@ const (
 	EnvAIMinResponseLength = "AI_MIN_RESPONSE_LENGTH"
 
 	// Logging
-	EnvLogEnabled             = "LOG_ENABLED"
-	EnvLogToDB                = "LOG_TO_DB"
-	EnvLogLevel               = "LOG_LEVEL"
-	EnvLogEncoding            = "LOG_ENCODING"
-	EnvEventLoggingEnabled    = "EVENT_LOGGING_ENABLED"
-	EnvEventRetentionDays     = "EVENT_RETENTION_DAYS"
-	EnvDBLogLevel             = "DB_LOG_LEVEL"
+	EnvLogEnabled          = "LOG_ENABLED"
+	EnvLogToDB             = "LOG_TO_DB"
+	EnvLogLevel            = "LOG_LEVEL"
+	EnvLogEncoding         = "LOG_ENCODING"
+	EnvEventLoggingEnabled = "EVENT_LOGGING_ENABLED"
+	EnvEventRetentionDays  = "EVENT_RETENTION_DAYS"
+	EnvDBLogLevel          = "DB_LOG_LEVEL"
 
 	// Memory
-	EnvMemoryEnabled               = "MEMORY_ENABLED"
-	EnvMemoryOllamaURL             = "MEMORY_OLLAMA_URL"
-	EnvMemoryEmbeddingModel        = "MEMORY_EMBEDDING_MODEL"
-	EnvMemorySummaryModel          = "MEMORY_SUMMARY_MODEL"
-	EnvMemoryBufferThreshold       = "MEMORY_BUFFER_THRESHOLD"
-	EnvMemorySummaryInterval       = "MEMORY_SUMMARY_INTERVAL"
-	EnvMemoryMaxContextMessages    = "MEMORY_MAX_CONTEXT_MESSAGES"
-	EnvMemoryMaxSummaryContext     = "MEMORY_MAX_SUMMARY_CONTEXT"
+	EnvMemoryEnabled            = "MEMORY_ENABLED"
+	EnvMemoryOllamaURL          = "MEMORY_OLLAMA_URL"
+	EnvMemoryEmbeddingModel     = "MEMORY_EMBEDDING_MODEL"
+	EnvMemorySummaryModel       = "MEMORY_SUMMARY_MODEL"
+	EnvMemoryBufferThreshold    = "MEMORY_BUFFER_THRESHOLD"
+	EnvMemorySummaryInterval    = "MEMORY_SUMMARY_INTERVAL"
+	EnvMemoryMaxContextMessages = "MEMORY_MAX_CONTEXT_MESSAGES"
+	EnvMemoryMaxSummaryContext  = "MEMORY_MAX_SUMMARY_CONTEXT"
 
 	// Emoji
 	EnvEmojiCacheTTLMinutes = "EMOJI_CACHE_TTL_MINUTES"
 
 	// Horoscope
 	EnvHoroscopeIncludeEmojis = "HOROSCOPE_INCLUDE_EMOJIS"
+
+	// Reengage
+	EnvReengageCheckIntervalSeconds     = "REENGAGE_CHECK_INTERVAL_SECONDS"
+	EnvReengageDefaultInactivityMinutes = "REENGAGE_DEFAULT_INACTIVITY_MINUTES"
+	EnvReengageDefaultChance            = "REENGAGE_DEFAULT_CHANCE"
 )
 
 // GetEnv returns the value of an environment variable or the default value if not set.
@@ -191,6 +205,19 @@ func GetEnvInt(key string, defaultValue int) int {
 	}
 	var result int
 	if _, err := fmt.Sscanf(value, "%d", &result); err != nil {
+		return defaultValue
+	}
+	return result
+}
+
+// GetEnvFloat64 returns the float64 value of an environment variable or the default if not set/invalid.
+func GetEnvFloat64(key string, defaultValue float64) float64 {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	var result float64
+	if _, err := fmt.Sscanf(value, "%f", &result); err != nil {
 		return defaultValue
 	}
 	return result

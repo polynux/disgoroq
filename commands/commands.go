@@ -233,6 +233,61 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 			forceSummaryHandler(memoryService),
 		)
 	}
+
+	registry.AddCommand(
+		&discordgo.ApplicationCommand{
+			Name:                     "reengage",
+			Description:              "Configure channel reengagement settings",
+			DefaultMemberPermissions: &defaultMemberPermissions,
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Name:        "enable",
+					Description: "Enable reengagement for this channel",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+				},
+				{
+					Name:        "disable",
+					Description: "Disable reengagement for this channel",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+				},
+				{
+					Name:        "chance",
+					Description: "Set reengage chance (0.0-1.0)",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionNumber,
+							Name:        "value",
+							Description: "The chance value (0.01 = 1%)",
+							Required:    true,
+							MinValue:    func() *float64 { v := 0.0; return &v }(),
+							MaxValue:    1.0,
+						},
+					},
+				},
+				{
+					Name:        "threshold",
+					Description: "Set inactivity threshold in minutes",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:        discordgo.ApplicationCommandOptionInteger,
+							Name:        "minutes",
+							Description: "Minutes of inactivity before reengage can trigger",
+							Required:    true,
+							MinValue:    func() *float64 { v := float64(1); return &v }(),
+						},
+					},
+				},
+				{
+					Name:        "status",
+					Description: "Show current reengage settings for this channel",
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+				},
+			},
+		},
+		reengageHandler(repo),
+	)
 }
 
 func pingHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -599,4 +654,111 @@ func forceSummaryHandler(memoryService memory.Service) func(s *discordgo.Session
 			Content: &successMsg,
 		})
 	}
+}
+
+func reengageHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		options := i.ApplicationCommandData().Options
+		subcommand := options[0].Name
+
+		switch subcommand {
+		case "enable":
+			handleReengageEnable(s, i, repo)
+		case "disable":
+			handleReengageDisable(s, i, repo)
+		case "chance":
+			handleReengageChance(s, i, repo)
+		case "threshold":
+			handleReengageThreshold(s, i, repo)
+		case "status":
+			handleReengageStatus(s, i, repo)
+		default:
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: "Unknown subcommand!",
+				},
+			})
+		}
+	}
+}
+
+func handleReengageEnable(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	err := repo.SetReengageEnabled(ctx, i.GuildID, i.ChannelID, true)
+	content := "✅ Reengagement enabled for this channel!"
+	if err != nil {
+		content = "❌ Error enabling reengagement"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
+func handleReengageDisable(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	err := repo.DeleteReengageConfig(ctx, i.GuildID, i.ChannelID)
+	content := "✅ Reengagement disabled for this channel!"
+	if err != nil {
+		content = "❌ Error disabling reengagement"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
+func handleReengageChance(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	chance := i.ApplicationCommandData().Options[0].Options[0].FloatValue()
+	err := repo.SetReengageChance(ctx, i.GuildID, i.ChannelID, chance)
+	content := fmt.Sprintf("✅ Reengage chance set to %.2f%% (%.4f)", chance*100, chance)
+	if err != nil {
+		content = "❌ Error setting reengage chance"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
+func handleReengageThreshold(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	minutes := i.ApplicationCommandData().Options[0].Options[0].IntValue()
+	err := repo.SetReengageThreshold(ctx, i.GuildID, i.ChannelID, int(minutes))
+	content := fmt.Sprintf("✅ Reengage threshold set to %d minutes", minutes)
+	if err != nil {
+		content = "❌ Error setting reengage threshold"
+	}
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
+}
+
+func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+	ctx := context.Background()
+	enabled, chance, threshold := repo.GetReengageConfig(ctx, i.GuildID, i.ChannelID)
+
+	status := "❌ Disabled"
+	if enabled {
+		status = "✅ Enabled"
+	}
+
+	content := fmt.Sprintf("**Reengage Settings for this channel:**\nStatus: %s\nChance: %.2f%%\nThreshold: %d minutes", status, chance*100, threshold)
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+		},
+	})
 }

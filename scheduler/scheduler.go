@@ -14,20 +14,24 @@ import (
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/memory"
+	"polynux/disgoroq/reengage"
 	"polynux/disgoroq/utils"
 )
 
 type Scheduler struct {
-	session      *discordgo.Session
-	aiservice    *ai.Service
-	repo         *database.Repository
-	events       *database.EventRepository
-	scheduler    gocron.Scheduler
-	emojiManager *emoji.Manager
-	horoscopeCfg config.HoroscopeConfig
+	session         *discordgo.Session
+	aiservice       *ai.Service
+	repo            *database.Repository
+	events          *database.EventRepository
+	scheduler       gocron.Scheduler
+	emojiManager    *emoji.Manager
+	horoscopeCfg    config.HoroscopeConfig
+	reengageService *reengage.Service
+	reengageCfg     config.ReengageConfig
 }
 
-func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig) *Scheduler {
+func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -35,14 +39,18 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 		log.Println("error creating scheduler,", schedulerErr)
 	}
 
+	reengageService := reengage.NewService(session, aiService, repo, memoryService, emojiManager, reengageCfg)
+
 	return &Scheduler{
-		session:      session,
-		aiservice:    aiService,
-		repo:         repo,
-		events:       database.NewEventRepository(utils.GetDB(), logger.Log),
-		scheduler:    scheduler,
-		emojiManager: emojiManager,
-		horoscopeCfg: horoscopeCfg,
+		session:         session,
+		aiservice:       aiService,
+		repo:            repo,
+		events:          database.NewEventRepository(utils.GetDB(), logger.Log),
+		scheduler:       scheduler,
+		emojiManager:    emojiManager,
+		horoscopeCfg:    horoscopeCfg,
+		reengageService: reengageService,
+		reengageCfg:     reengageCfg,
 	}
 }
 
@@ -67,6 +75,16 @@ func (s *Scheduler) Start() {
 		log.Println("error creating cleanup job,", err)
 	}
 
+	if s.reengageCfg.CheckIntervalSeconds > 0 {
+		_, err = s.scheduler.NewJob(
+			gocron.DurationJob(time.Duration(s.reengageCfg.CheckIntervalSeconds)*time.Second),
+			gocron.NewTask(s.CheckReengage),
+		)
+		if err != nil {
+			log.Println("error creating reengage job,", err)
+		}
+	}
+
 	s.scheduler.Start()
 	log.Println("Scheduler started")
 }
@@ -89,5 +107,12 @@ func (s *Scheduler) CleanupOldEvents() {
 		logger.Info("Event cleanup completed successfully",
 			zap.Int("retention_days", retentionDays),
 		)
+	}
+}
+
+func (s *Scheduler) CheckReengage() {
+	ctx := context.Background()
+	if err := s.reengageService.CheckAllChannels(ctx); err != nil {
+		logger.Error("Failed to check reengage channels", zap.Error(err))
 	}
 }

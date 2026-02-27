@@ -13,6 +13,7 @@ type Config struct {
 	Memory    MemoryConfig    `yaml:"memory"`
 	Emoji     EmojiConfig     `yaml:"emoji"`
 	Horoscope HoroscopeConfig `yaml:"horoscope"`
+	Reengage  ReengageConfig  `yaml:"reengage"`
 }
 
 // DiscordConfig contains Discord-related configuration.
@@ -55,12 +56,12 @@ type OllamaConfig struct {
 // Note: InitialDelay and MaxDelay are stored as durations internally but parsed from
 // milliseconds in YAML (initial_delay_ms, max_delay_ms).
 type RetryConfig struct {
-	MaxRetries      int           `yaml:"max_retries"`
-	InitialDelay    time.Duration `yaml:"-"` // Set from InitialDelayMs after parsing
-	MaxDelay        time.Duration `yaml:"-"` // Set from MaxDelayMs after parsing
-	BackoffFactor   float64       `yaml:"backoff_factor"`
-	RetryOnEmpty    bool          `yaml:"retry_on_empty"`
-	RetryOnError    bool          `yaml:"retry_on_error"`
+	MaxRetries    int           `yaml:"max_retries"`
+	InitialDelay  time.Duration `yaml:"-"` // Set from InitialDelayMs after parsing
+	MaxDelay      time.Duration `yaml:"-"` // Set from MaxDelayMs after parsing
+	BackoffFactor float64       `yaml:"backoff_factor"`
+	RetryOnEmpty  bool          `yaml:"retry_on_empty"`
+	RetryOnError  bool          `yaml:"retry_on_error"`
 
 	// YAML fields for duration values (milliseconds)
 	InitialDelayMs int `yaml:"initial_delay_ms"`
@@ -105,6 +106,13 @@ type HoroscopeConfig struct {
 	IncludeEmojis bool `yaml:"include_emojis"`
 }
 
+// ReengageConfig contains reengagement feature configuration.
+type ReengageConfig struct {
+	CheckIntervalSeconds     int     `yaml:"check_interval_seconds"`
+	DefaultInactivityMinutes int     `yaml:"default_inactivity_minutes"`
+	DefaultChance            float64 `yaml:"default_chance"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -128,14 +136,14 @@ func DefaultConfig() *Config {
 				VisionModel: "llava",
 			},
 			Retry: RetryConfig{
-				MaxRetries:      2,
-				InitialDelay:    500 * time.Millisecond,
-				MaxDelay:        5 * time.Second,
-				BackoffFactor:   2.0,
-				RetryOnEmpty:    true,
-				RetryOnError:    true,
-				InitialDelayMs:  500,
-				MaxDelayMs:      5000,
+				MaxRetries:     2,
+				InitialDelay:   500 * time.Millisecond,
+				MaxDelay:       5 * time.Second,
+				BackoffFactor:  2.0,
+				RetryOnEmpty:   true,
+				RetryOnError:   true,
+				InitialDelayMs: 500,
+				MaxDelayMs:     5000,
 			},
 			FallbackEnabled:   true,
 			MinResponseLength: 1,
@@ -150,14 +158,14 @@ func DefaultConfig() *Config {
 			DBLogLevel:          "info",
 		},
 		Memory: MemoryConfig{
-			Enabled:               true,
-			OllamaURL:             "http://localhost:11434",
-			EmbeddingModel:        "nomic-embed-text",
-			SummaryModel:          "llama3-8b-8192",
-			BufferThreshold:       10,
-			SummaryInterval:       1 * time.Hour,
-			MaxContextMessages:    5,
-			MaxSummaryContext:     3,
+			Enabled:                true,
+			OllamaURL:              "http://localhost:11434",
+			EmbeddingModel:         "nomic-embed-text",
+			SummaryModel:           "llama3-8b-8192",
+			BufferThreshold:        10,
+			SummaryInterval:        1 * time.Hour,
+			MaxContextMessages:     5,
+			MaxSummaryContext:      3,
 			SummaryIntervalSeconds: 3600, // 1 hour
 		},
 		Emoji: EmojiConfig{
@@ -165,6 +173,11 @@ func DefaultConfig() *Config {
 		},
 		Horoscope: HoroscopeConfig{
 			IncludeEmojis: true,
+		},
+		Reengage: ReengageConfig{
+			CheckIntervalSeconds:     300,
+			DefaultInactivityMinutes: 30,
+			DefaultChance:            0.01,
 		},
 	}
 }

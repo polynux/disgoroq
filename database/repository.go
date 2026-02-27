@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"strings"
 
 	"polynux/disgoroq/db"
 	"polynux/disgoroq/utils"
@@ -24,12 +25,14 @@ func (r *Repository) GetDB() *sql.DB {
 }
 
 const (
-	DefaultThreshold           = 0.1
-	DefaultThresholdSexe       = 0.05
-	DefaultMaxTokens           = 200
-	DefaultTemperature         = 0.5
-	DefaultMessagesCount       = 100
-	DefaultRateLimit     int64 = 10
+	DefaultThreshold               = 0.1
+	DefaultThresholdSexe           = 0.05
+	DefaultMaxTokens               = 200
+	DefaultTemperature             = 0.5
+	DefaultMessagesCount           = 100
+	DefaultRateLimit         int64 = 10
+	DefaultReengageChance          = 0.01
+	DefaultReengageThreshold       = 30
 )
 
 func (r *Repository) GetThreshold(ctx context.Context, guildID string) float64 {
@@ -168,4 +171,160 @@ func (r *Repository) GetFartingFridayChannel(ctx context.Context, guildID string
 		Name:    "farting_friday_channel",
 		GuildID: guildID,
 	})
+}
+
+func (r *Repository) SetChannelLastMessage(ctx context.Context, guildID, channelID string, timestamp int64) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "channel_last_message:" + channelID,
+		Value:   strconv.FormatInt(timestamp, 10),
+	})
+}
+
+func (r *Repository) GetChannelLastMessage(ctx context.Context, guildID, channelID string) int64 {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "channel_last_message:" + channelID,
+		GuildID: guildID,
+	})
+	if err != nil {
+		return 0
+	}
+	timestamp, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return timestamp
+}
+
+func (r *Repository) SetReengageEnabled(ctx context.Context, guildID, channelID string, enabled bool) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_enabled:" + channelID,
+		Value:   strconv.FormatBool(enabled),
+	})
+}
+
+func (r *Repository) GetReengageEnabled(ctx context.Context, guildID, channelID string) bool {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "reengage_enabled:" + channelID,
+		GuildID: guildID,
+	})
+	if err != nil {
+		return false
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false
+	}
+	return enabled
+}
+
+func (r *Repository) SetReengageChance(ctx context.Context, guildID, channelID string, chance float64) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_chance:" + channelID,
+		Value:   strconv.FormatFloat(chance, 'f', -1, 64),
+	})
+}
+
+func (r *Repository) GetReengageChance(ctx context.Context, guildID, channelID string) float64 {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "reengage_chance:" + channelID,
+		GuildID: guildID,
+	})
+	if err != nil {
+		return DefaultReengageChance
+	}
+	chance, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return DefaultReengageChance
+	}
+	return chance
+}
+
+func (r *Repository) SetReengageThreshold(ctx context.Context, guildID, channelID string, minutes int) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_threshold:" + channelID,
+		Value:   strconv.Itoa(minutes),
+	})
+}
+
+func (r *Repository) GetReengageThreshold(ctx context.Context, guildID, channelID string) int {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "reengage_threshold:" + channelID,
+		GuildID: guildID,
+	})
+	if err != nil {
+		return DefaultReengageThreshold
+	}
+	minutes, err := strconv.Atoi(value)
+	if err != nil {
+		return DefaultReengageThreshold
+	}
+	return minutes
+}
+
+func (r *Repository) GetReengageConfig(ctx context.Context, guildID, channelID string) (enabled bool, chance float64, threshold int) {
+	enabled = r.GetReengageEnabled(ctx, guildID, channelID)
+	chance = r.GetReengageChance(ctx, guildID, channelID)
+	threshold = r.GetReengageThreshold(ctx, guildID, channelID)
+	return
+}
+
+func (r *Repository) DeleteReengageConfig(ctx context.Context, guildID, channelID string) error {
+	if err := r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_enabled:" + channelID,
+	}); err != nil {
+		return err
+	}
+	r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_chance:" + channelID,
+	})
+	r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+		GuildID: guildID,
+		Name:    "reengage_threshold:" + channelID,
+	})
+	return nil
+}
+
+func (r *Repository) GetAllReengageChannels(ctx context.Context, guildID string) ([]string, error) {
+	rows, err := r.GetDB().QueryContext(ctx,
+		"SELECT name, value FROM guild_settings WHERE guild_id = ?",
+		guildID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	channelMap := make(map[string]bool)
+	prefix := "reengage_enabled:"
+	for rows.Next() {
+		var name, value string
+		if err := rows.Scan(&name, &value); err != nil {
+			return nil, err
+		}
+		if strings.HasPrefix(name, prefix) {
+			enabled, err := strconv.ParseBool(value)
+			if err != nil {
+				continue
+			}
+			channelID := strings.TrimPrefix(name, prefix)
+			channelMap[channelID] = enabled
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var channels []string
+	for channelID, enabled := range channelMap {
+		if enabled {
+			channels = append(channels, channelID)
+		}
+	}
+	return channels, nil
 }
