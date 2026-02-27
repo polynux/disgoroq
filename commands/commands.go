@@ -241,13 +241,8 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 			DefaultMemberPermissions: &defaultMemberPermissions,
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Name:        "enable",
-					Description: "Enable reengagement for this channel",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-				},
-				{
-					Name:        "disable",
-					Description: "Disable reengagement for this channel",
+					Name:        "toggle",
+					Description: "Toggle reengagement for this channel",
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
 				{
@@ -662,10 +657,8 @@ func reengageHandler(repo *database.Repository) func(s *discordgo.Session, i *di
 		subcommand := options[0].Name
 
 		switch subcommand {
-		case "enable":
-			handleReengageEnable(s, i, repo)
-		case "disable":
-			handleReengageDisable(s, i, repo)
+		case "toggle":
+			handleReengageToggle(s, i, repo)
 		case "chance":
 			handleReengageChance(s, i, repo)
 		case "threshold":
@@ -683,34 +676,35 @@ func reengageHandler(repo *database.Repository) func(s *discordgo.Session, i *di
 	}
 }
 
-func handleReengageEnable(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
+func handleReengageToggle(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
 	ctx := context.Background()
-	err := repo.SetReengageEnabled(ctx, i.GuildID, i.ChannelID, true)
-	content := "✅ Reengagement enabled for this channel!"
-	if err != nil {
-		content = "❌ Error enabling reengagement"
-	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
-}
+	enabled := repo.GetReengageEnabled(ctx, i.GuildID, i.ChannelID)
 
-func handleReengageDisable(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	err := repo.DeleteReengageConfig(ctx, i.GuildID, i.ChannelID)
-	content := "✅ Reengagement disabled for this channel!"
-	if err != nil {
-		content = "❌ Error disabling reengagement"
+	if enabled {
+		err := repo.DeleteReengageConfig(ctx, i.GuildID, i.ChannelID)
+		content := "✅ Reengagement disabled for this channel!"
+		if err != nil {
+			content = "❌ Error disabling reengagement"
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: content,
+			},
+		})
+	} else {
+		err := repo.SetReengageEnabled(ctx, i.GuildID, i.ChannelID, true)
+		content := "✅ Reengagement enabled for this channel!"
+		if err != nil {
+			content = "❌ Error enabling reengagement"
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: content,
+			},
+		})
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
 }
 
 func handleReengageChance(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {

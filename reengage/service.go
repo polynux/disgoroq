@@ -18,8 +18,6 @@ import (
 	"polynux/disgoroq/memory"
 )
 
-const reengageOverlay = "\n\nLe chat est calme, relance la discussion avec quelque chose de fun! Pose une question, raconte une anecdote, fais une vanne ou lance un sujet de discussion. Reste dans ton personnage!"
-
 type Service struct {
 	session        *discordgo.Session
 	aiService      *ai.Service
@@ -133,9 +131,9 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 
 	var systemPrompt string
 	if prompt, ok := s.repo.GetPrompt(ctx, guildID); ok {
-		systemPrompt = prompt + reengageOverlay
+		systemPrompt = prompt + s.config.ReengageMessage
 	} else {
-		systemPrompt = handlers.GetDefaultPrompt(botNick) + reengageOverlay
+		systemPrompt = handlers.GetDefaultPrompt(botNick) + s.config.ReengageMessage
 	}
 
 	if s.memoryService != nil {

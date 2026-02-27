@@ -111,6 +111,7 @@ type ReengageConfig struct {
 	CheckIntervalSeconds     int     `yaml:"check_interval_seconds"`
 	DefaultInactivityMinutes int     `yaml:"default_inactivity_minutes"`
 	DefaultChance            float64 `yaml:"default_chance"`
+	ReengageMessage          string  `yaml:"reengage_message"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -178,6 +179,7 @@ func DefaultConfig() *Config {
 			CheckIntervalSeconds:     300,
 			DefaultInactivityMinutes: 30,
 			DefaultChance:            0.01,
+			ReengageMessage:          "\n\nLe chat est calme, relance la discussion avec quelque chose de fun! Pose une question, raconte une anecdote, fais une vanne ou lance un sujet de discussion. Reste dans ton personnage!",
 		},
 	}
 }
