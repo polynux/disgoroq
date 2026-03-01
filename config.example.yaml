@@ -122,3 +122,86 @@ emoji:
 horoscope:
   # Include custom emojis in horoscope messages
   include_emojis: true
+
+reengage:
+  # Interval in seconds to check for inactive channels
+  check_interval_seconds: 300
+
+  # Default inactivity threshold in minutes before reengage can trigger
+  default_inactivity_minutes: 30
+
+  # Default probability of reengaging (0.01 = 1%)
+  default_chance: 0.01
+
+  # Default message prompt appended when reengaging
+  reengage_message: "\n\nLe chat est calme, relance la discussion avec quelque chose de fun! Pose une question, raconte une anecdote, fais une vanne ou lance un sujet de discussion. Reste dans ton personnage!"
+
+bot:
+  # Default bot personality prompt
+  # Use {{.BotNick}} to insert the bot's nickname
+  default_prompt: "yo, t'es {{.BotNick}}, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀"
+
+voice:
+  # Enable voice chat functionality
+  enabled: false
+
+  tts:
+    # TTS service endpoint (FastAPI server)
+    endpoint: "http://localhost:8880"
+
+    # TTS model to use (OpenAI-compatible alias, e.g., "qwen3-tts", "tts-1", "tts-1-hd")
+    # Use language-specific variants like "tts-1-fr" for French
+    model: "qwen3-tts"
+
+    # Request timeout in milliseconds
+    timeout_ms: 30000
+
+    # Default voice ID - MUST match a loaded custom voice for Base models
+    # For CustomVoice models, use built-in voices: "Vivian", "Ryan", "Sophia", etc.
+    # For Base models with voice cloning, use your custom voice name (e.g., "my-voice")
+    default_voice: "my-voice"
+
+    # Output sample rate (24000 is recommended for Qwen3-TTS)
+    sample_rate: 24000
+
+    # Static mode generates entire response before playing (recommended)
+    static_mode: true
+
+    # Maximum text length per TTS request
+    max_text_length: 500
+
+    # Send text message if TTS fails
+    fallback_to_text: true
+
+  stt:
+    # Whisper.cpp Unix socket path
+    socket_path: "/tmp/whisper.sock"
+
+    # Whisper model (tiny, base, small, medium)
+    model: "tiny"
+
+    # Language code for transcription
+    language: "fr"
+
+  vram:
+    # Minimum free VRAM (MB) required to load TTS model
+    min_free_mb: 1500
+
+    # Automatically unload TTS model when idle
+    auto_unload: true
+
+    # Seconds of inactivity before unloading TTS model
+    unload_timeout_seconds: 60
+
+  audio:
+    # Audio frame size (samples per frame, 20ms at 48kHz = 960)
+    frame_size: 960
+
+    # Audio sample rate (Discord uses 48kHz)
+    sample_rate: 48000
+
+    # Number of audio channels (2 = stereo)
+    channels: 2
+
+    # Audio buffer duration in milliseconds before transcription
+    buffer_ms: 500

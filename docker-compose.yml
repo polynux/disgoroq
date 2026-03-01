@@ -1,0 +1,185 @@
+# Docker Compose for DisgoroQ Voice Services
+# Qwen3-TTS with voice cloning support
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # TTS Service - Production (GPU)
+  # ===========================================================================
+  tts-service:
+    build:
+      context: ./tts-service
+      dockerfile: Dockerfile
+      target: production
+    image: disgoroq-tts:latest
+    container_name: disgoroq-tts
+    ports:
+      - "8880:8880"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
+      - TTS_BACKEND=official
+      - TTS_PORT=8880
+      - TTS_HOST=0.0.0.0
+      - VOICE_LIBRARY_DIR=/app/voices
+      - TTS_WARMUP_ON_START=false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Persist voice references for voice cloning
+      - ./tts-service/voices:/app/voices
+      # Cache HuggingFace models (persist across restarts)
+      - huggingface-cache:/root/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ===========================================================================
+  # TTS Service - Development (with debugging tools)
+  # ===========================================================================
+  tts-service-dev:
+    build:
+      context: ./tts-service
+      dockerfile: Dockerfile
+      target: development
+    image: disgoroq-tts:dev
+    container_name: disgoroq-tts-dev
+    ports:
+      - "8880:8880"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      # - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
+      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-Base}
+      - TTS_BACKEND=official
+      - TTS_PORT=8880
+      - TTS_HOST=0.0.0.0
+      - VOICE_LIBRARY_DIR=/app/voices
+      - TTS_WARMUP_ON_START=false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      # Mount source code for development (hot reload)
+      - ./tts-service/api:/app/api:ro
+      - ./tts-service/qwen_tts:/app/qwen_tts:ro
+      - ./tts-service/main.py:/app/main.py:ro
+      - ./tts-service/voices:/app/voices
+      - huggingface-cache:/root/.cache/huggingface
+    restart: unless-stopped
+    profiles:
+      - dev
+    stdin_open: true
+    tty: true
+
+  # ===========================================================================
+  # TTS Service - CPU only (for testing without GPU)
+  # ===========================================================================
+  tts-service-cpu:
+    build:
+      context: ./tts-service
+      dockerfile: Dockerfile
+      target: cpu-base
+    image: disgoroq-tts:cpu
+    container_name: disgoroq-tts-cpu
+    ports:
+      - "8880:8880"
+    environment:
+      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
+      - TTS_PORT=8880
+      - TTS_HOST=0.0.0.0
+      - VOICE_LIBRARY_DIR=/app/voices
+    volumes:
+      - ./tts-service/voices:/app/voices
+      - huggingface-cache:/root/.cache/huggingface
+    restart: unless-stopped
+    profiles:
+      - cpu
+
+  # ===========================================================================
+  # Whisper.cpp STT Service (CPU)
+  # ===========================================================================
+  whisper:
+    build:
+      context: ./whisper
+      dockerfile: Dockerfile
+      args:
+        - MODEL=tiny
+    image: disgoroq-whisper:latest
+    container_name: disgoroq-whisper
+    environment:
+      - WHISPER_SOCKET_PATH=/tmp/sockets/whisper.sock
+      - WHISPER_MODEL=tiny
+      - WHISPER_LANGUAGE=fr
+    volumes:
+      # Mount host /tmp to container /tmp/sockets so socket is accessible on host at /tmp/whisper.sock
+      - /tmp/sockets:/tmp/sockets
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "test", "-S", "/tmp/sockets/whisper.sock"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - voice
+
+volumes:
+  huggingface-cache:
+    driver: local
+  whisper-sockets:
+    driver: local
+
+# =============================================================================
+# Usage:
+#
+# Full voice stack (TTS + Whisper):
+#   docker-compose --profile voice up -d tts-service whisper
+#
+# Production TTS only (GPU):
+#   docker-compose up -d tts-service
+#
+# Development (with hot reload):
+#   docker-compose --profile dev up -d tts-service-dev
+#
+# CPU-only (for testing):
+#   docker-compose --profile cpu up -d tts-service-cpu
+#
+# Build specific target:
+#   docker-compose build --target production tts-service
+#   docker-compose build --target development tts-service-dev
+#
+# View logs:
+#   docker-compose logs -f tts-service
+#   docker-compose logs -f whisper
+#
+# Check health:
+#   curl http://localhost:8880/health
+#
+# Test TTS:
+#   curl -X POST http://localhost:8880/v1/audio/speech \
+#     -H "Content-Type: application/json" \
+#     -d '{"model":"qwen3-tts","voice":"Vivian","input":"Bonjour!"}' \
+#     --output test.wav
+#
+# Whisper socket location:
+#   - Container: /tmp/sockets/whisper.sock
+#   - Host: Use volume mount or run locally
+# =============================================================================

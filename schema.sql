@@ -80,6 +80,19 @@ ON message_buffer(guild_id, user_id, processed, timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_buffer_channel 
 ON message_buffer(channel_id, processed, timestamp ASC);
 
-CREATE INDEX IF NOT EXISTS idx_buffer_message_id 
+CREATE INDEX IF NOT EXISTS idx_buffer_message_id
 ON message_buffer(message_id);
+
+-- Voice settings per guild
+CREATE TABLE IF NOT EXISTS voice_settings (
+    guild_id TEXT PRIMARY KEY,
+    auto_join BOOLEAN DEFAULT FALSE,
+    auto_join_channel TEXT,
+    voice_enabled BOOLEAN DEFAULT TRUE,
+    created_at INTEGER DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_settings_guild_id
+ON voice_settings(guild_id);
 

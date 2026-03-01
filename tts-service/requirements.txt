@@ -1,0 +1,36 @@
+# TTS Service Requirements - Qwen3-TTS OpenAI-Compatible Server
+# Based on Qwen3-TTS-Openai-Fastapi pyproject.toml
+
+# Web framework
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart
+pydantic>=2.0.0
+httpx>=0.24.0
+
+# Machine learning - PyTorch with CUDA 12.1
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Transformers and Qwen3-TTS (exact versions required)
+transformers==4.57.3
+accelerate==1.12.0
+einops
+
+# ONNX runtime
+onnxruntime
+
+# Audio processing
+librosa
+soundfile
+scipy
+numpy
+sox
+pydub
+
+# Text processing
+inflect
+aiofiles
+
+# Optional: flash-attention for better performance (requires CUDA)
+# pip install flash-attn --no-build-isolation

@@ -347,3 +347,98 @@ func (r *Repository) GetReengageMessage(ctx context.Context, guildID string) (st
 	}
 	return message, true
 }
+
+// Voice settings methods
+
+// GetVoiceEnabled returns whether voice is enabled for a guild.
+func (r *Repository) GetVoiceEnabled(ctx context.Context, guildID string) bool {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "voice_enabled",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return true // Default to enabled
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+// SetVoiceEnabled sets whether voice is enabled for a guild.
+func (r *Repository) SetVoiceEnabled(ctx context.Context, guildID string, enabled bool) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "voice_enabled",
+		Value:   strconv.FormatBool(enabled),
+	})
+}
+
+// GetVoiceAutoJoin returns whether auto-join is enabled for a guild.
+func (r *Repository) GetVoiceAutoJoin(ctx context.Context, guildID string) bool {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "voice_auto_join",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return false // Default to disabled
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false
+	}
+	return enabled
+}
+
+// SetVoiceAutoJoin sets whether auto-join is enabled for a guild.
+func (r *Repository) SetVoiceAutoJoin(ctx context.Context, guildID string, enabled bool) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "voice_auto_join",
+		Value:   strconv.FormatBool(enabled),
+	})
+}
+
+// GetVoiceAutoJoinChannel returns the auto-join channel for a guild.
+func (r *Repository) GetVoiceAutoJoinChannel(ctx context.Context, guildID string) (string, bool) {
+	channelID, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "voice_auto_join_channel",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return "", false
+	}
+	return channelID, true
+}
+
+// SetVoiceAutoJoinChannel sets the auto-join channel for a guild.
+func (r *Repository) SetVoiceAutoJoinChannel(ctx context.Context, guildID, channelID string) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "voice_auto_join_channel",
+		Value:   channelID,
+	})
+}
+
+// GetVoiceConfig returns all voice settings for a guild.
+func (r *Repository) GetVoiceConfig(ctx context.Context, guildID string) (enabled, autoJoin bool, autoJoinChannel string) {
+	enabled = r.GetVoiceEnabled(ctx, guildID)
+	autoJoin = r.GetVoiceAutoJoin(ctx, guildID)
+	autoJoinChannel, _ = r.GetVoiceAutoJoinChannel(ctx, guildID)
+	return
+}
+
+// DeleteVoiceConfig removes all voice settings for a guild.
+func (r *Repository) DeleteVoiceConfig(ctx context.Context, guildID string) error {
+	settings := []string{"voice_enabled", "voice_auto_join", "voice_auto_join_channel"}
+	for _, setting := range settings {
+		if err := r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+			GuildID: guildID,
+			Name:    setting,
+		}); err != nil {
+			// Ignore "not found" errors
+		}
+	}
+	return nil
+}

@@ -19,14 +19,24 @@ import (
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/voice"
 )
 
 var defaultMemberPermissions = discord.PermissionManageMessages
 
 var defaultPrompt string
 
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string) {
+// RegisterAll registers all bot commands.
+// If voiceOrchestrator is nil, voice commands will not be registered.
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string, voiceOrchestrator *voice.Orchestrator) {
 	defaultPrompt = cfgDefaultPrompt
+
+	// Register voice commands if orchestrator is available
+	if voiceOrchestrator != nil {
+		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator)
+		RegisterVoiceCommands(registry, voiceCmds)
+	}
+
 	registry.AddCommand(
 		discord.SlashCommandCreate{
 			Name:        "ping",

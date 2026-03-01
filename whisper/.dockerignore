@@ -1,0 +1,10 @@
+# Whisper directory ignore file
+whisper.cpp/
+build/
+*.bin
+*.wav
+*.mp3
+__pycache__/
+*.pyc
+.venv/
+venv/

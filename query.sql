@@ -145,5 +145,26 @@ FROM conversation_summaries
 WHERE guild_id = ?;
 
 -- name: DeleteSummariesForUser :exec
-DELETE FROM conversation_summaries 
+DELETE FROM conversation_summaries
 WHERE guild_id = ? AND user_id = ?;
+
+-- Voice Settings Queries
+
+-- name: GetVoiceSettings :one
+SELECT auto_join, auto_join_channel, voice_enabled
+FROM voice_settings
+WHERE guild_id = ?;
+
+-- name: SetVoiceSettings :exec
+INSERT INTO voice_settings (guild_id, auto_join, auto_join_channel, voice_enabled, updated_at)
+VALUES (?, ?, ?, ?, strftime('%s', 'now'))
+ON CONFLICT(guild_id) DO UPDATE SET
+    auto_join = excluded.auto_join,
+    auto_join_channel = excluded.auto_join_channel,
+    voice_enabled = excluded.voice_enabled,
+    updated_at = strftime('%s', 'now');
+
+-- name: GetGuildsWithAutoJoin :many
+SELECT guild_id, auto_join_channel
+FROM voice_settings
+WHERE auto_join = TRUE;

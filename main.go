@@ -27,6 +27,7 @@ import (
 	"polynux/disgoroq/memory"
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
+	"polynux/disgoroq/voice"
 )
 
 var (
@@ -78,6 +79,7 @@ func main() {
 				gateway.IntentGuilds,
 				gateway.IntentGuildMessages,
 				gateway.IntentMessageContent,
+				gateway.IntentGuildVoiceStates,
 			),
 		),
 	)
@@ -208,8 +210,54 @@ func main() {
 		bot.NewListenerFunc(handlers.HandleGuildLeave),
 	)
 
+	// Initialize voice orchestrator if enabled
+	var voiceOrchestrator *voice.Orchestrator
+	if cfg.Voice.Enabled {
+		// Create STT client
+		sttClient := voice.NewWhisperClient(voice.WhisperConfig{
+			SocketPath: cfg.Voice.STT.SocketPath,
+			Model:      cfg.Voice.STT.Model,
+			Language:   cfg.Voice.STT.Language,
+		})
+
+		// Create TTS client
+		ttsClient := voice.NewTTSHTTPClient(voice.TTSHTTPConfig{
+			Endpoint:     cfg.Voice.TTS.Endpoint,
+			Model:        cfg.Voice.TTS.Model,
+			DefaultVoice: cfg.Voice.TTS.DefaultVoice,
+			SampleRate:   cfg.Voice.TTS.SampleRate,
+			TimeoutMs:    cfg.Voice.TTS.TimeoutMs,
+		})
+
+		// Create orchestrator - TODO: Adapt voice.Orchestrator and handlers.VoiceHandler for disgo client
+		voiceOrchestrator = voice.NewOrchestrator(voice.OrchestratorConfig{
+			STTClient:     sttClient,
+			TTSClient:     ttsClient,
+			AIService:     aiService,
+			MemoryService: memoryService,
+			Client:        client,
+			Repository:    repo,
+			DefaultPrompt: cfg.Bot.DefaultPrompt,
+			VoiceConfig:   cfg.Voice,
+		})
+
+		// Add voice state handler for auto-join - TODO: Adapt for disgo events
+		voiceHandler := handlers.NewVoiceHandler(voiceOrchestrator, repo)
+		// TODO: Add disgo event listeners for voice state updates
+		// client.AddEventListeners(
+		// 	bot.NewListenerFunc(voiceHandler.HandleVoiceStateUpdate),
+		// 	bot.NewListenerFunc(voiceHandler.HandleVoiceServerUpdate),
+		// )
+
+		logger.Info("Voice orchestrator initialized",
+			zap.String("stt_socket", cfg.Voice.STT.SocketPath),
+			zap.String("tts_endpoint", cfg.Voice.TTS.Endpoint))
+	} else {
+		logger.Info("Voice chat disabled by configuration")
+	}
+
 	registry := commands.NewRegistry(client, local)
-	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt)
+	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt, voiceOrchestrator)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		registry.HandleCommand(e)
 	}))
@@ -250,6 +298,13 @@ func main() {
 	<-sc
 
 	logger.Info("Shutting down gracefully")
+
+	// Close voice orchestrator if initialized
+	if voiceOrchestrator != nil {
+		if err := voiceOrchestrator.Close(); err != nil {
+			logger.Error("Error closing voice orchestrator", zap.Error(err))
+		}
+	}
 }
 
 // aiServiceAdapter adapts the existing ai.Service to memory.AIService interface
