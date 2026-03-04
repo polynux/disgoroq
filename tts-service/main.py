@@ -15,10 +15,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.config import VOICE_NAME, VOICE_LIBRARY_DIR
+
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,6 @@ PORT = int(os.getenv("TTS_PORT", "8880"))
 # TTS configuration
 TTS_MODEL = os.getenv("TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
 TTS_BACKEND = os.getenv("TTS_BACKEND", "official")
-VOICE_LIBRARY_DIR = os.getenv("VOICE_LIBRARY_DIR", "/app/voices")
 TTS_WARMUP_ON_START = os.getenv("TTS_WARMUP_ON_START", "false").lower() == "true"
 
 # CORS configuration
@@ -47,11 +47,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"  Backend: {TTS_BACKEND}")
     logger.info("=" * 50)
     logger.info(f"Server starting on http://{HOST}:{PORT}")
-    logger.info(f"API Documentation: http://{HOST if HOST != '0.0.0.0' else 'localhost'}:{PORT}/docs")
+    logger.info(
+        f"API Documentation: http://{HOST if HOST != '0.0.0.0' else 'localhost'}:{PORT}/docs"
+    )
 
     # Pre-load the TTS backend
     try:
         from api.backends import initialize_backend
+
         logger.info(f"Initializing TTS backend: {TTS_BACKEND}")
         backend = await initialize_backend(warmup=TTS_WARMUP_ON_START)
         logger.info(f"TTS backend '{backend.get_backend_name()}' loaded successfully!")
@@ -62,11 +65,17 @@ async def lifespan(app: FastAPI):
             logger.info(f"GPU: {device_info.get('gpu_name')}")
             logger.info(f"VRAM: {device_info.get('vram_total')}")
 
-        # Load custom voices if directory exists
+        # Load custom voices - MUST have at least one voice for voice cloning
         voices_path = Path(VOICE_LIBRARY_DIR)
-        if voices_path.exists():
-            logger.info(f"Loading custom voices from: {VOICE_LIBRARY_DIR}")
-            await backend.load_custom_voices(VOICE_LIBRARY_DIR)
+        if not voices_path.exists():
+            raise RuntimeError(
+                f"Voice directory not found: {VOICE_LIBRARY_DIR}. "
+                "Voice cloning requires at least one voice with reference.wav and reference.txt."
+            )
+
+        logger.info(f"Loading custom voices from: {VOICE_LIBRARY_DIR}")
+        await backend.load_custom_voices(VOICE_LIBRARY_DIR)
+        logger.info(f"Successfully loaded custom voices")
 
     except Exception as e:
         logger.warning(f"Backend initialization delayed: {e}")
@@ -240,17 +249,13 @@ async def unload_model():
         return {"status": "error", "error": str(e)}, 500
 
 
-# Include OpenAI-compatible router
-from api.routers.openai_compatible import router as openai_router
-app.include_router(openai_router, prefix="/v1")
+# Include TTS router
+from api.routers.tts import router as tts_router
+
+app.include_router(tts_router)
 
 
-# Legacy endpoint compatibility for DisgoroQ Go client
-@app.post("/tts/stream")
-async def tts_stream_legacy():
-    """Legacy endpoint - redirects to OpenAI-compatible endpoint."""
-    from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/v1/audio/speech")
+# Legacy endpoint removed - use /v1/tts/generate instead
 
 
 if __name__ == "__main__":

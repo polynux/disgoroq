@@ -17,11 +17,14 @@ services:
       - "8880:8880"
     environment:
       - CUDA_VISIBLE_DEVICES=0
-      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
+      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-Base}
       - TTS_BACKEND=official
       - TTS_PORT=8880
       - TTS_HOST=0.0.0.0
       - VOICE_LIBRARY_DIR=/app/voices
+      - VOICE_NAME=default
+      - TTS_DEFAULT_LANGUAGE=French
+      - TTS_COMPILE_MODEL=false
       - TTS_WARMUP_ON_START=false
     deploy:
       resources:
@@ -32,7 +35,7 @@ services:
               capabilities: [gpu]
     volumes:
       # Persist voice references for voice cloning
-      - ./tts-service/voices:/app/voices
+      - ./voices:/app/voices
       # Cache HuggingFace models (persist across restarts)
       - huggingface-cache:/root/.cache/huggingface
     restart: unless-stopped
@@ -62,12 +65,14 @@ services:
       - "8880:8880"
     environment:
       - CUDA_VISIBLE_DEVICES=0
-      # - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
       - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-1.7B-Base}
       - TTS_BACKEND=official
       - TTS_PORT=8880
       - TTS_HOST=0.0.0.0
       - VOICE_LIBRARY_DIR=/app/voices
+      - VOICE_NAME=default
+      - TTS_DEFAULT_LANGUAGE=French
+      - TTS_COMPILE_MODEL=false
       - TTS_WARMUP_ON_START=false
     deploy:
       resources:
@@ -102,10 +107,13 @@ services:
     ports:
       - "8880:8880"
     environment:
-      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice}
+      - TTS_MODEL=${TTS_MODEL:-Qwen/Qwen3-TTS-12Hz-0.6B-Base}
       - TTS_PORT=8880
       - TTS_HOST=0.0.0.0
       - VOICE_LIBRARY_DIR=/app/voices
+      - VOICE_NAME=default
+      - TTS_DEFAULT_LANGUAGE=French
+      - TTS_COMPILE_MODEL=false
     volumes:
       - ./tts-service/voices:/app/voices
       - huggingface-cache:/root/.cache/huggingface
@@ -174,12 +182,11 @@ volumes:
 #   curl http://localhost:8880/health
 #
 # Test TTS:
-#   curl -X POST http://localhost:8880/v1/audio/speech \
+#   curl -X POST http://localhost:8880/v1/tts/generate \
 #     -H "Content-Type: application/json" \
-#     -d '{"model":"qwen3-tts","voice":"Vivian","input":"Bonjour!"}' \
+#     -d '{"input":"Bonjour!"}' \
 #     --output test.wav
 #
-# Whisper socket location:
-#   - Container: /tmp/sockets/whisper.sock
-#   - Host: Use volume mount or run locally
+# Get loaded voice info:
+#   curl http://localhost:8880/v1/tts/voice
 # =============================================================================

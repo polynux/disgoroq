@@ -18,6 +18,7 @@ require (
 	github.com/young2j/oxmltotext v1.0.3
 	go.uber.org/zap v1.27.1
 	gopkg.in/yaml.v3 v3.0.1
+	layeh.com/gopus v0.0.0-20210501142526-1ee02d434e32
 )
 
 require (
@@ -47,5 +48,4 @@ require (
 	golang.org/x/exp v0.0.0-20240613232115-7f521ea00fb8 // indirect
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
-	layeh.com/gopus v0.0.0-20210501142526-1ee02d434e32 // indirect
 )

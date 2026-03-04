@@ -3,7 +3,6 @@ package voice
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,63 +34,48 @@ type TTSHTTPClient struct {
 
 // TTSHTTPConfig contains configuration for the TTS HTTP client.
 type TTSHTTPConfig struct {
-	Endpoint       string
-	Model          string
-	DefaultVoice   string
-	SampleRate     int
-	TimeoutMs      int
+	Endpoint        string
+	Model           string
+	DefaultVoice    string
+	SampleRate      int
+	TimeoutMs       int
 	DefaultRefAudio string // Path to default reference audio file for voice cloning
 	DefaultRefText  string // Default reference text transcript
 }
 
-// OpenAISpeechRequest represents an OpenAI-compatible TTS request.
-type OpenAISpeechRequest struct {
-	Model            string                 `json:"model"`
-	Input            string                 `json:"input"`
-	Voice            string                 `json:"voice"`
-	ResponseFormat   string                 `json:"response_format,omitempty"`
-	Speed            float64                `json:"speed,omitempty"`
-	Language         string                 `json:"language,omitempty"`
-	Instruct         string                 `json:"instruct,omitempty"`
-	Normalization    *NormalizationOptions `json:"normalization_options,omitempty"`
-}
-
-// VoiceCloneRequest represents a voice cloning request.
-type VoiceCloneRequest struct {
-	Input             string                 `json:"input"`
-	RefAudio          string                 `json:"ref_audio"`           // Base64-encoded audio
-	RefText           string                 `json:"ref_text,omitempty"`   // Transcript of reference audio
-	XVectorOnlyMode   bool                   `json:"x_vector_only_mode"`   // If true, no ref_text needed
-	Language          string                 `json:"language,omitempty"`
-	ResponseFormat    string                 `json:"response_format,omitempty"`
-	Speed            float64                `json:"speed,omitempty"`
-	Normalization    *NormalizationOptions `json:"normalization_options,omitempty"`
+// TTSGenerateRequest represents a TTS generation request.
+type TTSGenerateRequest struct {
+	Input          string                `json:"input"`
+	ResponseFormat string                `json:"response_format,omitempty"`
+	Speed          float64               `json:"speed,omitempty"`
+	Language       string                `json:"language,omitempty"`
+	Normalization  *NormalizationOptions `json:"normalization_options,omitempty"`
 }
 
 // NormalizationOptions contains text normalization settings.
 type NormalizationOptions struct {
-	Normalize                   bool `json:"normalize"`
-	UnitNormalization          bool `json:"unit_normalization"`
-	URLNormalization           bool `json:"url_normalization"`
-	EmailNormalization         bool `json:"email_normalization"`
-	OptionalPluralizationNorm   bool `json:"optional_pluralization_normalization"`
-	PhoneNormalization         bool `json:"phone_normalization"`
-	ReplaceRemainingSymbols    bool `json:"replace_remaining_symbols"`
+	Normalize                 bool `json:"normalize"`
+	UnitNormalization         bool `json:"unit_normalization"`
+	URLNormalization          bool `json:"url_normalization"`
+	EmailNormalization        bool `json:"email_normalization"`
+	OptionalPluralizationNorm bool `json:"optional_pluralization_normalization"`
+	PhoneNormalization        bool `json:"phone_normalization"`
+	ReplaceRemainingSymbols   bool `json:"replace_remaining_symbols"`
 }
 
 // VoiceInfo represents voice information from the API.
 type VoiceInfo struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Language    string `json:"language,omitempty"`
-	Description string `json:"description,omitempty"`
+	VoiceName       string   `json:"voice_name"`
+	AvailableVoices []string `json:"available_voices"`
+	Language        string   `json:"language"`
+	Mode            string   `json:"mode"`
 }
 
 // VRAMResponse represents VRAM status.
 type VRAMResponse struct {
-	TotalMB    int64 `json:"total_mb"`
-	UsedMB     int64 `json:"used_mb"`
-	FreeMB     int64 `json:"free_mb"`
+	TotalMB     int64 `json:"total_mb"`
+	UsedMB      int64 `json:"used_mb"`
+	FreeMB      int64 `json:"free_mb"`
 	ModelLoaded bool  `json:"model_loaded"`
 }
 
@@ -137,51 +121,38 @@ func NewTTSHTTPClient(config TTSHTTPConfig) *TTSHTTPClient {
 	return client
 }
 
-// Stream generates audio from text and returns a stream of audio data.
-// Uses OpenAI-compatible /v1/audio/speech endpoint.
+// Stream generates audio from text using the pre-loaded custom voice.
+// Uses the simplified /v1/tts/generate endpoint.
 func (c *TTSHTTPClient) Stream(ctx context.Context, req *TTSRequest) (io.ReadCloser, error) {
 	c.mu.RLock()
 	endpoint := c.endpoint
 	c.mu.RUnlock()
 
-	// Build OpenAI-compatible request
-	openaiReq := OpenAISpeechRequest{
-		Model:          c.model,
+	// Build TTS request
+	ttsReq := TTSGenerateRequest{
 		Input:          req.Text,
-		Voice:          req.VoiceID,
-		ResponseFormat: "wav", // Use WAV for best compatibility
+		ResponseFormat: "wav",
 		Speed:          1.0,
-		Language:       "French", // Default to French for DisgoroQ
+		Language:       "French",
 		Normalization: &NormalizationOptions{
-			Normalize:                   true,
-			UnitNormalization:          true,
-			URLNormalization:           true,
-			EmailNormalization:         true,
-			OptionalPluralizationNorm:  true,
-			PhoneNormalization:          true,
-			ReplaceRemainingSymbols:     true,
+			Normalize:                 true,
+			UnitNormalization:         true,
+			URLNormalization:          true,
+			EmailNormalization:        true,
+			OptionalPluralizationNorm: true,
+			PhoneNormalization:        true,
+			ReplaceRemainingSymbols:   true,
 		},
 	}
 
-	// Use default voice if not specified
-	if openaiReq.Voice == "" {
-		openaiReq.Voice = c.defaultVoice
-	}
-
-	// Check if we have voice cloning reference
-	if req.SpeakerRef != "" && req.SpeakerText != "" {
-		// Use voice cloning endpoint instead
-		return c.streamVoiceClone(ctx, req)
-	}
-
-	jsonBody, err := json.Marshal(openaiReq)
+	jsonBody, err := json.Marshal(ttsReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	// Create HTTP request
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		endpoint+"/v1/audio/speech", bytes.NewReader(jsonBody))
+		endpoint+"/v1/tts/generate", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -209,66 +180,7 @@ func (c *TTSHTTPClient) Stream(ctx context.Context, req *TTSRequest) (io.ReadClo
 	c.mu.Unlock()
 
 	logger.Debug("TTS stream started",
-		zap.String("text", truncateText(req.Text, 50)),
-		zap.String("voice", openaiReq.Voice))
-
-	return resp.Body, nil
-}
-
-// streamVoiceClone generates speech using voice cloning.
-func (c *TTSHTTPClient) streamVoiceClone(ctx context.Context, req *TTSRequest) (io.ReadCloser, error) {
-	c.mu.RLock()
-	endpoint := c.endpoint
-	c.mu.RUnlock()
-
-	// Read reference audio file
-	refAudioData, err := readFile(req.SpeakerRef)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read reference audio: %w", err)
-	}
-
-	// Build voice clone request
-	cloneReq := VoiceCloneRequest{
-		Input:           req.Text,
-		RefAudio:        base64.StdEncoding.EncodeToString(refAudioData),
-		RefText:         req.SpeakerText,
-		XVectorOnlyMode: req.SpeakerText == "", // Use x-vector mode if no transcript
-		Language:        "French",
-		ResponseFormat:  "wav",
-		Speed:           1.0,
-		Normalization: &NormalizationOptions{
-			Normalize:                   true,
-			UnitNormalization:          true,
-			URLNormalization:           true,
-			EmailNormalization:         true,
-			OptionalPluralizationNorm:  true,
-			PhoneNormalization:          true,
-			ReplaceRemainingSymbols:     true,
-		},
-	}
-
-	jsonBody, err := json.Marshal(cloneReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		endpoint+"/v1/audio/voice-clone", bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("voice clone request failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("voice clone service returned status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
+		zap.String("text", truncateText(req.Text, 50)))
 
 	return resp.Body, nil
 }
@@ -399,58 +311,29 @@ func (c *TTSHTTPClient) Health(ctx context.Context) error {
 	return nil
 }
 
-// ListVoices returns the list of available voices.
-func (c *TTSHTTPClient) ListVoices(ctx context.Context) ([]VoiceInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint+"/v1/audio/voices", nil)
+// GetVoice returns information about the loaded voice.
+func (c *TTSHTTPClient) GetVoice(ctx context.Context) (*VoiceInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint+"/v1/tts/voice", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list voices: %w", err)
+		return nil, fmt.Errorf("failed to get voice: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("voices endpoint returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("voice endpoint returned status %d", resp.StatusCode)
 	}
 
-	var result struct {
-		Voices []VoiceInfo `json:"voices"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode voices response: %w", err)
+	var voiceInfo VoiceInfo
+	if err := json.NewDecoder(resp.Body).Decode(&voiceInfo); err != nil {
+		return nil, fmt.Errorf("failed to decode voice response: %w", err)
 	}
 
-	return result.Voices, nil
-}
-
-// SupportsVoiceCloning checks if the backend supports voice cloning.
-func (c *TTSHTTPClient) SupportsVoiceCloning(ctx context.Context) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.endpoint+"/v1/audio/voice-clone/capabilities", nil)
-	if err != nil {
-		return false, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("failed to check capabilities: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, nil // Assume not supported if endpoint fails
-	}
-
-	var result struct {
-		Supported bool `json:"supported"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return false, fmt.Errorf("failed to decode capabilities response: %w", err)
-	}
-
-	return result.Supported, nil
+	return &voiceInfo, nil
 }
 
 // Generate generates complete audio for text and returns it as a byte slice.

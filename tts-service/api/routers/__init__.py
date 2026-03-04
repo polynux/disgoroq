@@ -4,6 +4,6 @@
 API routers package.
 """
 
-from .openai_compatible import router as openai_router
+from .tts import router as tts_router
 
-__all__ = ["openai_router"]
+__all__ = ["tts_router"]

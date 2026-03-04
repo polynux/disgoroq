@@ -14,8 +14,14 @@ from typing import Optional, Tuple, List, Dict, Any
 import numpy as np
 
 from .base import TTSBackend
+from ..config import TTS_COMPILE_MODEL, TTS_DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
+
+# Generation parameters - use model's internal defaults
+# The model's _merge_generate_kwargs() handles defaults automatically
+# Only override if you need specific behavior
+GENERATION_DEFAULTS = {}
 
 # OpenAI voice aliases that must not collide with custom voice names.
 # Hardcoded here to avoid circular imports with the router module.
@@ -32,6 +38,7 @@ _VOICE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # Optional librosa import for speed adjustment
 try:
     import librosa
+
     LIBROSA_AVAILABLE = True
 except ImportError:
     LIBROSA_AVAILABLE = False
@@ -39,28 +46,28 @@ except ImportError:
 
 class OfficialQwen3TTSBackend(TTSBackend):
     """Official Qwen3-TTS backend using the qwen_tts package."""
-    
+
     def __init__(self, model_name: str = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"):
         """
         Initialize the official backend.
-        
+
         Args:
             model_name: HuggingFace model identifier
         """
         super().__init__()
         self.model_name = model_name
         self._ready = False
-    
+
     async def initialize(self) -> None:
         """Initialize the backend and load the model."""
         if self._ready:
             logger.info("Official backend already initialized")
             return
-        
+
         try:
             import torch
             from qwen_tts import Qwen3TTSModel
-            
+
             # Determine device
             if torch.cuda.is_available():
                 self.device = "cuda:0"
@@ -68,8 +75,10 @@ class OfficialQwen3TTSBackend(TTSBackend):
             else:
                 self.device = "cpu"
                 self.dtype = torch.float32
-            
-            logger.info(f"Loading Qwen3-TTS model '{self.model_name}' on {self.device}...")
+
+            logger.info(
+                f"Loading Qwen3-TTS model '{self.model_name}' on {self.device}..."
+            )
 
             # Try loading with Flash Attention 2, fallback to SDPA or eager if not supported
             # (e.g., RTX 5090/Blackwell GPUs don't have pre-built flash-attn wheels yet)
@@ -98,7 +107,9 @@ class OfficialQwen3TTSBackend(TTSBackend):
             if not model_loaded:
                 # If GPU loading failed completely, try CPU as last resort
                 if self.device != "cpu":
-                    logger.warning("All GPU attention implementations failed. Falling back to CPU...")
+                    logger.warning(
+                        "All GPU attention implementations failed. Falling back to CPU..."
+                    )
                     self.device = "cpu"
                     self.dtype = torch.float32
                     try:
@@ -108,45 +119,54 @@ class OfficialQwen3TTSBackend(TTSBackend):
                             dtype=self.dtype,
                             attn_implementation="eager",
                         )
-                        logger.info("Successfully loaded model on CPU (GPU not compatible)")
+                        logger.info(
+                            "Successfully loaded model on CPU (GPU not compatible)"
+                        )
                         model_loaded = True
                     except Exception as cpu_error:
                         raise RuntimeError(f"Failed to load model on CPU: {cpu_error}")
                 else:
-                    raise RuntimeError(f"Failed to load model with any attention implementation. Last error: {last_error}")
+                    raise RuntimeError(
+                        f"Failed to load model with any attention implementation. Last error: {last_error}"
+                    )
 
-            # Apply torch.compile() optimization for faster inference
-            if torch.cuda.is_available() and hasattr(torch, 'compile'):
+            # Apply torch.compile() optimization for faster inference (optional)
+            if (
+                TTS_COMPILE_MODEL
+                and torch.cuda.is_available()
+                and hasattr(torch, "compile")
+            ):
                 logger.info("Applying torch.compile() optimization...")
                 try:
-                    # Compile the model with reduce-overhead mode for faster inference
                     self.model.model = torch.compile(
                         self.model.model,
-                        mode="reduce-overhead",  # Optimize for inference speed
-                        fullgraph=False,  # Allow graph breaks for compatibility
+                        mode="default",
+                        fullgraph=False,
                     )
                     logger.info("torch.compile() optimization applied successfully")
                 except Exception as e:
                     logger.warning(f"Could not apply torch.compile(): {e}")
-            
+
             # Enable cuDNN benchmarking for optimal convolution algorithms
             if torch.cuda.is_available():
                 torch.backends.cudnn.benchmark = True
                 logger.info("Enabled cuDNN benchmark mode")
-            
+
             # Enable TF32 for faster matmul on Ampere+ GPUs (RTX 30xx/40xx)
             if torch.cuda.is_available():
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
                 logger.info("Enabled TF32 precision for faster matmul")
-            
+
             self._ready = True
-            logger.info(f"Official Qwen3-TTS backend loaded successfully on {self.device}")
-            
+            logger.info(
+                f"Official Qwen3-TTS backend loaded successfully on {self.device}"
+            )
+
         except Exception as e:
             logger.error(f"Failed to load official TTS backend: {e}")
             raise RuntimeError(f"Failed to initialize official TTS backend: {e}")
-    
+
     async def generate_speech(
         self,
         text: str,
@@ -194,7 +214,9 @@ class OfficialQwen3TTSBackend(TTSBackend):
 
             # Apply speed adjustment if needed
             if speed != 1.0 and LIBROSA_AVAILABLE:
-                audio = librosa.effects.time_stretch(audio.astype(np.float32), rate=speed)
+                audio = librosa.effects.time_stretch(
+                    audio.astype(np.float32), rate=speed
+                )
             elif speed != 1.0:
                 logger.warning("Speed adjustment requested but librosa not available")
 
@@ -203,15 +225,15 @@ class OfficialQwen3TTSBackend(TTSBackend):
         except Exception as e:
             logger.error(f"Speech generation failed: {e}")
             raise RuntimeError(f"Speech generation failed: {e}")
-    
+
     def get_backend_name(self) -> str:
         """Return the name of this backend."""
         return "official"
-    
+
     def get_model_id(self) -> str:
         """Return the model identifier."""
         return self.model_name
-    
+
     def get_supported_voices(self) -> List[str]:
         """Return list of supported voice names, including custom voices."""
         # Base models only support custom (cloned) voices
@@ -222,12 +244,19 @@ class OfficialQwen3TTSBackend(TTSBackend):
             voices = ["Vivian", "Ryan", "Sophia", "Isabella", "Evan", "Lily"]
         else:
             try:
-                if hasattr(self.model.model, 'get_supported_speakers'):
+                if hasattr(self.model.model, "get_supported_speakers"):
                     speakers = self.model.model.get_supported_speakers()
                     if speakers:
                         voices = list(speakers)
                     else:
-                        voices = ["Vivian", "Ryan", "Sophia", "Isabella", "Evan", "Lily"]
+                        voices = [
+                            "Vivian",
+                            "Ryan",
+                            "Sophia",
+                            "Isabella",
+                            "Evan",
+                            "Lily",
+                        ]
                 else:
                     voices = ["Vivian", "Ryan", "Sophia", "Isabella", "Evan", "Lily"]
             except Exception as e:
@@ -236,30 +265,50 @@ class OfficialQwen3TTSBackend(TTSBackend):
 
         voices.extend(self._custom_voices.keys())
         return voices
-    
+
     def get_supported_languages(self) -> List[str]:
         """Return list of supported language names."""
         if not self._ready or not self.model:
             # Return default languages when model is not loaded
-            return ["English", "Chinese", "Japanese", "Korean", "German", "French", 
-                    "Spanish", "Russian", "Portuguese", "Italian"]
-        
+            return [
+                "English",
+                "Chinese",
+                "Japanese",
+                "Korean",
+                "German",
+                "French",
+                "Spanish",
+                "Russian",
+                "Portuguese",
+                "Italian",
+            ]
+
         try:
-            if hasattr(self.model.model, 'get_supported_languages'):
+            if hasattr(self.model.model, "get_supported_languages"):
                 languages = self.model.model.get_supported_languages()
                 if languages:
                     return list(languages)
         except Exception as e:
             logger.warning(f"Could not get languages from model: {e}")
-        
+
         # Fallback to default languages
-        return ["English", "Chinese", "Japanese", "Korean", "German", "French", 
-                "Spanish", "Russian", "Portuguese", "Italian"]
-    
+        return [
+            "English",
+            "Chinese",
+            "Japanese",
+            "Korean",
+            "German",
+            "French",
+            "Spanish",
+            "Russian",
+            "Portuguese",
+            "Italian",
+        ]
+
     def is_ready(self) -> bool:
         """Return whether the backend is initialized and ready."""
         return self._ready
-    
+
     def get_device_info(self) -> Dict[str, Any]:
         """Return device information."""
         info = {
@@ -315,7 +364,7 @@ class OfficialQwen3TTSBackend(TTSBackend):
         ref_audio: np.ndarray,
         ref_audio_sr: int,
         ref_text: Optional[str] = None,
-        language: str = "Auto",
+        language: str = TTS_DEFAULT_LANGUAGE,
         x_vector_only_mode: bool = False,
         speed: float = 1.0,
     ) -> Tuple[np.ndarray, int]:
@@ -328,7 +377,7 @@ class OfficialQwen3TTSBackend(TTSBackend):
             ref_audio_sr: Sample rate of reference audio
             ref_text: Transcript of reference audio (required for ICL mode)
             language: Language code (e.g., "English", "Chinese", "Auto")
-            x_vector_only_mode: If True, use x-vector only (no ref_text needed)
+            x_vector_only_mode: Ignored - ICL mode is always used
             speed: Speech speed multiplier (0.25 to 4.0)
 
         Returns:
@@ -343,22 +392,31 @@ class OfficialQwen3TTSBackend(TTSBackend):
                 "The current model does not support voice cloning."
             )
 
+        # Force ICL mode - x_vector_only_mode parameter is ignored
+        if x_vector_only_mode:
+            logger.warning(
+                "x_vector_only_mode=True is not supported. Using ICL mode (x_vector_only_mode=False). "
+                "Ensure reference transcript is provided for best quality."
+            )
+        x_vector_only_mode = False
+
         try:
-            # Call the model's voice cloning method
-            # ref_audio expects a tuple of (waveform, sample_rate)
             wavs, sr = self.model.generate_voice_clone(
                 text=text,
                 ref_audio=(ref_audio, ref_audio_sr),
                 ref_text=ref_text,
                 language=language,
                 x_vector_only_mode=x_vector_only_mode,
+                **GENERATION_DEFAULTS,
             )
 
             audio = wavs[0]
 
             # Apply speed adjustment if needed
             if speed != 1.0 and LIBROSA_AVAILABLE:
-                audio = librosa.effects.time_stretch(audio.astype(np.float32), rate=speed)
+                audio = librosa.effects.time_stretch(
+                    audio.astype(np.float32), rate=speed
+                )
             elif speed != 1.0:
                 logger.warning("Speed adjustment requested but librosa not available")
 
@@ -425,13 +483,13 @@ class OfficialQwen3TTSBackend(TTSBackend):
                     break
 
             if ref_audio_path is None:
-                logger.warning(
+                raise RuntimeError(
                     f"No reference audio found in '{voice_name}/' "
-                    f"(expected reference.{{wav,mp3,m4a,flac,ogg}}). Skipping."
+                    f"(expected reference.{{wav,mp3,m4a,flac,ogg}}). "
+                    "Voice requires reference audio to load."
                 )
-                continue
 
-            # Read optional reference text
+            # Require reference text for ICL mode
             ref_text_path = entry / "reference.txt"
             ref_text = None
             if ref_text_path.exists():
@@ -439,7 +497,15 @@ class OfficialQwen3TTSBackend(TTSBackend):
                 if text_content:
                     ref_text = text_content
 
-            x_vector_only_mode = ref_text is None
+            if ref_text is None:
+                raise RuntimeError(
+                    f"No transcript found for voice '{voice_name}'. "
+                    f"ICL mode requires reference.txt with transcript text. "
+                    "Voice cloning without transcript is not supported."
+                )
+
+            # Always use ICL mode (x_vector_only_mode=False)
+            x_vector_only_mode = False
 
             # Check for cached prompt
             cache_path = entry / ".cached_prompt.pt"
@@ -481,13 +547,17 @@ class OfficialQwen3TTSBackend(TTSBackend):
         if loaded:
             logger.info(f"Loaded {len(loaded)} custom voice(s): {loaded}")
         else:
-            logger.info("No custom voices loaded")
+            raise RuntimeError(
+                f"No custom voices found in {custom_voices_dir}. "
+                "Voice cloning requires at least one voice with reference.wav and reference.txt. "
+                "Please add a voice to the voices directory."
+            )
 
     async def generate_speech_with_custom_voice(
         self,
         text: str,
         voice: str,
-        language: str = "Auto",
+        language: str = TTS_DEFAULT_LANGUAGE,
         speed: float = 1.0,
     ) -> Tuple[np.ndarray, int]:
         """Generate speech using a custom cloned voice."""
@@ -503,14 +573,26 @@ class OfficialQwen3TTSBackend(TTSBackend):
                 text=text,
                 language=language,
                 voice_clone_prompt=prompt_items,
-                non_streaming_mode=True,  # More consistent generation
+                **GENERATION_DEFAULTS,
             )
 
             audio = wavs[0]
 
+            # Log generation info
+            duration = len(audio) / sr
+            logger.info(
+                f"Generated audio: duration={duration:.2f}s, samples={len(audio)}, sr={sr}"
+            )
+            if duration < 0.5:
+                logger.warning(
+                    f"Very short audio generated: {duration:.2f}s for text: {text[:50]}..."
+                )
+
             # Apply speed adjustment if needed
             if speed != 1.0 and LIBROSA_AVAILABLE:
-                audio = librosa.effects.time_stretch(audio.astype(np.float32), rate=speed)
+                audio = librosa.effects.time_stretch(
+                    audio.astype(np.float32), rate=speed
+                )
             elif speed != 1.0:
                 logger.warning("Speed adjustment requested but librosa not available")
 

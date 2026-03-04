@@ -23,7 +23,9 @@ Options: 'official', 'vllm', 'pytorch', 'openvino'
 - 'openvino': Experimental OpenVINO backend for Intel CPUs/NPUs
 """
 
-TTS_MODEL_ID = os.getenv("TTS_MODEL_ID", os.getenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"))
+TTS_MODEL_ID = os.getenv(
+    "TTS_MODEL_ID", os.getenv("TTS_MODEL_NAME", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+)
 """
 Model identifier for HuggingFace.
 Examples: 
@@ -84,7 +86,9 @@ Recommended: 1-2 for most cases.
 """
 
 # Optional: Set OpenMP/MKL threads (applied at import time)
-if TTS_DEVICE == "cpu" or (TTS_DEVICE == "auto" and not os.getenv("CUDA_VISIBLE_DEVICES")):
+if TTS_DEVICE == "cpu" or (
+    TTS_DEVICE == "auto" and not os.getenv("CUDA_VISIBLE_DEVICES")
+):
     os.environ.setdefault("OMP_NUM_THREADS", str(CPU_THREADS))
     os.environ.setdefault("MKL_NUM_THREADS", str(CPU_THREADS))
 
@@ -137,13 +141,47 @@ Requires: pip install intel-extension-for-pytorch
 if USE_IPEX and TTS_DEVICE in ("cpu", "auto"):
     try:
         import intel_extension_for_pytorch as ipex
+
         IPEX_AVAILABLE = True
     except ImportError:
         IPEX_AVAILABLE = False
         import logging
+
         logging.getLogger(__name__).warning(
             "USE_IPEX=true but intel-extension-for-pytorch is not installed. "
             "Install with: pip install intel-extension-for-pytorch"
         )
 else:
     IPEX_AVAILABLE = False
+
+# ============================================================================
+# TTS Generation Settings
+# ============================================================================
+
+TTS_COMPILE_MODEL = os.getenv("TTS_COMPILE_MODEL", "false").lower() == "true"
+"""
+Whether to apply torch.compile() optimization.
+Default: false (can cause tensor shape issues with reduce-overhead mode)
+"""
+
+TTS_DEFAULT_LANGUAGE = os.getenv("TTS_DEFAULT_LANGUAGE", "French")
+"""
+Default language for TTS generation.
+Examples: English, Chinese, Japanese, Korean, German, French, Spanish, Russian, Portuguese, Italian
+"""
+
+VOICE_NAME = os.getenv("VOICE_NAME", "default")
+"""
+Name of the voice subdirectory under VOICE_LIBRARY_DIR.
+Default: 'default' (loads from voices/default/)
+"""
+
+# ============================================================================
+# Voice Library Settings
+# ============================================================================
+
+VOICE_LIBRARY_DIR = os.getenv("VOICE_LIBRARY_DIR", "/app/voices")
+"""
+Directory containing voice libraries.
+Each subdirectory should contain reference.wav and reference.txt.
+"""

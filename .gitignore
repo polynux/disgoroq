@@ -3,3 +3,34 @@
 build/
 tmp/
 disgoroq
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test files
+test*.wav
+test*.mp3
+output*.mp3
+out*.mp3
+
+# OpenCode
+.opencode/
+
+# Claude
+CLAUDE.md
+
+# Misc
+config.yaml
+scripts/
