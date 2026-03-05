@@ -1,60 +1,66 @@
 package scheduler
 
 import (
-	"context"
+	stdcontext "context"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
 
 func (s *Scheduler) SendFartingFriday() {
-	embed := &discordgo.MessageEmbed{
+	falseVal := false
+	trueVal := true
+	embed := discord.Embed{
 		Title:       "🎉 FARTING FRIDAY NOTIFICATION 🎉",
-		Description: "@everyone Heeeeeeyyyyyy les amis du bruit de fond !!! 💨💨💨",
+		Description: "@everyone Heeeeeeyyyyyy les amis du bruit de fond !!! 💨💨͢",
 		Color:       0x8B4513,
-		Fields: []*discordgo.MessageEmbedField{
+		Fields: []discord.EmbedField{
 			{
 				Name:   "🌈✨ JOYEUX FARTING FRIDAY À TOUS LES PÉTOMANES EN HERBE ✨🌈",
 				Value:  "Que vos flatulences soient mélodieuses et vos pets harmonieux en ce jour béni où nous célébrons l'art ancestral du prout ! 🎵💨",
-				Inline: false,
+				Inline: &falseVal,
 			},
 			{
 				Name:   "Rappel Important",
 				Value:  "N'oubliez pas : aujourd'hui, c'est pas juste permis, c'est ENCOURAGÉ de lâcher la pression atmosphérique !! 🌪️🌬️",
-				Inline: false,
+				Inline: &falseVal,
 			},
 			{
 				Name:   "Conseil du jour 💡",
 				Value:  "Mangez des haricots pour un boost de performance ! 🫘💪",
-				Inline: true,
+				Inline: &trueVal,
 			},
 			{
 				Name:   "Astuce pro 🧠",
 				Value:  "\"Qui prout dans l'eau fait des bulles, qui prout dans le vent fait du parfum\"",
-				Inline: true,
+				Inline: &trueVal,
 			},
 		},
-		Footer: &discordgo.MessageEmbedFooter{
+		Footer: &discord.EmbedFooter{
 			Text: "*pffffrrrrrttttt* 💨 (c'était ma signature olfactive)",
 		},
-		Thumbnail: &discordgo.MessageEmbedThumbnail{
+		Thumbnail: &discord.EmbedResource{
 			URL: "https://media.discordapp.net/attachments/1194331990506356780/1362866990980796576/fartfireani.gif?ex=6803f44b&is=6802a2cb&hm=ecbbe318aa782a48b1ee9d1454b10870009bde37e96dcc470337a52d965271af&=",
 		},
-		Image: &discordgo.MessageEmbedImage{
+		Image: &discord.EmbedResource{
 			URL: "https://media.discordapp.net/attachments/1194331990506356780/1362860968891384119/fartin.gif?ex=6803eeaf&is=68029d2f&hm=120759b2a6258432922d9e61239288ab3226dc925c86009e0402298c6b0e3df5&=",
 		},
 	}
 
-	guilds, err := s.repo.GetAllGuilds(context.Background())
+	guilds, err := s.repo.GetAllGuilds(stdcontext.Background())
 	if err != nil {
 		logger.Error("Error getting guilds", zap.Error(err))
 		return
 	}
 
 	for _, guild := range guilds {
-		channelID, err := s.repo.GetFartingFridayChannel(context.Background(), guild)
+		ctx := stdcontext.Background()
+
+		channelID, err := s.repo.GetFartingFridayChannel(ctx, guild)
 		if err != nil {
 			logger.Error("Error getting farting friday channel",
 				zap.Error(err),
@@ -63,13 +69,13 @@ func (s *Scheduler) SendFartingFriday() {
 			continue
 		}
 
-		_, err = s.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{
 			Content: "🔊 **FARTING FRIDAY EST ARRIVÉ!** 💨 [Cliquez pour entendre le son légendaire](https://www.myinstants.com/en/instant/wet-fart-11093/)",
-			Embed:   embed,
-			AllowedMentions: &discordgo.MessageAllowedMentions{
-				Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeEveryone},
+			Embeds:  []discord.Embed{embed},
+			AllowedMentions: &discord.AllowedMentions{
+				Parse: []discord.AllowedMentionType{discord.AllowedMentionTypeEveryone},
 			},
-		})
+		}, rest.WithCtx(ctx))
 
 		if err != nil {
 			logger.Error("Error sending farting friday",

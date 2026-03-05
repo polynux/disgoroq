@@ -1,9 +1,12 @@
 package scheduler
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
@@ -21,15 +24,15 @@ func (s *Scheduler) SendHoroscope() {
 
 	instructions := `Tu es un créateur d'horoscope DÉLIRANT 🤪. Pour chaque horoscope que tu recevras:
 
-1. Transforme-le en version ULTRA GOOFY avec des prédictions absurdes et exagérées 🥴
-2. Limite ta réponse à 2-3 phrases MAXIMUM par thème
-3. Saupoudre GÉNÉREUSEMENT d'émojis loufoques (🤪, 👽, 🧠, 🌮, etc.)
-4. Utilise un langage décalé et des métaphores ridicules
-5. Inclus toujours le signe astrologique en gras au début: "**SIGNE**"
-6. Termine par une "recommandation cosmique" totalement farfelue
-7. Évite tout conseil sérieux - plus c'est absurde, mieux c'est!
+ 1. Transforme-le en version ULTRA GOOFY avec des prédictions absurdes et exagérées 🥴
+ 2. Limite ta réponse à 2-3 phrases MAXIMUM par thème
+ 3. Saupoudre GÉNÉREUSEMENT d'émojis loufoques (🤪, 👽, 🧠, 🌮, etc.)
+ 4. Utilise un langage décalé et des métaphores ridicules
+ 5. Inclus toujours le signe astrologique en gras au début: "**SIGNE**"
+ 6. Termine par une "recommandation cosmique" totalement farfelue
+ 7. Évite tout conseil sérieux - plus c'est absurde, mieux c'est!
 
-Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
+ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
 	// Check if emoji inclusion is enabled from config
 	includeEmojis := s.horoscopeCfg.IncludeEmojis
@@ -47,7 +50,7 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 		}
 	}
 
-	response, err := s.aiservice.Chat(context.Background(), &ai.ChatRequest{
+	response, err := s.aiservice.Chat(stdcontext.Background(), &ai.ChatRequest{
 		SystemPrompt: instructions,
 		Messages: []ai.Message{
 			{
@@ -80,14 +83,16 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 		responses = append(responses, response.Content)
 	}
 
-	guilds, err := s.repo.GetAllGuilds(context.Background())
+	guilds, err := s.repo.GetAllGuilds(stdcontext.Background())
 	if err != nil {
 		logger.Error("Error getting guilds", zap.Error(err))
 		return
 	}
 
 	for _, guild := range guilds {
-		channelID, err := s.repo.GetHoroscopeChannel(context.Background(), guild)
+		ctx := stdcontext.Background()
+
+		channelID, err := s.repo.GetHoroscopeChannel(ctx, guild)
 		if err != nil {
 			logger.Error("Error getting horoscope channel",
 				zap.Error(err),
@@ -95,7 +100,7 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 			)
 			continue
 		}
-		_, err = s.session.ChannelMessageSend(channelID, "Horoscope du jour:")
+		_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{Content: "Horoscope du jour:"}, rest.WithCtx(ctx))
 		if err != nil {
 			logger.Error("Error sending horoscope header",
 				zap.Error(err),
@@ -105,7 +110,7 @@ Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour vo
 			continue
 		}
 		for _, value := range responses {
-			_, err = s.session.ChannelMessageSend(channelID, value)
+			_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{Content: value}, rest.WithCtx(ctx))
 			if err != nil {
 				logger.Error("Error sending horoscope content",
 					zap.Error(err),

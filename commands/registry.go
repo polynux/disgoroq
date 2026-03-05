@@ -1,70 +1,95 @@
 package commands
 
 import (
-	"github.com/bwmarrin/discordgo"
+	stdcontext "context"
+
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
 
 type Registry struct {
-	session  *discordgo.Session
-	commands []*discordgo.ApplicationCommand
-	handlers map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate)
+	client   *bot.Client
+	commands []discord.ApplicationCommandCreate
+	handlers map[string]func(e *events.ApplicationCommandInteractionCreate)
 	local    bool
 }
 
-func NewRegistry(session *discordgo.Session, local bool) *Registry {
+func NewRegistry(client *bot.Client, local bool) *Registry {
 	return &Registry{
-		session:  session,
-		commands: make([]*discordgo.ApplicationCommand, 0),
-		handlers: make(map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate)),
+		client:   client,
+		commands: make([]discord.ApplicationCommandCreate, 0),
+		handlers: make(map[string]func(e *events.ApplicationCommandInteractionCreate)),
 		local:    local,
 	}
 }
 
-func (r *Registry) AddCommand(cmd *discordgo.ApplicationCommand, handler func(s *discordgo.Session, i *discordgo.InteractionCreate)) {
+func (r *Registry) AddCommand(cmd discord.ApplicationCommandCreate, handler func(e *events.ApplicationCommandInteractionCreate)) {
 	r.commands = append(r.commands, cmd)
-	r.handlers[cmd.Name] = handler
+	name := ""
+	switch c := cmd.(type) {
+	case discord.SlashCommandCreate:
+		name = c.Name
+	case discord.UserCommandCreate:
+		name = c.Name
+	case discord.MessageCommandCreate:
+		name = c.Name
+	}
+	r.handlers[name] = handler
 }
 
-func (r *Registry) Register() error {
-	_, err := r.session.ApplicationCommandBulkOverwrite(r.session.State.User.ID, "", r.commands)
+func (r *Registry) Register(ctx stdcontext.Context) error {
+	commands, err := r.client.Rest.SetGlobalCommands(r.client.ID(), r.commands, rest.WithCtx(ctx))
 	if err != nil {
 		logger.Error("Error registering commands", zap.Error(err), zap.Int("count", len(r.commands)))
 		return err
 	}
-	logger.Info("Commands registered successfully", zap.Int("count", len(r.commands)))
+	logger.Info("Commands registered successfully", zap.Int("count", len(commands)))
 	return nil
 }
 
-func (r *Registry) HandleCommand(i *discordgo.InteractionCreate) {
-	data := i.ApplicationCommandData()
-	handler, ok := r.handlers[data.Name]
+func (r *Registry) HandleCommand(e *events.ApplicationCommandInteractionCreate) {
+	data := e.SlashCommandInteractionData()
+
+	handler, ok := r.handlers[data.CommandName()]
 	if !ok {
 		userID := ""
-		if i.Member != nil && i.Member.User != nil {
-			userID = i.Member.User.ID
+		if e.Member() != nil {
+			userID = e.Member().User.ID.String()
+		}
+
+		guildIDStr := ""
+		if e.GuildID() != nil {
+			guildIDStr = e.GuildID().String()
 		}
 
 		logger.Warn("Unknown command received",
-			zap.String("command", data.Name),
-			zap.String("guild_id", i.GuildID),
+			zap.String("command", data.CommandName()),
+			zap.String("guild_id", guildIDStr),
 			zap.String("user_id", userID),
 		)
 		return
 	}
 
 	userID := ""
-	if i.Member != nil && i.Member.User != nil {
-		userID = i.Member.User.ID
+	if e.Member() != nil {
+		userID = e.Member().User.ID.String()
+	}
+
+	guildIDStr := ""
+	if e.GuildID() != nil {
+		guildIDStr = e.GuildID().String()
 	}
 
 	logger.Debug("Command received",
-		zap.String("command", data.Name),
-		zap.String("guild_id", i.GuildID),
+		zap.String("command", data.CommandName()),
+		zap.String("guild_id", guildIDStr),
 		zap.String("user_id", userID),
 	)
 
-	handler(r.session, i)
+	handler(e)
 }

@@ -1,30 +1,34 @@
 package commands
 
 import (
-	"context"
+	stdcontext "context"
 	"fmt"
 	"strconv"
 	"strings"
 	"text/template"
-	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/omit"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
 )
 
-var defaultMemberPermissions int64 = discordgo.PermissionManageMessages
+var defaultMemberPermissions = discord.PermissionManageMessages
 
 var defaultPrompt string
 
 func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string) {
 	defaultPrompt = cfgDefaultPrompt
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "ping",
 			Description: "Replies with Pong!",
 		},
@@ -32,12 +36,11 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "horoscope",
 			Description: "Get the horoscope for a sign",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionString,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionString{
 					Name:        "sign",
 					Description: "The sign for the horoscope (belier, taureau, etc...)",
 					Required:    true,
@@ -48,12 +51,11 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "horoscopechannel",
 			Description: "Set the channel for the horoscope",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionChannel{
 					Name:        "channel",
 					Description: "The channel for the horoscope",
 					Required:    true,
@@ -64,12 +66,11 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "farting_friday_channel",
 			Description: "Set the channel for the farting friday",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionChannel,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionChannel{
 					Name:        "channel",
 					Description: "The channel for the farting friday",
 					Required:    true,
@@ -80,38 +81,36 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "temperature",
 			Description: "Set the temperature for the bot",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionFloat{
 					Name:        "temperature",
 					Description: "The temperature for the bot (0.0-1.0)",
 					Required:    true,
 				},
 			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		temperatureHandler(repo),
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:                     "toggle",
 			Description:              "Toggle the bot on or off",
-			DefaultMemberPermissions: &defaultMemberPermissions,
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		toggleHandler(repo),
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "threshold",
 			Description: "Set the threshold for the bot (activation probability; 0.0-1.0)",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionFloat{
 					Name:        "threshold",
 					Description: "The threshold activation (0.0-1.0)",
 					Required:    true,
@@ -122,12 +121,11 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "thresholdsexe",
 			Description: "Set the threshold for the bot to say sexe (activation probability; 0.0-1.0)",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionNumber,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionFloat{
 					Name:        "thresholdsexe",
 					Description: "The thresholdsexe activation (0.0-1.0)",
 					Required:    true,
@@ -138,78 +136,70 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "messagescount",
 			Description: "Set the number of messages to consider for the bot",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionInteger,
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionInt{
 					Name:        "messagescount",
 					Description: "The number of messages to consider for the bot (1-100)",
 					Required:    true,
 				},
 			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		messagesCountHandler(repo),
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:                     "clean",
 			Description:              "Clean the bot's messages",
-			DefaultMemberPermissions: &defaultMemberPermissions,
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		cleanHandler,
 	)
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "prompt",
 			Description: "Manage the bot's system prompt",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "see",
 					Description: "View the current prompt",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "append",
 					Description: "Append text to the current prompt",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Options: []*discordgo.ApplicationCommandOption{
-						{
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
 							Name:        "text",
 							Description: "Text to append to the prompt",
-							Type:        discordgo.ApplicationCommandOptionString,
 							Required:    true,
-							MaxLength:   1000,
+							MaxLength:   ptr(1000),
 						},
 					},
 				},
-				{
+				discord.ApplicationCommandOptionSubCommandGroup{
 					Name:        "set",
 					Description: "Set a custom prompt for the bot",
-					Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
-					Options: []*discordgo.ApplicationCommandOption{
+					Options: []discord.ApplicationCommandOptionSubCommand{
 						{
 							Name:        "custom",
 							Description: "Set a custom prompt for the bot",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
-							Options: []*discordgo.ApplicationCommandOption{
-								{
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionString{
 									Name:        "prompt",
 									Description: "The custom prompt for the bot",
-									Type:        discordgo.ApplicationCommandOptionString,
 									Required:    true,
-									MaxLength:   1000,
+									MaxLength:   ptr(1000),
 								},
 							},
 						},
 						{
 							Name:        "default",
 							Description: "Put back the default prompt",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
 						},
 					},
 				},
@@ -221,13 +211,12 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	// Memory management commands
 	if memoryService != nil {
 		registry.AddCommand(
-			&discordgo.ApplicationCommand{
+			discord.SlashCommandCreate{
 				Name:                     "forcesummary",
 				Description:              "Force create a summary for a user (admin only)",
-				DefaultMemberPermissions: &defaultMemberPermissions,
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionUser,
+				DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionUser{
 						Name:        "user",
 						Description: "The user to summarize",
 						Required:    true,
@@ -239,63 +228,52 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	}
 
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:                     "reengage",
 			Description:              "Configure channel reengagement settings",
-			DefaultMemberPermissions: &defaultMemberPermissions,
-			Options: []*discordgo.ApplicationCommandOption{
-				{
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "toggle",
 					Description: "Toggle reengagement for this channel",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "chance",
 					Description: "Set reengage chance (0.0-1.0)",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionNumber,
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionFloat{
 							Name:        "value",
 							Description: "The chance value (0.01 = 1%)",
 							Required:    true,
-							MinValue:    func() *float64 { v := 0.0; return &v }(),
-							MaxValue:    1.0,
 						},
 					},
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "threshold",
 					Description: "Set inactivity threshold in minutes",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionInteger,
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionInt{
 							Name:        "minutes",
 							Description: "Minutes of inactivity before reengage can trigger",
 							Required:    true,
-							MinValue:    func() *float64 { v := float64(1); return &v }(),
 						},
 					},
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "message",
 					Description: "Set the reengage message prompt",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:        discordgo.ApplicationCommandOptionString,
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
 							Name:        "text",
 							Description: "The message appended to the prompt when reengaging",
 							Required:    true,
-							MaxLength:   500,
+							MaxLength:   ptr(500),
 						},
 					},
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "status",
 					Description: "Show current reengage settings for this channel",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
 			},
 		},
@@ -303,225 +281,209 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 	)
 }
 
-func pingHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Pong!",
-		},
-	})
+func ptr[T any](v T) *T {
+	return &v
 }
 
-func horoscopeHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	sign := i.ApplicationCommandData().Options[0].StringValue()
+func getGuildID(e *events.ApplicationCommandInteractionCreate) string {
+	guildID := e.GuildID()
+	if guildID == nil {
+		return ""
+	}
+	return guildID.String()
+}
+
+func pingHandler(e *events.ApplicationCommandInteractionCreate) {
+	_ = e.CreateMessage(discord.MessageCreate{Content: "Pong!"})
+}
+
+func horoscopeHandler(e *events.ApplicationCommandInteractionCreate) {
+	data := e.SlashCommandInteractionData()
+	sign := data.String("sign")
 	horo, err := horoscope.GetHoroscope(sign)
 	if err != nil {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Error getting horoscope",
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting horoscope"})
 		return
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: horo,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: horo})
 }
 
-func horoscopeChannelHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "horoscope_channel", channelID.ID)
-		content := fmt.Sprintf("Horoscope channel set to %v", channelID.ID)
+func horoscopeChannelHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		channel := data.Channel("channel")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "horoscope_channel", channel.ID.String())
+		content := fmt.Sprintf("Horoscope channel set to <#%s>", channel.ID)
 		if err != nil {
 			content = "Error setting horoscope channel"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func fartingFridayChannelHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		channelID := i.ApplicationCommandData().Options[0].ChannelValue(s)
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "farting_friday_channel", channelID.ID)
-		content := fmt.Sprintf("Farting Friday channel set to %v", channelID.ID)
+func fartingFridayChannelHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		channel := data.Channel("channel")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "farting_friday_channel", channel.ID.String())
+		content := fmt.Sprintf("Farting Friday channel set to <#%s>", channel.ID)
 		if err != nil {
 			content = "Error setting farting friday channel"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func temperatureHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		temperature := i.ApplicationCommandData().Options[0].FloatValue()
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "temperature", strconv.FormatFloat(temperature, 'f', -1, 32))
+func temperatureHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		temperature := data.Float("temperature")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "temperature", strconv.FormatFloat(temperature, 'f', -1, 32))
 		content := fmt.Sprintf("Temperature set to %v", temperature)
 		if err != nil {
 			content = "Error setting temperature"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func toggleHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		current := repo.GetState(context.Background(), i.GuildID)
+func toggleHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		ctx := stdcontext.Background()
+		current := repo.GetState(ctx, getGuildID(e))
 		newState := "off"
 		if current == "off" {
 			newState = "on"
 		}
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "state", newState)
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "state", newState)
 		content := "Bot is now " + newState
 		if err != nil {
 			content = "Error toggling bot"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func thresholdHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		threshold := i.ApplicationCommandData().Options[0].FloatValue()
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "threshold", strconv.FormatFloat(threshold, 'f', -1, 32))
+func thresholdHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		threshold := data.Float("threshold")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "threshold", strconv.FormatFloat(threshold, 'f', -1, 32))
 		content := fmt.Sprintf("Threshold set to %v", threshold)
 		if err != nil {
 			content = "Error setting threshold"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func thresholdSexeHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		thresholdSexe := i.ApplicationCommandData().Options[0].FloatValue()
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "thresholdSexe", strconv.FormatFloat(thresholdSexe, 'f', -1, 32))
+func thresholdSexeHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		thresholdSexe := data.Float("thresholdsexe")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "thresholdSexe", strconv.FormatFloat(thresholdSexe, 'f', -1, 32))
 		content := fmt.Sprintf("Threshold set to %v", thresholdSexe)
 		if err != nil {
 			content = "Error setting sexe threshold"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func messagesCountHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		messagesCount := i.ApplicationCommandData().Options[0].IntValue()
-		err := repo.SetGuildSetting(context.Background(), i.GuildID, "messagescount", strconv.FormatInt(messagesCount, 10))
+func messagesCountHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		messagesCount := data.Int("messagescount")
+		ctx := stdcontext.Background()
+		err := repo.SetGuildSetting(ctx, getGuildID(e), "messagescount", strconv.Itoa(messagesCount))
 		content := fmt.Sprintf("Messages count set to %v", messagesCount)
 		if err != nil {
 			content = "Error setting messages count"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func cleanHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	messages, err := s.ChannelMessages(i.ChannelID, 100, "", "", "")
+func cleanHandler(e *events.ApplicationCommandInteractionCreate) {
+	ctx, cancel := appcontext.Message()
+	defer cancel()
+
+	channel := e.Channel()
+	channelID := channel.ID()
+	_ = e.DeferCreateMessage(false)
+
+	messages, err := e.Client().Rest.GetMessages(channelID, 0, 0, 0, 100, rest.WithCtx(ctx))
 	if err != nil {
 		logger.Error("Error getting messages for cleanup", zap.Error(err))
+		_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(), discord.MessageCreate{Content: "Error getting messages"})
 		return
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Cleaning messages...",
-		},
-	})
-	messagesToDelete := make([]string, 0)
-	for idx := range messages {
-		if messages[idx].Author.ID == s.State.User.ID {
-			messagesToDelete = append(messagesToDelete, messages[idx].ID)
+
+	messagesToDelete := make([]snowflake.ID, 0)
+	botID := e.Client().ID()
+	for _, msg := range messages {
+		if msg.Author.ID == botID {
+			messagesToDelete = append(messagesToDelete, msg.ID)
 		}
 	}
-	s.ChannelMessagesBulkDelete(i.ChannelID, messagesToDelete)
-	str := "Messages cleaned"
-	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content: &str,
-	})
-	time.AfterFunc(10*time.Second, func() {
-		s.InteractionResponseDelete(i.Interaction)
-	})
+
+	if len(messagesToDelete) > 0 {
+		_ = e.Client().Rest.BulkDeleteMessages(channelID, messagesToDelete, rest.WithCtx(ctx))
+	}
+
+	content := "Messages cleaned"
+	_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(), discord.MessageCreate{Content: content})
 }
 
-func promptHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		options := i.ApplicationCommandData().Options
-		subcommand := options[0].Name
+func promptHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		subcommandName := ""
+		if data.SubCommandName != nil {
+			subcommandName = *data.SubCommandName
+		}
 
-		switch subcommand {
+		switch subcommandName {
 		case "see":
-			handlePromptSee(s, i, repo)
+			handlePromptSee(e, repo)
 		case "append":
-			handlePromptAppend(s, i, repo)
+			handlePromptAppend(e, repo)
 		case "set":
-			handlePromptSet(s, i, repo)
+			handlePromptSet(e, repo)
 		default:
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Unknown subcommand!",
-				},
-			})
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand!"})
 		}
 	}
 }
 
-func handlePromptSee(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	prompt, hasCustom := repo.GetPrompt(ctx, i.GuildID)
+func handlePromptSee(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	prompt, hasCustom := repo.GetPrompt(ctx, getGuildID(e))
 
 	if !hasCustom {
-		botMember, err := s.GuildMember(i.GuildID, s.State.User.ID)
-		if err != nil {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Error getting bot information",
-				},
-			})
+		guildID := e.GuildID()
+		if guildID == nil {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
 			return
 		}
-		prompt = getDefaultPrompt(botMember.Nick)
+		botMember, err := e.Client().Rest.GetMember(*guildID, e.Client().ID(), rest.WithCtx(ctx))
+		if err != nil {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
+			return
+		}
+		botNick := ""
+		if botMember.Nick != nil {
+			botNick = *botMember.Nick
+		}
+		if botNick == "" {
+			botNick = botMember.User.Username
+		}
+		prompt = getDefaultPrompt(botNick)
 	}
 
 	// Truncate if too long for Discord message (max 2000, leave room for prefix)
@@ -535,256 +497,209 @@ func handlePromptSee(s *discordgo.Session, i *discordgo.InteractionCreate, repo 
 		prefix = "**Current prompt (default):**\n"
 	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: prefix + content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: prefix + content})
 }
 
-func handlePromptAppend(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	textToAppend := i.ApplicationCommandData().Options[0].Options[0].StringValue()
+func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	data := e.SlashCommandInteractionData()
+	textToAppend := data.String("text")
 
-	currentPrompt, hasCustom := repo.GetPrompt(ctx, i.GuildID)
+	currentPrompt, hasCustom := repo.GetPrompt(ctx, getGuildID(e))
 	if !hasCustom {
-		botMember, err := s.GuildMember(i.GuildID, s.State.User.ID)
-		if err != nil {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Error getting bot information",
-				},
-			})
+		guildID := e.GuildID()
+		if guildID == nil {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
 			return
 		}
-		currentPrompt = getDefaultPrompt(botMember.Nick)
+		botMember, err := e.Client().Rest.GetMember(*guildID, e.Client().ID(), rest.WithCtx(ctx))
+		if err != nil {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
+			return
+		}
+		botNick := ""
+		if botMember.Nick != nil {
+			botNick = *botMember.Nick
+		}
+		if botNick == "" {
+			botNick = botMember.User.Username
+		}
+		currentPrompt = getDefaultPrompt(botNick)
 	}
 
 	newPrompt := currentPrompt + "\n" + textToAppend
 
-	err := repo.SetGuildSetting(ctx, i.GuildID, "prompt", newPrompt)
+	err := repo.SetGuildSetting(ctx, getGuildID(e), "prompt", newPrompt)
 	content := "Prompt updated successfully"
 	if err != nil {
 		content = "Error updating prompt"
 	}
 
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func handlePromptSet(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	options := i.ApplicationCommandData().Options[0].Options
+func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	data := e.SlashCommandInteractionData()
 
-	if options[0].Name == "default" {
-		content := "Prompt set to default"
-		err := repo.DeleteGuildSetting(context.Background(), i.GuildID, "prompt")
-		if err != nil {
-			content = "Error setting prompt"
+	subGroupName := ""
+	if data.SubCommandGroupName != nil {
+		subGroupName = *data.SubCommandGroupName
+	}
+
+	if subGroupName == "set" {
+		subName := ""
+		if data.SubCommandName != nil {
+			subName = *data.SubCommandName
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
-		return
+		if subName == "default" {
+			content := "Prompt set to default"
+			err := repo.DeleteGuildSetting(ctx, getGuildID(e), "prompt")
+			if err != nil {
+				content = "Error setting prompt"
+			}
+			_ = e.CreateMessage(discord.MessageCreate{Content: content})
+			return
+		}
 	}
 
-	if options[0].Name != "custom" {
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Wrong option!",
-			},
-		})
-		return
-	}
-
-	value := options[0].Options[0].StringValue()
-	err := repo.SetGuildSetting(context.Background(), i.GuildID, "prompt", value)
+	// Must be "custom"
+	value := data.String("prompt")
+	err := repo.SetGuildSetting(ctx, getGuildID(e), "prompt", value)
 	content := "Prompt correctly set"
 	if err != nil {
 		content = "Error setting prompt"
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func forceSummaryHandler(memoryService memory.Service) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		options := i.ApplicationCommandData().Options
-		if len(options) == 0 {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Please specify a user to summarize!",
-				},
-			})
+func forceSummaryHandler(memoryService memory.Service) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		userOpt, ok := data.Option("user")
+		if !ok {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Please specify a user to summarize!"})
 			return
 		}
 
-		user := options[0].UserValue(s)
-		if user == nil {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Invalid user!",
-				},
-			})
-			return
-		}
+		userID := userOpt.Snowflake()
 
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("🔄 Creating summary for <@%s>...", user.ID),
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("🔄 Creating summary for <@%s>...", userID)})
 
-		ctx := context.Background()
-		err := memoryService.ForceSummarize(ctx, user.ID, i.GuildID)
+		ctx := stdcontext.Background()
+		err := memoryService.ForceSummarize(ctx, userID.String(), getGuildID(e))
 
 		if err != nil {
 			errorMsg := fmt.Sprintf("❌ Failed to create summary: %v", err)
-			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-				Content: &errorMsg,
-			})
+			_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(), discord.MessageCreate{Content: errorMsg})
 			return
 		}
 
-		successMsg := fmt.Sprintf("✅ Summary created successfully for <@%s>!", user.ID)
-		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: &successMsg,
-		})
+		successMsg := fmt.Sprintf("✅ Summary created successfully for <@%s>!", userID)
+		_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(), discord.MessageCreate{Content: successMsg})
 	}
 }
 
-func reengageHandler(repo *database.Repository) func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		options := i.ApplicationCommandData().Options
-		subcommand := options[0].Name
+func reengageHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		subcommandName := ""
+		if data.SubCommandName != nil {
+			subcommandName = *data.SubCommandName
+		}
 
-		switch subcommand {
+		switch subcommandName {
 		case "toggle":
-			handleReengageToggle(s, i, repo)
+			handleReengageToggle(e, repo)
 		case "chance":
-			handleReengageChance(s, i, repo)
+			handleReengageChance(e, repo)
 		case "threshold":
-			handleReengageThreshold(s, i, repo)
+			handleReengageThreshold(e, repo)
 		case "message":
-			handleReengageMessage(s, i, repo)
+			handleReengageMessage(e, repo)
 		case "status":
-			handleReengageStatus(s, i, repo)
+			handleReengageStatus(e, repo)
 		default:
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Unknown subcommand!",
-				},
-			})
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand!"})
 		}
 	}
 }
 
-func handleReengageToggle(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	enabled := repo.GetReengageEnabled(ctx, i.GuildID, i.ChannelID)
+func handleReengageToggle(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	channel := e.Channel()
+	channelID := channel.ID()
+	enabled := repo.GetReengageEnabled(ctx, getGuildID(e), channelID.String())
 
 	if enabled {
-		err := repo.DeleteReengageConfig(ctx, i.GuildID, i.ChannelID)
+		err := repo.DeleteReengageConfig(ctx, getGuildID(e), channelID.String())
 		content := "✅ Reengagement disabled for this channel!"
 		if err != nil {
 			content = "❌ Error disabling reengagement"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	} else {
-		err := repo.SetReengageEnabled(ctx, i.GuildID, i.ChannelID, true)
+		err := repo.SetReengageEnabled(ctx, getGuildID(e), channelID.String(), true)
 		content := "✅ Reengagement enabled for this channel!"
 		if err != nil {
 			content = "❌ Error enabling reengagement"
 		}
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: content,
-			},
-		})
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 	}
 }
 
-func handleReengageChance(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	chance := i.ApplicationCommandData().Options[0].Options[0].FloatValue()
-	err := repo.SetReengageChance(ctx, i.GuildID, i.ChannelID, chance)
+func handleReengageChance(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	data := e.SlashCommandInteractionData()
+	chance := data.Float("value")
+	channel := e.Channel()
+	channelID := channel.ID()
+	err := repo.SetReengageChance(ctx, getGuildID(e), channelID.String(), chance)
 	content := fmt.Sprintf("✅ Reengage chance set to %.2f%% (%.4f)", chance*100, chance)
 	if err != nil {
 		content = "❌ Error setting reengage chance"
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func handleReengageThreshold(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	minutes := i.ApplicationCommandData().Options[0].Options[0].IntValue()
-	err := repo.SetReengageThreshold(ctx, i.GuildID, i.ChannelID, int(minutes))
+func handleReengageThreshold(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	data := e.SlashCommandInteractionData()
+	minutes := data.Int("minutes")
+	channel := e.Channel()
+	channelID := channel.ID()
+	err := repo.SetReengageThreshold(ctx, getGuildID(e), channelID.String(), int(minutes))
 	content := fmt.Sprintf("✅ Reengage threshold set to %d minutes", minutes)
 	if err != nil {
 		content = "❌ Error setting reengage threshold"
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func handleReengageMessage(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	message := i.ApplicationCommandData().Options[0].Options[0].StringValue()
-	err := repo.SetReengageMessage(ctx, i.GuildID, message)
+func handleReengageMessage(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	data := e.SlashCommandInteractionData()
+	message := data.String("text")
+	err := repo.SetReengageMessage(ctx, getGuildID(e), message)
 	content := fmt.Sprintf("✅ Reengage message set!\n```\n%s\n```", message)
 	if err != nil {
 		content = "❌ Error setting reengage message"
 	}
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, repo *database.Repository) {
-	ctx := context.Background()
-	enabled, chance, threshold := repo.GetReengageConfig(ctx, i.GuildID, i.ChannelID)
+func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+	ctx := stdcontext.Background()
+	channel := e.Channel()
+	channelID := channel.ID()
+	enabled, chance, threshold := repo.GetReengageConfig(ctx, getGuildID(e), channelID.String())
 
 	status := "❌ Disabled"
 	if enabled {
 		status = "✅ Enabled"
 	}
 
-	message, hasMessage := repo.GetReengageMessage(ctx, i.GuildID)
+	message, hasMessage := repo.GetReengageMessage(ctx, getGuildID(e))
 	messageDisplay := "(using default)"
 	if hasMessage {
 		if len(message) > 100 {
@@ -795,12 +710,7 @@ func handleReengageStatus(s *discordgo.Session, i *discordgo.InteractionCreate, 
 	}
 
 	content := fmt.Sprintf("**Reengage Settings for this channel:**\nStatus: %s\nChance: %.2f%%\nThreshold: %d minutes\nMessage: %s", status, chance*100, threshold, messageDisplay)
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
 func getDefaultPrompt(botNick string) string {

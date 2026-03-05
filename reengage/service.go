@@ -8,7 +8,10 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
@@ -20,7 +23,7 @@ import (
 )
 
 type Service struct {
-	session        *discordgo.Session
+	client         *bot.Client
 	aiService      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
@@ -30,12 +33,12 @@ type Service struct {
 	defaultPrompt  string
 }
 
-func NewService(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig, defaultPrompt string) *Service {
+func NewService(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig, defaultPrompt string) *Service {
 	return &Service{
-		session:        session,
+		client:         client,
 		aiService:      aiService,
 		repo:           repo,
-		contextBuilder: ai.NewContextBuilder(session, aiService),
+		contextBuilder: ai.NewContextBuilder(client, aiService),
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
 		config:         cfg,
@@ -51,25 +54,37 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 	}
 
 	for _, guildID := range guilds {
-		guild, err := s.session.State.Guild(guildID)
+		guildIDSnowflake, err := snowflake.Parse(guildID)
 		if err != nil {
-			logger.Warn("Failed to get guild state", zap.String("guild_id", guildID), zap.Error(err))
 			continue
 		}
 
-		for _, channel := range guild.Channels {
-			if channel.Type != discordgo.ChannelTypeGuildText {
+		// Use REST API instead of state
+		_, err = s.client.Rest.GetGuild(guildIDSnowflake, false, rest.WithCtx(ctx))
+		if err != nil {
+			logger.Warn("Failed to get guild", zap.String("guild_id", guildID), zap.Error(err))
+			continue
+		}
+
+		channels, err := s.client.Rest.GetGuildChannels(guildIDSnowflake, rest.WithCtx(ctx))
+		if err != nil {
+			logger.Warn("Failed to get guild channels", zap.String("guild_id", guildID), zap.Error(err))
+			continue
+		}
+
+		for _, channel := range channels {
+			if channel.Type() != discord.ChannelTypeGuildText {
 				continue
 			}
 
-			enabled := s.repo.GetReengageEnabled(ctx, guildID, channel.ID)
+			enabled := s.repo.GetReengageEnabled(ctx, guildID, channel.ID().String())
 			if !enabled {
 				continue
 			}
 
-			lastMessageTimestamp := s.repo.GetChannelLastMessage(ctx, guildID, channel.ID)
-			thresholdMinutes := s.repo.GetReengageThreshold(ctx, guildID, channel.ID)
-			chance := s.repo.GetReengageChance(ctx, guildID, channel.ID)
+			lastMessageTimestamp := s.repo.GetChannelLastMessage(ctx, guildID, channel.ID().String())
+			thresholdMinutes := s.repo.GetReengageThreshold(ctx, guildID, channel.ID().String())
+			chance := s.repo.GetReengageChance(ctx, guildID, channel.ID().String())
 
 			if lastMessageTimestamp == 0 {
 				continue
@@ -89,15 +104,15 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 
 			logger.Info("Reengage triggered",
 				zap.String("guild_id", guildID),
-				zap.String("channel_id", channel.ID),
+				zap.String("channel_id", channel.ID().String()),
 				zap.Duration("inactive_duration", timeSinceLastMessage),
 				zap.Float64("chance", chance),
 			)
 
-			if err := s.GenerateAndSend(ctx, guildID, channel.ID); err != nil {
+			if err := s.GenerateAndSend(ctx, guildID, channel.ID().String()); err != nil {
 				logger.Error("Failed to generate and send reengage message",
 					zap.String("guild_id", guildID),
-					zap.String("channel_id", channel.ID),
+					zap.String("channel_id", channel.ID().String()),
 					zap.Error(err),
 				)
 			}
@@ -108,7 +123,9 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 }
 
 func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string) error {
-	messages, err := s.session.ChannelMessages(channelID, 20, "", "", "")
+	channelIDSnowflake := snowflake.MustParse(channelID)
+
+	messages, err := s.client.Rest.GetMessages(channelIDSnowflake, 0, 0, 0, 20, rest.WithCtx(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to get channel messages: %w", err)
 	}
@@ -117,17 +134,21 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		return nil
 	}
 
-	botMember, err := s.session.GuildMember(guildID, s.session.State.User.ID)
+	guildIDSnowflake := snowflake.MustParse(guildID)
+	botMember, err := s.client.Rest.GetMember(guildIDSnowflake, s.client.ID(), rest.WithCtx(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to get bot member: %w", err)
 	}
 
-	botNick := botMember.Nick
+	botNick := ""
+	if botMember.Nick != nil {
+		botNick = *botMember.Nick
+	}
 	if botNick == "" {
-		botNick = s.session.State.User.Username
+		botNick = botMember.User.Username
 	}
 
-	processedMessage, err := s.contextBuilder.BuildContext(ctx, messages, guildID, s.session.State.User.ID)
+	processedMessage, err := s.contextBuilder.BuildContext(ctx, messages, guildIDSnowflake, s.client.ID())
 	if err != nil {
 		return fmt.Errorf("failed to build context: %w", err)
 	}
@@ -146,7 +167,7 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 
 	if s.memoryService != nil {
 		lastMessage := messages[len(messages)-1]
-		memoryCtx, err := s.memoryService.GetMemoryContext(ctx, lastMessage.Author.ID, guildID, lastMessage.Content)
+		memoryCtx, err := s.memoryService.GetMemoryContext(ctx, lastMessage.Author.ID.String(), guildID, lastMessage.Content)
 		if err == nil && memoryCtx != nil && len(memoryCtx.Summaries) > 0 {
 			memoryContext := "\n\n**Contexte de conversation:**\n"
 			for i, summary := range memoryCtx.Summaries {
@@ -181,19 +202,12 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
 	}
 
-	_, err = s.session.ChannelMessageSend(channelID, content)
+	_, err = s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{Content: content}, rest.WithCtx(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 
-	err = s.repo.SetChannelLastMessage(ctx, guildID, channelID, time.Now().Unix())
-	if err != nil {
-		logger.Warn("Failed to update channel last message timestamp",
-			zap.String("guild_id", guildID),
-			zap.String("channel_id", channelID),
-			zap.Error(err),
-		)
-	}
+	_ = s.repo.SetChannelLastMessage(ctx, guildID, channelID, time.Now().Unix())
 
 	logger.Info("Reengage message sent successfully",
 		zap.String("guild_id", guildID),

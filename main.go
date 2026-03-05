@@ -9,7 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
@@ -42,6 +47,14 @@ func init() {
 }
 
 func main() {
+	// Load .env.local file if it exists
+	if err := godotenv.Load(".env.local"); err != nil {
+		// Try .env as fallback
+		if err := godotenv.Load(".env"); err != nil {
+			log.Println("No .env.local or .env file found, using environment variables")
+		}
+	}
+
 	// Load configuration
 	var configErr error
 	cfg, configErr = config.Load(config.DefaultConfigPath)
@@ -54,9 +67,22 @@ func main() {
 	// Initialize logger with configuration
 	logger.InitFromConfig(&cfg.Logging)
 
-	dg, err := discordgo.New("Bot " + cfg.Discord.Token)
+	// Create slog adapter for disgo
+	slogLogger := logger.NewSlogLogger()
+
+	// Create disgo client
+	client, err := disgo.New(cfg.Discord.Token,
+		bot.WithLogger(slogLogger),
+		bot.WithGatewayConfigOpts(
+			gateway.WithIntents(
+				gateway.IntentGuilds,
+				gateway.IntentGuildMessages,
+				gateway.IntentMessageContent,
+			),
+		),
+	)
 	if err != nil {
-		logger.Fatal("Error creating Discord session", zap.Error(err))
+		logger.Fatal("Error creating Discord client", zap.Error(err))
 		return
 	}
 
@@ -172,43 +198,43 @@ func main() {
 	repo := database.NewRepository()
 
 	// Initialize emoji manager for shortcode conversion
-	emojiManager := emoji.NewManager(dg, cfg.Emoji)
+	emojiManager := emoji.NewManager(client, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(dg, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt)
-	dg.AddHandler(messageHandler.Handle)
-	dg.AddHandler(handlers.HandleGuildCreate)
-	dg.AddHandler(handlers.HandleGuildDelete)
+	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt)
+	client.AddEventListeners(
+		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
+		bot.NewListenerFunc(handlers.HandleGuildJoin),
+		bot.NewListenerFunc(handlers.HandleGuildLeave),
+	)
 
-	registry := commands.NewRegistry(dg, local)
+	registry := commands.NewRegistry(client, local)
 	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt)
-	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		registry.HandleCommand(i)
-	})
+	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
+		registry.HandleCommand(e)
+	}))
 
-	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsGuilds
-
-	err = dg.Open()
+	err = client.OpenGateway(context.Background())
 	if err != nil {
 		logger.Fatal("Error opening discord connection", zap.Error(err))
 		return
 	}
-	defer dg.Close()
+	defer client.Close(context.Background())
 
 	logger.Info("Bot is now running. Press CTRL-C to exit.")
 
 	if clearCommands {
-		clearAllCommands(dg)
+		clearAllCommands(client)
 		return
 	}
 
-	err = registry.Register()
+	err = registry.Register(context.Background())
 	if err != nil {
 		logger.Fatal("Error registering commands", zap.Error(err))
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(dg, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt)
+	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt)
 	sched.Start()
 	defer sched.Shutdown()
 
@@ -255,35 +281,34 @@ func (a *aiServiceAdapter) Chat(ctx context.Context, messages []memory.Message, 
 	return response.Content, nil
 }
 
-func clearAllCommands(dg *discordgo.Session) {
+func clearAllCommands(client *bot.Client) {
 	logger.Info("Clearing all commands")
 
-	guilds := dg.State.Guilds
+	ctx := context.Background()
 
 	totalDeleted := 0
 
 	logger.Info("Clearing global commands")
-	existing, err := dg.ApplicationCommands(dg.State.User.ID, "")
+	existing, err := client.Rest.GetGlobalCommands(client.ID(), false, rest.WithCtx(ctx))
 	if err != nil {
 		logger.Error("Error fetching global commands", zap.Error(err))
 	} else {
 		for _, cmd := range existing {
-			err := dg.ApplicationCommandDelete(dg.State.User.ID, "", cmd.ID)
+			err := client.Rest.DeleteGlobalCommand(client.ID(), cmd.ID(), rest.WithCtx(ctx))
 			if err != nil {
 				logger.Error("Error deleting global command",
 					zap.Error(err),
-					zap.String("command", cmd.Name),
-				)
+					zap.String("command", cmd.Name()))
 			} else {
-				logger.Debug("Deleted global command", zap.String("command", cmd.Name))
+				logger.Debug("Deleted global command", zap.String("command", cmd.Name()))
 				totalDeleted++
 			}
 		}
 	}
 
-	for _, guild := range guilds {
+	for guild := range client.Caches.Guilds() {
 		logger.Debug("Clearing commands for guild", zap.String("guild", guild.Name))
-		existing, err := dg.ApplicationCommands(dg.State.User.ID, guild.ID)
+		existing, err := client.Rest.GetGuildCommands(client.ID(), guild.ID, false, rest.WithCtx(ctx))
 		if err != nil {
 			logger.Error("Error fetching commands for guild",
 				zap.Error(err),
@@ -292,16 +317,16 @@ func clearAllCommands(dg *discordgo.Session) {
 			continue
 		}
 		for _, cmd := range existing {
-			err := dg.ApplicationCommandDelete(dg.State.User.ID, guild.ID, cmd.ID)
+			err := client.Rest.DeleteGuildCommand(client.ID(), guild.ID, cmd.ID(), rest.WithCtx(ctx))
 			if err != nil {
 				logger.Error("Error deleting guild command",
 					zap.Error(err),
-					zap.String("command", cmd.Name),
+					zap.String("command", cmd.Name()),
 					zap.String("guild", guild.Name),
 				)
 			} else {
 				logger.Debug("Deleted guild command",
-					zap.String("command", cmd.Name),
+					zap.String("command", cmd.Name()),
 					zap.String("guild", guild.Name),
 				)
 				totalDeleted++

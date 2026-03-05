@@ -4,24 +4,26 @@ import (
 	"context"
 	"slices"
 	"strings"
-
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
 
 type ContextBuilder struct {
-	session           *discordgo.Session
+	client            *bot.Client
 	provider          Provider
 	visionInstruction string
 	gifProcessor      *GIFProcessor
 	docProcessor      *DocumentProcessor
 }
 
-func NewContextBuilder(session *discordgo.Session, provider Provider) *ContextBuilder {
+func NewContextBuilder(client *bot.Client, provider Provider) *ContextBuilder {
 	return &ContextBuilder{
-		session:           session,
+		client:            client,
 		provider:          provider,
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
 		gifProcessor:      NewGIFProcessor(),
@@ -42,14 +44,14 @@ var supportedImageTypes = []string{
 	"image/webp",
 }
 
-func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordgo.Message, guildID string, botID string) (*ProcessedMessage, error) {
+func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.Message, guildID snowflake.ID, botID snowflake.ID) (*ProcessedMessage, error) {
 	imagesToProcess := cb.getImagesToProcess(ctx, messages)
 	describedImages := cb.processImages(ctx, imagesToProcess)
 	documentSummaries := cb.getDocumentSummaries(ctx, messages)
 
 	formattedMessages := make([]Message, 0, len(messages))
 	imageContexts := make([]ImageContext, 0)
-	memberCache := make(map[string]*discordgo.Member)
+	memberCache := make(map[snowflake.ID]*discord.Member)
 
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == botID {
@@ -65,10 +67,10 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 
 		imageDescription := ""
 		imageRef := -1
-		if desc, found := describedImages[messages[idx].ID]; found {
+		if desc, found := describedImages[messages[idx].ID.String()]; found {
 			imageDescription = desc
 			for _, img := range imagesToProcess {
-				if img.id == messages[idx].ID {
+				if img.id == messages[idx].ID.String() {
 					imageRef = len(imageContexts)
 					imageContexts = append(imageContexts, ImageContext{
 						MessageID: img.id,
@@ -89,12 +91,15 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 
 		var nick string
 		// Check if message is from a webhook (webhooks aren't guild members)
-		if messages[idx].WebhookID != "" {
+		if messages[idx].WebhookID != nil {
 			nick = messages[idx].Author.Username
 		} else if cachedMember, exists := memberCache[messages[idx].Author.ID]; exists {
 			// Use cached member (nil means we already tried and failed)
 			if cachedMember != nil {
-				nick = cachedMember.Nick
+				nick = ""
+				if cachedMember.Nick != nil {
+					nick = *cachedMember.Nick
+				}
 				if nick == "" {
 					nick = messages[idx].Author.Username
 				}
@@ -103,20 +108,23 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			}
 		} else {
 			// Try to fetch guild member
-			userMember, err := cb.session.GuildMember(guildID, messages[idx].Author.ID)
+			userMember, err := cb.client.Rest.GetMember(guildID, messages[idx].Author.ID, rest.WithCtx(ctx))
 			if err != nil {
 				// Log warning and fallback to username for non-members (webhooks, cross-server announcements)
 				logger.Warn("Could not get guild member, using username",
 					zap.Error(err),
-					zap.String("user_id", messages[idx].Author.ID),
-					zap.String("guild_id", guildID),
+					zap.String("user_id", messages[idx].Author.ID.String()),
+					zap.String("guild_id", guildID.String()),
 				)
 				nick = messages[idx].Author.Username
 				// Cache nil to avoid repeated failed lookups
 				memberCache[messages[idx].Author.ID] = nil
 			} else {
 				memberCache[messages[idx].Author.ID] = userMember
-				nick = userMember.Nick
+				nick = ""
+				if userMember.Nick != nil {
+					nick = *userMember.Nick
+				}
 				if nick == "" {
 					nick = messages[idx].Author.Username
 				}
@@ -125,7 +133,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 
 		var content strings.Builder
 		content.WriteString("<@")
-		content.WriteString(messages[idx].Author.ID)
+		content.WriteString(messages[idx].Author.ID.String())
 		content.WriteString(">")
 		content.WriteString(nick)
 		content.WriteString(": ")
@@ -136,7 +144,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			content.WriteString("</IMAGE_DESC>\n")
 		}
 
-		if docSummary, exists := documentSummaries[messages[idx].ID]; exists {
+		if docSummary, exists := documentSummaries[messages[idx].ID.String()]; exists {
 			content.WriteString("[Document Summary]\n")
 			content.WriteString(docSummary)
 			content.WriteString("\n\n")
@@ -154,18 +162,18 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []*discordg
 			formattedMessages = append(formattedMessages, Message{
 				Role:       "assistant",
 				Content:    messages[idx].Content,
-				AuthorID:   messages[idx].Author.ID,
+				AuthorID:   messages[idx].Author.ID.String(),
 				AuthorNick: nick,
-				MessageID:  messages[idx].ID,
+				MessageID:  messages[idx].ID.String(),
 				ImageRefs:  imageRefs,
 			})
 		} else {
 			formattedMessages = append(formattedMessages, Message{
 				Role:       "user",
 				Content:    content.String(),
-				AuthorID:   messages[idx].Author.ID,
+				AuthorID:   messages[idx].Author.ID.String(),
 				AuthorNick: nick,
-				MessageID:  messages[idx].ID,
+				MessageID:  messages[idx].ID.String(),
 				ImageRefs:  imageRefs,
 			})
 		}
@@ -186,7 +194,7 @@ type imageToProcess struct {
 	size        int64
 }
 
-func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*discordgo.Message) []imageToProcess {
+func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []discord.Message) []imageToProcess {
 	attachmentCount := 0
 	imagesToProcess := make([]imageToProcess, 0)
 	for idx := len(messages) - 1; idx >= 0; idx-- {
@@ -194,23 +202,30 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*di
 			if attachmentCount > 5 {
 				return imagesToProcess
 			}
-			if !strings.HasPrefix(attachment.ContentType, "image/") {
+			// ContentType is a pointer
+			if attachment.ContentType == nil {
 				continue
 			}
-			if !slices.Contains(supportedImageTypes, attachment.ContentType) {
+			if !strings.HasPrefix(*attachment.ContentType, "image/") {
+				continue
+			}
+			if !slices.Contains(supportedImageTypes, *attachment.ContentType) {
 				continue
 			}
 			if attachment.Size > 20000000 {
 				continue
 			}
-			if attachment.Width*attachment.Height > 33000000 {
-				continue
+			// Width and Height are pointers
+			if attachment.Width != nil && attachment.Height != nil {
+				if *attachment.Width**attachment.Height > 33000000 {
+					continue
+				}
 			}
 
 			// Process animated GIFs
 			url := attachment.URL
-			contentType := attachment.ContentType
-			if attachment.ContentType == "image/gif" && cb.gifProcessor != nil {
+			contentType := *attachment.ContentType
+			if *attachment.ContentType == "image/gif" && cb.gifProcessor != nil {
 				base64Grid, err := cb.gifProcessor.ProcessGIF(ctx, attachment.URL)
 				if err == nil && base64Grid != "" {
 					// Replace with base64 data URI
@@ -219,12 +234,21 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*di
 				}
 			}
 
+			width := 0
+			if attachment.Width != nil {
+				width = *attachment.Width
+			}
+			height := 0
+			if attachment.Height != nil {
+				height = *attachment.Height
+			}
+
 			imagesToProcess = append(imagesToProcess, imageToProcess{
-				id:          messages[idx].ID,
+				id:          messages[idx].ID.String(),
 				url:         url,
 				contentType: contentType,
-				width:       attachment.Width,
-				height:      attachment.Height,
+				width:       width,
+				height:      height,
 				size:        int64(attachment.Size),
 			})
 			attachmentCount++
@@ -234,15 +258,18 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []*di
 	return imagesToProcess
 }
 
-func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []*discordgo.Message) map[string]string {
+func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []discord.Message) map[string]string {
 	summaries := make(map[string]string)
 
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		for _, attachment := range messages[idx].Attachments {
-			if cb.docProcessor != nil && cb.docProcessor.CanProcess(attachment.ContentType) {
+			if attachment.ContentType == nil {
+				continue
+			}
+			if cb.docProcessor != nil && cb.docProcessor.CanProcess(*attachment.ContentType) {
 				summary, err := cb.docProcessor.ProcessDocument(ctx, attachment.URL, attachment.Filename)
 				if err == nil && summary != "" {
-					summaries[messages[idx].ID] = summary
+					summaries[messages[idx].ID.String()] = summary
 				}
 			}
 		}

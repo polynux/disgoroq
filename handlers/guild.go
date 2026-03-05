@@ -1,21 +1,21 @@
 package handlers
 
 import (
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/events"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
 
-func HandleGuildCreate(s *discordgo.Session, m *discordgo.GuildCreate) {
+func HandleGuildJoin(e *events.GuildJoin) {
 	logger.Info("Bot joined guild",
-		zap.String("guild_name", m.Guild.Name),
-		zap.String("guild_id", m.Guild.ID),
+		zap.String("guild_name", e.Guild.Name),
+		zap.String("guild_id", e.Guild.ID.String()),
 	)
 }
 
-func HandleGuildDelete(s *discordgo.Session, m *discordgo.GuildDelete) {
+func HandleGuildLeave(e *events.GuildLeave) {
 	logger.Info("Bot left guild",
-		zap.String("guild_id", m.ID),
+		zap.String("guild_id", e.GuildID.String()),
 	)
 }

@@ -5,9 +5,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 
 	"polynux/disgoroq/config"
+	appcontext "polynux/disgoroq/context"
 )
 
 // Emoji represents a Discord emoji
@@ -26,24 +29,24 @@ type cacheEntry struct {
 
 // Manager handles emoji fetching and caching
 type Manager struct {
-	session *discordgo.Session
-	cache   map[string]*cacheEntry
-	mutex   sync.RWMutex
-	ttl     time.Duration
+	client *bot.Client
+	cache  map[string]*cacheEntry
+	mutex  sync.RWMutex
+	ttl    time.Duration
 }
 
 // NewManager creates a new emoji manager.
 // If cfg is nil, default configuration is used.
-func NewManager(session *discordgo.Session, cfg config.EmojiConfig) *Manager {
+func NewManager(client *bot.Client, cfg config.EmojiConfig) *Manager {
 	ttlMinutes := cfg.CacheTTLMinutes
 	if ttlMinutes <= 0 {
 		ttlMinutes = 60 // Default to 60 minutes
 	}
 
 	return &Manager{
-		session: session,
-		cache:   make(map[string]*cacheEntry),
-		ttl:     time.Duration(ttlMinutes) * time.Minute,
+		client: client,
+		cache:  make(map[string]*cacheEntry),
+		ttl:    time.Duration(ttlMinutes) * time.Minute,
 	}
 }
 
@@ -96,7 +99,15 @@ func (m *Manager) RefreshEmojis(guildID string) error {
 
 // fetchEmojis fetches emojis from Discord API
 func (m *Manager) fetchEmojis(guildID string) ([]Emoji, error) {
-	discordEmojis, err := m.session.GuildEmojis(guildID)
+	ctx, cancel := appcontext.Message()
+	defer cancel()
+
+	guildIDSnowflake, err := snowflake.Parse(guildID)
+	if err != nil {
+		return nil, err
+	}
+
+	discordEmojis, err := m.client.Rest.GetEmojis(guildIDSnowflake, rest.WithCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +116,7 @@ func (m *Manager) fetchEmojis(guildID string) ([]Emoji, error) {
 	for _, e := range discordEmojis {
 		emojis = append(emojis, Emoji{
 			Name:     e.Name,
-			ID:       e.ID,
+			ID:       e.ID.String(),
 			Animated: e.Animated,
 			GuildID:  guildID,
 		})
@@ -136,15 +147,15 @@ func (m *Manager) FormatEmojiList(emojis []Emoji) string {
 
 // GetAllEmojis returns emojis from all guilds the bot is in
 func (m *Manager) GetAllEmojis() []Emoji {
-	if m.session == nil || m.session.State == nil {
+	if m.client == nil {
 		return []Emoji{}
 	}
 
 	allEmojis := make([]Emoji, 0)
 	seen := make(map[string]bool)
 
-	for _, guild := range m.session.State.Guilds {
-		emojis := m.GetEmojisForGuild(guild.ID)
+	for guild := range m.client.Caches.Guilds() {
+		emojis := m.GetEmojisForGuild(guild.ID.String())
 		for _, emoji := range emojis {
 			// Deduplicate by ID
 			if !seen[emoji.ID] {

@@ -8,10 +8,15 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
+	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
@@ -19,7 +24,7 @@ import (
 )
 
 type MessageHandler struct {
-	session        *discordgo.Session
+	client         *bot.Client
 	aiservice      *ai.Service
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
@@ -28,101 +33,101 @@ type MessageHandler struct {
 	defaultPrompt  string
 }
 
-func NewMessageHandler(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string) *MessageHandler {
+func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string) *MessageHandler {
 	return &MessageHandler{
-		session:        session,
+		client:         client,
 		aiservice:      aiService,
 		repo:           repo,
-		contextBuilder: ai.NewContextBuilder(session, aiService),
+		contextBuilder: ai.NewContextBuilder(client, aiService),
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
 		defaultPrompt:  defaultPrompt,
 	}
 }
 
-func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
+func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
+	client := e.Client()
+	m := e.Message
+
+	if m.Author.ID == client.ID() {
 		return
 	}
 
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
-	if h.memoryService != nil && m.GuildID != "" {
+	if h.memoryService != nil && m.GuildID != nil {
 		go func() {
 			ctx := context.Background()
-			if err := h.memoryService.BufferMessage(ctx, m.Author.ID, m.GuildID, m.Content); err != nil {
-				// Use fmt instead of logger to avoid database locks
+			if err := h.memoryService.BufferMessage(ctx, m.Author.ID.String(), m.GuildID.String(), m.Content); err != nil {
 				fmt.Printf("[Memory] Failed to buffer message for user %s: %v\n", m.Author.ID, err)
 			}
 		}()
 	}
 
-	botMember, err := s.GuildMember(m.GuildID, s.State.User.ID)
+	ctx, cancel := appcontext.Message()
+	defer cancel()
+
+	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
 	if err != nil {
 		fmt.Println("error getting bot member,", err)
 		return
 	}
 
-	threshold := h.repo.GetThreshold(context.Background(), m.GuildID)
-	thresholdSexe := h.repo.GetThresholdSexe(context.Background(), m.GuildID)
+	threshold := h.repo.GetThreshold(ctx, m.GuildID.String())
+	thresholdSexe := h.repo.GetThresholdSexe(ctx, m.GuildID.String())
 
 	randFloat := rand.Float32()
-	if randFloat < float32(thresholdSexe) && !h.botMentioned(s, m) {
+	if randFloat < float32(thresholdSexe) && !h.botMentioned(&m, client.ID()) {
 		if rand.Float32() < 0.5 {
-			s.ChannelMessageSend(m.ChannelID, "(et je parle de sexe evidemment)")
+			client.Rest.CreateMessage(m.ChannelID, discord.MessageCreate{Content: "(et je parle de sexe evidemment)"}, rest.WithCtx(ctx))
 			return
 		} else {
-			s.ChannelMessageSend(m.ChannelID, "malin ça, j'ai la barre maintenant")
+			client.Rest.CreateMessage(m.ChannelID, discord.MessageCreate{Content: "malin ça, j'ai la barre maintenant"}, rest.WithCtx(ctx))
 			return
 		}
 	}
 
 	randFloat = rand.Float32()
-	if randFloat > float32(threshold) && !h.botMentioned(s, m) {
+	if randFloat > float32(threshold) && !h.botMentioned(&m, client.ID()) {
 		return
 	}
 
-	state := h.repo.GetState(context.Background(), m.GuildID)
+	state := h.repo.GetState(ctx, m.GuildID.String())
 	if state == "off" {
 		return
 	}
 
-	lastMessageTime := h.repo.GetLastMessage(context.Background(), m.GuildID)
-	if lastMessageTime > 0 && !h.botMentioned(s, m) {
+	lastMessageTime := h.repo.GetLastMessage(ctx, m.GuildID.String())
+	if lastMessageTime > 0 && !h.botMentioned(&m, client.ID()) {
 		if time.Now().Unix()-lastMessageTime < database.DefaultRateLimit {
 			return
 		}
 	}
 
-	err = h.repo.SetLastMessage(context.Background(), m.GuildID, time.Now().Unix())
-	if err != nil {
-		logger.Error("Error setting last message time", zap.Error(err))
-		return
-	}
+	_ = h.repo.SetLastMessage(ctx, m.GuildID.String(), time.Now().Unix())
 
-	h.repo.SetChannelLastMessage(context.Background(), m.GuildID, m.ChannelID, time.Now().Unix())
+	h.repo.SetChannelLastMessage(ctx, m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
 
-	s.ChannelTyping(m.ChannelID)
+	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
-	messageCount := h.repo.GetMessagesCount(context.Background(), m.GuildID)
-	messages, err := h.getMessages(s, m.ChannelID, messageCount)
+	messageCount := h.repo.GetMessagesCount(ctx, m.GuildID.String())
+	messages, err := h.getMessages(ctx, m.ChannelID, messageCount)
 	if err != nil {
 		logger.Error("Error getting messages", zap.Error(err))
 		return
 	}
 
-	processedMessage, err := h.contextBuilder.BuildContext(context.Background(), messages, m.GuildID, s.State.User.ID)
+	processedMessage, err := h.contextBuilder.BuildContext(ctx, messages, *m.GuildID, client.ID())
 	if err != nil {
 		logger.Error("Error building context", zap.Error(err))
 		return
 	}
 
-	temperature := h.repo.GetTemperature(context.Background(), m.GuildID)
+	temperature := h.repo.GetTemperature(ctx, m.GuildID.String())
 
 	// Build memory context if available
 	var memoryContext string
 	if h.memoryService != nil {
-		ctx := context.Background()
-		memoryCtx, err := h.memoryService.GetMemoryContext(ctx, m.Author.ID, m.GuildID, m.Content)
+		memoryCtx, err := h.memoryService.GetMemoryContext(ctx, m.Author.ID.String(), m.GuildID.String(), m.Content)
 		if err == nil && memoryCtx != nil && len(memoryCtx.Summaries) > 0 {
 			memoryContext = "\n\n**Contexte de conversation:**\n"
 			for i, summary := range memoryCtx.Summaries {
@@ -146,24 +151,32 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		}
 	}
 
-	instructions := h.GetDefaultPrompt(botMember.Nick)
+	botNick := ""
+	if botMember.Nick != nil {
+		botNick = *botMember.Nick
+	}
+	if botNick == "" {
+		botNick = botMember.User.Username
+	}
+
+	instructions := h.GetDefaultPrompt(botNick)
 	instructions += memoryContext
 
-	if prompt, ok := h.repo.GetPrompt(context.Background(), m.GuildID); ok {
+	if prompt, ok := h.repo.GetPrompt(ctx, m.GuildID.String()); ok {
 		instructions = prompt
 	}
 
-	s.ChannelTyping(m.ChannelID)
+	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
 	// Start AI call with comprehensive logging and retry/fallback support
 	logger.Debug("Starting AI chat request",
-		zap.String("guild_id", m.GuildID),
-		zap.String("channel_id", m.ChannelID),
-		zap.String("user_id", m.Author.ID),
+		zap.String("guild_id", m.GuildID.String()),
+		zap.String("channel_id", m.ChannelID.String()),
+		zap.String("user_id", m.Author.ID.String()),
 		zap.Int("message_count", len(processedMessage.Messages)),
 		zap.Int("image_count", len(processedMessage.Images)))
 
-	response, err := h.aiservice.Chat(context.Background(), &ai.ChatRequest{
+	response, err := h.aiservice.Chat(ctx, &ai.ChatRequest{
 		SystemPrompt: instructions,
 		Messages:     processedMessage.Messages,
 		Images:       processedMessage.Images,
@@ -171,9 +184,9 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		MaxTokens:    database.DefaultMaxTokens,
 	})
 
-	reference := &discordgo.MessageReference{
-		MessageID: m.ID,
-		ChannelID: m.ChannelID,
+	reference := &discord.MessageReference{
+		MessageID: &m.ID,
+		ChannelID: &m.ChannelID,
 		GuildID:   m.GuildID,
 	}
 
@@ -181,8 +194,8 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 		// Enhanced error handling with user-friendly messages
 		logger.Error("AI chat failed after all retries and fallbacks",
 			zap.Error(err),
-			zap.String("guild_id", m.GuildID),
-			zap.String("user_id", m.Author.ID))
+			zap.String("guild_id", m.GuildID.String()),
+			zap.String("user_id", m.Author.ID.String()))
 
 		// Send user-friendly error message
 		errorMsg := "Désolé, j'ai des soucis techniques là... 🤖💀"
@@ -190,24 +203,32 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 			errorMsg = "Désolé, tous mes systèmes sont en rade... 🤖💀"
 		}
 
-		s.ChannelMessageSendReply(m.ChannelID, errorMsg, reference)
+		client.Rest.CreateMessage(m.ChannelID,
+			discord.MessageCreate{
+				Content:          errorMsg,
+				MessageReference: reference,
+			}, rest.WithCtx(ctx))
 		return
 	}
 
 	// Validate response before sending
 	if response.Content == "" {
 		logger.Error("Received empty response from AI service",
-			zap.String("guild_id", m.GuildID),
-			zap.String("user_id", m.Author.ID))
+			zap.String("guild_id", m.GuildID.String()),
+			zap.String("user_id", m.Author.ID.String()))
 
-		s.ChannelMessageSendReply(m.ChannelID, "Euh... j'ai perdu mes mots là 😅", reference)
+		client.Rest.CreateMessage(m.ChannelID,
+			discord.MessageCreate{
+				Content:          "Euh... j'ai perdu mes mots là 😅",
+				MessageReference: reference,
+			}, rest.WithCtx(ctx))
 		return
 	}
 
 	// Log successful response
 	logger.Info("AI response successful",
-		zap.String("guild_id", m.GuildID),
-		zap.String("user_id", m.Author.ID),
+		zap.String("guild_id", m.GuildID.String()),
+		zap.String("user_id", m.Author.ID.String()),
 		zap.String("provider", h.aiservice.Name()),
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
@@ -218,44 +239,43 @@ func (h *MessageHandler) Handle(s *discordgo.Session, m *discordgo.MessageCreate
 
 	// Convert emoji shortcodes to Discord format (if emoji manager is available)
 	if h.emojiManager != nil {
-		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID)
+		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID.String())
 	}
 
-	s.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-		Content:   response.Content,
-		Reference: reference,
-		AllowedMentions: &discordgo.MessageAllowedMentions{
-			Parse: []discordgo.AllowedMentionType{},
-		},
-	})
+	client.Rest.CreateMessage(m.ChannelID,
+		discord.MessageCreate{
+			Content:          response.Content,
+			MessageReference: reference,
+			AllowedMentions:  &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+		}, rest.WithCtx(ctx))
 }
 
-func (h *MessageHandler) botMentioned(s *discordgo.Session, m *discordgo.MessageCreate) bool {
-	for i := range m.Mentions {
-		if m.Mentions[i].ID == s.State.User.ID {
+func (h *MessageHandler) botMentioned(m *discord.Message, botID snowflake.ID) bool {
+	for _, mention := range m.Mentions {
+		if mention.ID == botID {
 			return true
 		}
 	}
 	return false
 }
 
-func (h *MessageHandler) getMessages(s *discordgo.Session, channelID string, num int) ([]*discordgo.Message, error) {
+func (h *MessageHandler) getMessages(ctx context.Context, channelID snowflake.ID, num int) ([]discord.Message, error) {
 	if num <= 100 {
-		messages, err := s.ChannelMessages(channelID, num, "", "", "")
+		messages, err := h.client.Rest.GetMessages(channelID, 0, 0, 0, num, rest.WithCtx(ctx))
 		if err != nil {
 			return nil, err
 		}
 		return messages, nil
 	}
 
-	messages := []*discordgo.Message{}
+	messages := []discord.Message{}
 	for num > 0 {
 		toGet := min(100, num)
-		lastMessage := ""
+		var before snowflake.ID
 		if len(messages) > 0 {
-			lastMessage = messages[len(messages)-1].ID
+			before = messages[len(messages)-1].ID
 		}
-		newMessages, err := s.ChannelMessages(channelID, toGet, lastMessage, "", "")
+		newMessages, err := h.client.Rest.GetMessages(channelID, 0, before, 0, toGet, rest.WithCtx(ctx))
 		if err != nil {
 			return nil, err
 		}

@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
 	"github.com/go-co-op/gocron/v2"
 	"go.uber.org/zap"
 
@@ -20,7 +20,7 @@ import (
 )
 
 type Scheduler struct {
-	session         *discordgo.Session
+	client          *bot.Client
 	aiservice       *ai.Service
 	repo            *database.Repository
 	events          *database.EventRepository
@@ -31,7 +31,7 @@ type Scheduler struct {
 	reengageCfg     config.ReengageConfig
 }
 
-func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string) *Scheduler {
+func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -39,10 +39,10 @@ func New(session *discordgo.Session, aiService *ai.Service, repo *database.Repos
 		log.Println("error creating scheduler,", schedulerErr)
 	}
 
-	reengageService := reengage.NewService(session, aiService, repo, memoryService, emojiManager, reengageCfg, defaultPrompt)
+	reengageService := reengage.NewService(client, aiService, repo, memoryService, emojiManager, reengageCfg, defaultPrompt)
 
 	return &Scheduler{
-		session:         session,
+		client:          client,
 		aiservice:       aiService,
 		repo:            repo,
 		events:          database.NewEventRepository(utils.GetDB(), logger.Log),
