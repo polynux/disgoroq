@@ -20,24 +20,24 @@ import (
 // Orchestrator manages the voice conversation flow.
 // It coordinates between STT (speech-to-text), AI service, and TTS (text-to-speech).
 type Orchestrator struct {
-	manager       *Manager
-	sttClient     STTClient
-	ttsClient     TTSClient
-	aiService     *ai.Service
-	memoryService memory.Service
+	manager        *Manager
+	sttClient      STTClient
+	ttsClient      TTSClient
+	aiService      *ai.Service
+	memoryService  memory.Service
 	contextBuilder *ai.ContextBuilder
-	session       *discordgo.Session
-	repo          Repository
-	defaultPrompt string
-	config        config.VoiceConfig
+	session        *discordgo.Session
+	repo           Repository
+	defaultPrompt  string
+	config         config.VoiceConfig
 
 	// State management
-	sessions     map[string]*VoiceConversation // guildID -> conversation
-	sessionsMu   sync.RWMutex
+	sessions   map[string]*VoiceConversation // guildID -> conversation
+	sessionsMu sync.RWMutex
 
 	// VRAM management
-	lastTTSAudio  time.Time
-	vramCheckMu   sync.Mutex
+	lastTTSAudio time.Time
+	vramCheckMu  sync.Mutex
 
 	// Callbacks
 	onStateChange func(guildID string, oldState, newState AgentState)
@@ -61,14 +61,14 @@ type VoiceConversation struct {
 
 // OrchestratorConfig contains configuration for the orchestrator.
 type OrchestratorConfig struct {
-	STTClient      STTClient
-	TTSClient      TTSClient
-	AIService      *ai.Service
-	MemoryService  memory.Service
-	Session        *discordgo.Session
-	Repository     Repository
-	DefaultPrompt  string
-	VoiceConfig    config.VoiceConfig
+	STTClient     STTClient
+	TTSClient     TTSClient
+	AIService     *ai.Service
+	MemoryService memory.Service
+	Session       *discordgo.Session
+	Repository    Repository
+	DefaultPrompt string
+	VoiceConfig   config.VoiceConfig
 }
 
 // NewOrchestrator creates a new voice orchestrator.
@@ -112,7 +112,7 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 		GuildID:       guildID,
 		TextChannelID: textChannelID,
 		State:         StateListening,
-		AudioBuffer:   NewAudioBufferManager(
+		AudioBuffer: NewAudioBufferManager(
 			o.config.Audio.SampleRate,
 			o.config.Audio.Channels,
 			20, // 20ms frames
@@ -225,8 +225,8 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 
 	// Build message context
 	message := ai.Message{
-		Role:    "user",
-		Content: text,
+		Role:     "user",
+		Content:  text,
 		AuthorID: userID,
 	}
 

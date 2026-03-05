@@ -117,22 +117,25 @@ func (e *OpusEncoder) Encode(pcm []byte) ([][]byte, error) {
 	}
 
 	// Split into frames (960 samples per frame for 20ms at 48kHz stereo)
+	// For stereo, each frame needs samplesPerFrame * channels samples
 	samplesPerFrame := e.frameSize
+	samplesNeeded := samplesPerFrame * e.channels
 	var frames [][]byte
 
-	for i := 0; i < len(pcmInt16); i += samplesPerFrame * e.channels {
-		end := i + samplesPerFrame*e.channels
+	for i := 0; i < len(pcmInt16); i += samplesNeeded {
+		end := i + samplesNeeded
 		var frameSamples []int16
 		if end > len(pcmInt16) {
-			// Pad last frame
-			frameSamples = make([]int16, samplesPerFrame*e.channels)
+			// Pad last frame with silence
+			frameSamples = make([]int16, samplesNeeded)
 			copy(frameSamples, pcmInt16[i:])
 		} else {
 			frameSamples = pcmInt16[i:end]
 		}
 
 		// Encode frame
-		opus, err := e.encoder.Encode(frameSamples, samplesPerFrame, 960)
+		// maxBytesPerFrame: recommended ~4000 bytes for Opus
+		opus, err := e.encoder.Encode(frameSamples, samplesPerFrame, 4000)
 		if err != nil {
 			return nil, err
 		}

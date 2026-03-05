@@ -38,9 +38,9 @@ type Manager struct {
 // NewManager creates a new voice manager.
 func NewManager(session *discordgo.Session) *Manager {
 	return &Manager{
-		session:     session,
-		sessions:    make(map[string]*VoiceSession),
-		connections: make(map[string]*discordgo.VoiceConnection),
+		session:      session,
+		sessions:     make(map[string]*VoiceSession),
+		connections:  make(map[string]*discordgo.VoiceConnection),
 		opusDecoders: make(map[string]*OpusDecodeSession),
 	}
 }
@@ -329,8 +329,10 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 		zap.String("guild_id", guildID),
 		zap.Int("frame_count", len(opusFrames)))
 
-	// Send Opus frames
-	for _, opusFrame := range opusFrames {
+	// Send Opus frames with proper timing (20ms per frame)
+	// Discord expects frames at 20ms intervals for smooth playback
+	frameDuration := 20 * time.Millisecond
+	for i, opusFrame := range opusFrames {
 		select {
 		case <-ctx.Done():
 			m.SetState(guildID, StateListening)
@@ -342,6 +344,12 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 			case <-time.After(100 * time.Millisecond):
 				logger.Warn("Timeout sending Opus frame", zap.String("guild_id", guildID))
 			}
+
+			// Wait for frame duration before sending next frame
+			// Skip waiting after the last frame
+			if i < len(opusFrames)-1 {
+				time.Sleep(frameDuration)
+			}
 		}
 	}
 
@@ -352,6 +360,9 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 
 // processAudioForDiscord converts audio to Discord's expected format (48kHz stereo PCM).
 func (m *Manager) processAudioForDiscord(audio []byte, sampleRate int) ([]byte, error) {
+	inputAudio := audio
+	inputChannels := 1 // Assume mono by default
+
 	// Check if audio is WAV format
 	if IsWAV(audio) {
 		pcmData, info, err := ParseWAV(audio)
@@ -359,26 +370,31 @@ func (m *Manager) processAudioForDiscord(audio []byte, sampleRate int) ([]byte, 
 			return nil, fmt.Errorf("failed to parse WAV: %w", err)
 		}
 
-		logger.Debug("Parsed WAV audio",
+		logger.Info("Parsed WAV audio",
+			zap.Int("original_bytes", len(audio)),
 			zap.Int("sample_rate", info.SampleRate),
 			zap.Int("channels", info.Channels),
 			zap.Int("bits", info.BitsPerSample),
 			zap.Int("pcm_size", len(pcmData)))
 
-		// Convert to Discord format (48kHz stereo)
-		converted, err := ConvertToDiscordFormat(pcmData, info.SampleRate, info.Channels)
-		if err != nil {
-			return nil, fmt.Errorf("failed to convert audio format: %w", err)
-		}
-
-		return converted, nil
+		inputAudio = pcmData
+		inputChannels = info.Channels
+		sampleRate = info.SampleRate
 	}
 
-	// Assume raw PCM at the given sample rate (mono by default)
-	converted, err := ConvertToDiscordFormat(audio, sampleRate, 1)
+	// Convert to Discord format (48kHz stereo)
+	converted, err := ConvertToDiscordFormat(inputAudio, sampleRate, inputChannels)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert audio format: %w", err)
 	}
+
+	logger.Info("Converted audio for Discord",
+		zap.Int("input_bytes", len(inputAudio)),
+		zap.Int("input_sample_rate", sampleRate),
+		zap.Int("input_channels", inputChannels),
+		zap.Int("output_bytes", len(converted)),
+		zap.Int("output_sample_rate", 48000),
+		zap.Int("output_channels", 2))
 
 	return converted, nil
 }

@@ -58,41 +58,53 @@ func (p *AudioProcessor) PCMToFrame(pcm []byte) ([]byte, error) {
 }
 
 // Resample converts audio from one sample rate to another.
-// This is a simple linear interpolation resampler - for production use,
-// consider using a proper resampling library.
-func Resample(input []byte, inRate, outRate int) []byte {
+// For stereo audio (channels=2), L and R channels are interpolated separately.
+// For production use, consider using a proper resampling library.
+func Resample(input []byte, inRate, outRate, channels int) []byte {
 	if inRate == outRate {
 		return input
 	}
 
-	// Read 16-bit samples
-	samples := len(input) / 2
-	outputSamples := samples * outRate / inRate
-	output := make([]byte, outputSamples*2)
+	// Number of samples per channel
+	samplesPerChannel := len(input) / (2 * channels)
+	// Output samples per channel
+	outputSamplesPerChannel := samplesPerChannel * outRate / inRate
+
+	// Total output bytes
+	output := make([]byte, outputSamplesPerChannel*2*channels)
 
 	ratio := float64(inRate) / float64(outRate)
 
-	for i := 0; i < outputSamples; i++ {
-		srcPos := float64(i) * ratio
-		srcIndex := int(srcPos)
+	// Process each channel separately
+	for ch := 0; ch < channels; ch++ {
+		for i := 0; i < outputSamplesPerChannel; i++ {
+			srcPos := float64(i) * ratio
+			srcIndex := int(srcPos)
 
-		if srcIndex+1 < samples {
-			// Linear interpolation
-			frac := srcPos - float64(srcIndex)
+			// Read and interpolate for this channel
+			if srcIndex+1 < samplesPerChannel {
+				frac := srcPos - float64(srcIndex)
 
-			// Read two samples (little-endian 16-bit)
-			s1 := int16(binary.LittleEndian.Uint16(input[srcIndex*2:]))
-			s2 := int16(binary.LittleEndian.Uint16(input[(srcIndex+1)*2:]))
+				// Get source indices for this channel
+				idx1 := (srcIndex*channels + ch) * 2
+				idx2 := ((srcIndex + 1)*channels + ch) * 2
 
-			// Interpolate
-			result := s1 + int16(float64(s2-s1)*frac)
+				s1 := int16(binary.LittleEndian.Uint16(input[idx1:]))
+				s2 := int16(binary.LittleEndian.Uint16(input[idx2:]))
 
-			// Write output sample
-			binary.LittleEndian.PutUint16(output[i*2:], uint16(result))
-		} else if srcIndex < samples {
-			// Last sample
-			s := binary.LittleEndian.Uint16(input[srcIndex*2:])
-			binary.LittleEndian.PutUint16(output[i*2:], s)
+				// Interpolate
+				result := s1 + int16(float64(s2-s1)*frac)
+
+				// Write to output at correct position for this channel
+				outIdx := (i*channels + ch) * 2
+				binary.LittleEndian.PutUint16(output[outIdx:], uint16(result))
+			} else if srcIndex < samplesPerChannel {
+				// Last sample for this channel
+				idx := (srcIndex*channels + ch) * 2
+				s := binary.LittleEndian.Uint16(input[idx:])
+				outIdx := (i*channels + ch) * 2
+				binary.LittleEndian.PutUint16(output[outIdx:], s)
+			}
 		}
 	}
 
@@ -296,15 +308,17 @@ func ReadAudioStream(r io.Reader, frameSize int) ([][]byte, error) {
 // Discord expects 48kHz stereo 16-bit PCM (or Opus encoded).
 func ConvertToDiscordFormat(input []byte, inSampleRate, inChannels int) ([]byte, error) {
 	output := input
+	channels := inChannels
 
 	// Convert mono to stereo if needed
 	if inChannels == 1 {
 		output = MonoToStereo(output)
+		channels = 2
 	}
 
 	// Resample to 48kHz if needed
 	if inSampleRate != 48000 {
-		output = Resample(output, inSampleRate, 48000)
+		output = Resample(output, inSampleRate, 48000, channels)
 	}
 
 	return output, nil
@@ -314,15 +328,17 @@ func ConvertToDiscordFormat(input []byte, inSampleRate, inChannels int) ([]byte,
 // Useful for sending to STT services that may expect different formats.
 func ConvertFromDiscordFormat(input []byte, outSampleRate, outChannels int) ([]byte, error) {
 	output := input
+	channels := 2 // Discord is always stereo
+
+	// Resample to target rate if needed
+	if outSampleRate != 48000 {
+		output = Resample(output, 48000, outSampleRate, channels)
+		channels = 2 // Still stereo after resample
+	}
 
 	// Convert stereo to mono if needed
 	if outChannels == 1 {
 		output = StereoToMono(output)
-	}
-
-	// Resample to target rate if needed
-	if outSampleRate != 48000 {
-		output = Resample(output, 48000, outSampleRate)
 	}
 
 	return output, nil
