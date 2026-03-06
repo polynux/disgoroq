@@ -149,9 +149,13 @@ class WhisperServer:
         audio_data = request.get("audio")
 
         # Handle different audio data formats from JSON
-        logger.debug(
+        logger.info(
             f"Received audio data type: {type(audio_data).__name__ if audio_data is not None else 'None'}"
         )
+        if isinstance(audio_data, str):
+            logger.info(
+                f"Audio data is string, length: {len(audio_data)}, first 50 chars: {audio_data[:50] if len(audio_data) > 50 else audio_data}"
+            )
 
         if audio_data is None:
             return {"error": "No audio data provided"}
@@ -160,14 +164,14 @@ class WhisperServer:
             # Go's JSON marshaller encodes []byte as base64
             try:
                 audio_data = base64.b64decode(audio_data)
-                logger.debug(f"Decoded base64 audio: {len(audio_data)} bytes")
+                logger.info(f"Decoded base64 audio: {len(audio_data)} bytes")
             except Exception as e:
                 logger.error(f"Failed to decode base64 audio: {e}")
                 return {"error": f"Invalid base64 audio data: {e}"}
         elif isinstance(audio_data, list):
             # Some clients may send as array of bytes
             audio_data = bytes(audio_data)
-            logger.debug(f"Converted list to bytes: {len(audio_data)} bytes")
+            logger.info(f"Converted list to bytes: {len(audio_data)} bytes")
 
         if not isinstance(audio_data, bytes):
             logger.error(
