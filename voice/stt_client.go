@@ -36,10 +36,12 @@ type WhisperConfig struct {
 
 // WhisperRequest represents a request to whisper.cpp.
 type WhisperRequest struct {
-	Command  string `json:"command"`  // "transcribe", "start", "stop", "reset"
-	Audio    []byte `json:"audio"`    // Audio data (PCM 16-bit)
-	Language string `json:"language"` // Language code (e.g., "fr", "en")
-	Model    string `json:"model"`    // Model name
+	Command    string `json:"command"`               // "transcribe", "start", "stop", "reset"
+	Audio      []byte `json:"audio"`                 // Audio data (PCM 16-bit)
+	Language   string `json:"language,omitempty"`    // Language code (e.g., "fr", "en")
+	Model      string `json:"model,omitempty"`       // Model name
+	SampleRate int    `json:"sample_rate,omitempty"` // Audio sample rate (default: 16000)
+	Channels   int    `json:"channels,omitempty"`    // Number of channels (default: 1)
 }
 
 // WhisperResponse represents a response from whisper.cpp.
@@ -130,10 +132,12 @@ func (c *WhisperClient) Transcribe(ctx context.Context, audio []byte) (string, e
 
 	// Build request
 	req := WhisperRequest{
-		Command:  "transcribe",
-		Audio:    audio,
-		Language: c.language,
-		Model:    c.model,
+		Command:    "transcribe",
+		Audio:      audio,
+		Language:   c.language,
+		Model:      c.model,
+		SampleRate: 16000, // Whisper expects 16kHz
+		Channels:   1,     // Mono audio
 	}
 
 	// Send request
