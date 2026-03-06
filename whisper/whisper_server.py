@@ -23,8 +23,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -60,8 +59,7 @@ class WhisperServer:
 
         # Start the server
         self.server = await asyncio.start_unix_server(
-            self._handle_client,
-            path=self.socket_path
+            self._handle_client, path=self.socket_path
         )
 
         # Set permissions
@@ -81,16 +79,18 @@ class WhisperServer:
             os.unlink(self.socket_path)
         logger.info("Whisper server stopped")
 
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ):
         """Handle a client connection."""
-        client_addr = writer.get_extra_info('peername') or 'unknown'
+        client_addr = writer.get_extra_info("peername") or "unknown"
         logger.debug(f"Client connected: {client_addr}")
 
         try:
             while self._running:
                 # Read message length (4 bytes, big-endian)
                 length_data = await reader.readexactly(4)
-                length = struct.unpack('>I', length_data)[0]
+                length = struct.unpack(">I", length_data)[0]
 
                 if length == 0:
                     continue
@@ -100,7 +100,7 @@ class WhisperServer:
 
                 # Parse request
                 try:
-                    request = json.loads(data.decode('utf-8'))
+                    request = json.loads(data.decode("utf-8"))
                     response = await self._process_request(request)
                 except json.JSONDecodeError as e:
                     response = {"error": f"Invalid JSON: {e}"}
@@ -109,8 +109,8 @@ class WhisperServer:
                     response = {"error": str(e)}
 
                 # Send response
-                response_data = json.dumps(response).encode('utf-8')
-                response_length = struct.pack('>I', len(response_data))
+                response_data = json.dumps(response).encode("utf-8")
+                response_length = struct.pack(">I", len(response_data))
                 writer.write(response_length + response_data)
                 await writer.drain()
 
@@ -146,20 +146,43 @@ class WhisperServer:
 
     async def _transcribe(self, request: dict) -> dict:
         """Transcribe audio data using whisper.cpp."""
-        audio_data = request.get("audio", b"")
+        audio_data = request.get("audio")
 
         # Handle different audio data formats from JSON
+        logger.debug(
+            f"Received audio data type: {type(audio_data).__name__ if audio_data is not None else 'None'}"
+        )
+
+        if audio_data is None:
+            return {"error": "No audio data provided"}
+
         if isinstance(audio_data, str):
             # Go's JSON marshaller encodes []byte as base64
-            audio_data = base64.b64decode(audio_data)
+            try:
+                audio_data = base64.b64decode(audio_data)
+                logger.debug(f"Decoded base64 audio: {len(audio_data)} bytes")
+            except Exception as e:
+                logger.error(f"Failed to decode base64 audio: {e}")
+                return {"error": f"Invalid base64 audio data: {e}"}
         elif isinstance(audio_data, list):
             # Some clients may send as array of bytes
             audio_data = bytes(audio_data)
+            logger.debug(f"Converted list to bytes: {len(audio_data)} bytes")
+
+        if not isinstance(audio_data, bytes):
+            logger.error(
+                f"Unexpected audio data type after conversion: {type(audio_data)}"
+            )
+            return {
+                "error": f"Invalid audio data type: expected bytes, got {type(audio_data).__name__}"
+            }
 
         language = request.get("language", self.language)
 
-        if not audio_data:
+        if len(audio_data) == 0:
             return {"error": "No audio data provided"}
+
+        logger.info(f"Processing {len(audio_data)} bytes of audio data")
 
         # Write audio to temporary WAV file
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -175,11 +198,14 @@ class WhisperServer:
 
             cmd = [
                 WHISPER_BINARY,
-                "-m", model_path,
-                "-f", tmp_path,
-                "-l", language,
+                "-m",
+                model_path,
+                "-f",
+                tmp_path,
+                "-l",
+                language,
                 "--output-json",
-                "--no-prints"
+                "--no-prints",
             ]
 
             # Set environment with library path
@@ -191,7 +217,7 @@ class WhisperServer:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
 
             stdout, stderr = await process.communicate()
@@ -203,7 +229,7 @@ class WhisperServer:
             # Parse JSON output (whisper writes to file.json)
             json_path = tmp_path + ".json"
             if os.path.exists(json_path):
-                with open(json_path, 'r') as f:
+                with open(json_path, "r") as f:
                     result = json.load(f)
                 os.unlink(json_path)
 
@@ -233,7 +259,7 @@ class WhisperServer:
                     "text": text,
                     "language": result.get("result", {}).get("language", language),
                     "confidence": 0.9,  # Placeholder
-                    "duration": duration
+                    "duration": duration,
                 }
             else:
                 # Fallback to stdout parsing
@@ -250,7 +276,17 @@ class WhisperServer:
 
     def _write_wav(self, file, audio_data: bytes, sample_rate: int, channels: int):
         """Write PCM audio data to a WAV file."""
-        with wave.open(file, 'wb') as wav_file:
+        # Ensure audio_data is bytes
+        if isinstance(audio_data, str):
+            logger.warning("audio_data is str in _write_wav, attempting to encode")
+            audio_data = audio_data.encode("latin-1")
+        elif isinstance(audio_data, memoryview):
+            audio_data = bytes(audio_data)
+        elif not isinstance(audio_data, bytes):
+            logger.error(f"audio_data must be bytes, got {type(audio_data)}")
+            raise TypeError(f"audio_data must be bytes, got {type(audio_data)}")
+
+        with wave.open(file, "wb") as wav_file:
             wav_file.setnchannels(channels)
             wav_file.setsampwidth(2)  # 16-bit
             wav_file.setframerate(sample_rate)
