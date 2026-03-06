@@ -58,6 +58,10 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 			return ErrAlreadyConnected
 		}
 		// Leave current channel first
+		logger.Info("Leaving current voice channel before joining new one",
+			zap.String("guild_id", guildID),
+			zap.String("old_channel", session.ChannelID),
+			zap.String("new_channel", channelID))
 		m.leaveVoiceLocked(ctx, guildID)
 	}
 
@@ -69,6 +73,16 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 	channelSnowflake, err := snowflake.Parse(channelID)
 	if err != nil {
 		return fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	// Check if there's an existing connection in the voice manager and close it
+	// This can happen if leaveVoice didn't fully clean up
+	if existingConn := m.client.VoiceManager.GetConn(guildSnowflake); existingConn != nil {
+		logger.Info("Found existing voice connection, closing it",
+			zap.String("guild_id", guildID))
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		existingConn.Close(closeCtx)
+		closeCancel()
 	}
 
 	// Create voice connection using disgo's voice manager
@@ -130,8 +144,12 @@ func (m *Manager) leaveVoiceLocked(ctx context.Context, guildID string) error {
 
 	conn := m.client.VoiceManager.GetConn(guildSnowflake)
 	if conn != nil {
-		// Close the connection
-		conn.Close(ctx)
+		// Use a timeout context for closing to avoid blocking forever
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+
+		logger.Info("Closing voice connection", zap.String("guild_id", guildID))
+		conn.Close(closeCtx)
 	}
 
 	// Clear session
