@@ -287,16 +287,33 @@ func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 // It automatically handles WAV format by parsing the header and converting to Discord's expected format.
 // Audio is encoded to Opus before sending to Discord.
 func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, sampleRate int) error {
+	logger.Info("PlayAudio: ENTERING",
+		zap.String("guild_id", guildID),
+		zap.Int("audio_bytes", len(audio)),
+		zap.Int("sample_rate", sampleRate))
+
+	// Check context before starting
+	select {
+	case <-ctx.Done():
+		logger.Warn("PlayAudio: context already cancelled", zap.String("guild_id", guildID), zap.Error(ctx.Err()))
+		return ctx.Err()
+	default:
+	}
+
 	m.mu.RLock()
-	_, exists := m.sessions[guildID]
+	session, exists := m.sessions[guildID]
 	m.mu.RUnlock()
 
 	if !exists {
+		logger.Error("PlayAudio: no session found", zap.String("guild_id", guildID))
 		return ErrNotConnected
 	}
+	logger.Info("PlayAudio: session found", zap.String("guild_id", guildID), zap.String("channel_id", session.ChannelID))
 
+	logger.Info("PlayAudio: getting voice connection", zap.String("guild_id", guildID))
 	conn, err := m.GetVoiceConnection(guildID)
 	if err != nil {
+		logger.Error("PlayAudio: failed to get connection", zap.Error(err))
 		return err
 	}
 
@@ -304,6 +321,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 	m.SetState(guildID, StateSpeaking)
 
 	// Signal speaking using disgo API
+	logger.Info("PlayAudio: setting speaking flag", zap.String("guild_id", guildID))
 	if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
 		logger.Error("Failed to signal speaking", zap.Error(err))
 		return err
@@ -311,6 +329,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 	defer conn.SetSpeaking(context.Background(), 0) // Stop speaking
 
 	// Process audio: handle WAV format and convert to Discord format
+	logger.Info("PlayAudio: processing audio for Discord", zap.String("guild_id", guildID))
 	processedAudio, err := m.processAudioForDiscord(audio, sampleRate)
 	if err != nil {
 		logger.Error("Failed to process audio", zap.Error(err))
@@ -322,6 +341,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 		zap.Int("pcm_bytes", len(processedAudio)))
 
 	// Get or create Opus encoder
+	logger.Info("PlayAudio: getting Opus encoder", zap.String("guild_id", guildID))
 	m.encoderMu.Lock()
 	if m.opusEncoder == nil {
 		m.opusEncoder, err = NewOpusEncoder()
@@ -334,6 +354,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 	m.encoderMu.Unlock()
 
 	// Encode PCM to Opus frames
+	logger.Info("PlayAudio: encoding to Opus", zap.String("guild_id", guildID))
 	opusFrames, err := encoder.Encode(processedAudio)
 	if err != nil {
 		return fmt.Errorf("failed to encode Opus: %w", err)
