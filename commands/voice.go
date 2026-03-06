@@ -181,20 +181,6 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 	// Find a text channel for fallback messages
 	textChannelID := vc.findTextChannel(*guildID)
 
-	// Use a longer timeout for voice join (DAVE handshake can take 30+ seconds)
-	joinCtx, joinCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer joinCancel()
-
-	// Join the voice channel
-	if err := vc.orchestrator.JoinVoice(joinCtx, guildIDStr, channelID, textChannelID); err != nil {
-		logger.Error("Failed to join voice channel",
-			zap.String("guild_id", guildIDStr),
-			zap.String("channel_id", channelID),
-			zap.Error(err))
-		vc.respondError(e, "Failed to join voice channel: "+err.Error())
-		return
-	}
-
 	// Get channel name for response
 	channelName := "the voice channel"
 	ch, err := vc.client.Rest.GetChannel(*voiceState.ChannelID)
@@ -202,7 +188,41 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 		channelName = ch.Name()
 	}
 
-	vc.respond(e, fmt.Sprintf("🔊 Joined **%s**! I'll listen and respond when you speak.", channelName))
+	// Acknowledge the interaction immediately (Discord has 3s timeout)
+	if err := e.DeferCreateMessage(false); err != nil {
+		logger.Error("Failed to defer interaction", zap.Error(err))
+		return
+	}
+
+	// Send initial status
+	_, _ = vc.client.Rest.CreateFollowupMessage(e.ApplicationID(), e.Token(), discord.MessageCreate{
+		Content: fmt.Sprintf("🔊 Connecting to **%s**...", channelName),
+	})
+
+	// Do the voice join asynchronously
+	go func() {
+		// Use a longer timeout for voice join (DAVE handshake can take time)
+		joinCtx, joinCancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer joinCancel()
+
+		if err := vc.orchestrator.JoinVoice(joinCtx, guildIDStr, channelID, textChannelID); err != nil {
+			logger.Error("Failed to join voice channel",
+				zap.String("guild_id", guildIDStr),
+				zap.String("channel_id", channelID),
+				zap.Error(err))
+
+			// Send error followup
+			_, _ = vc.client.Rest.CreateFollowupMessage(e.ApplicationID(), e.Token(), discord.MessageCreate{
+				Content: fmt.Sprintf("❌ Failed to join voice channel: %s", err.Error()),
+			})
+			return
+		}
+
+		// Send success followup
+		_, _ = vc.client.Rest.CreateFollowupMessage(e.ApplicationID(), e.Token(), discord.MessageCreate{
+			Content: fmt.Sprintf("🔊 Joined **%s**! I'll listen and respond when you speak.", channelName),
+		})
+	}()
 }
 
 // handleLeave handles the /voice leave command.
