@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/omit"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/database"
@@ -16,13 +20,15 @@ import (
 type VoiceCommands struct {
 	repo         *database.Repository
 	orchestrator *voice.Orchestrator
+	client       *bot.Client
 }
 
 // NewVoiceCommands creates a new VoiceCommands instance.
-func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator) *VoiceCommands {
+func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client) *VoiceCommands {
 	return &VoiceCommands{
 		repo:         repo,
 		orchestrator: orchestrator,
+		client:       client,
 	}
 }
 
@@ -33,183 +39,211 @@ func RegisterVoiceCommands(registry *Registry, voiceCmds *VoiceCommands) {
 		return
 	}
 
+	perms := discord.PermissionManageMessages
+
 	// Main voice command with subcommands
 	registry.AddCommand(
-		&discordgo.ApplicationCommand{
+		discord.SlashCommandCreate{
 			Name:        "voice",
 			Description: "Voice chat commands",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "join",
 					Description: "Join your current voice channel",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "leave",
 					Description: "Leave the current voice channel",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "status",
 					Description: "Show voice chat status",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommandGroup{
 					Name:        "autojoin",
 					Description: "Configure auto-join settings",
-					Type:        discordgo.ApplicationCommandOptionSubCommandGroup,
-					Options: []*discordgo.ApplicationCommandOption{
+					Options: []discord.ApplicationCommandOptionSubCommand{
 						{
 							Name:        "enable",
 							Description: "Enable auto-join for this voice channel",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionChannel{
+									Name:        "channel",
+									Description: "The voice channel to auto-join",
+									Required:    true,
+									ChannelTypes: []discord.ChannelType{
+										discord.ChannelTypeGuildVoice,
+									},
+								},
+							},
 						},
 						{
 							Name:        "disable",
 							Description: "Disable auto-join",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
 						},
 						{
 							Name:        "status",
 							Description: "Show current auto-join settings",
-							Type:        discordgo.ApplicationCommandOptionSubCommand,
 						},
 					},
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "enable",
 					Description: "Enable voice chat for this server",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
-				{
+				discord.ApplicationCommandOptionSubCommand{
 					Name:        "disable",
 					Description: "Disable voice chat for this server",
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
 				},
 			},
-			DefaultMemberPermissions: &defaultMemberPermissions,
+			DefaultMemberPermissions: omit.NewPtr(perms),
 		},
 		voiceCmds.voiceHandler(),
 	)
 }
 
 // voiceHandler returns the main voice command handler.
-func (vc *VoiceCommands) voiceHandler() func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (vc *VoiceCommands) voiceHandler() func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
 		// Check if orchestrator is available
 		if vc.orchestrator == nil {
-			respondError(s, i, "Voice chat is not available")
+			vc.respondError(e, "Voice chat is not available")
 			return
 		}
 
-		options := i.ApplicationCommandData().Options
-		if len(options) == 0 {
-			respondError(s, i, "No subcommand specified")
-			return
-		}
+		data := e.SlashCommandInteractionData()
 
-		subcommand := options[0].Name
-
-		// Handle subcommand groups
-		if subcommand == "autojoin" {
-			if len(options[0].Options) == 0 {
-				respondError(s, i, "No autojoin subcommand specified")
+		// Check for subcommand group first
+		if data.SubCommandGroupName != nil && *data.SubCommandGroupName == "autojoin" {
+			if data.SubCommandName == nil {
+				vc.respondError(e, "No autojoin subcommand specified")
 				return
 			}
-			vc.handleAutojoin(s, i, options[0].Options[0].Name)
+			vc.handleAutojoin(e, *data.SubCommandName)
 			return
+		}
+
+		// Handle regular subcommands
+		subcommand := ""
+		if data.SubCommandName != nil {
+			subcommand = *data.SubCommandName
 		}
 
 		switch subcommand {
 		case "join":
-			vc.handleJoin(s, i)
+			vc.handleJoin(e)
 		case "leave":
-			vc.handleLeave(s, i)
+			vc.handleLeave(e)
 		case "status":
-			vc.handleStatus(s, i)
+			vc.handleStatus(e)
 		case "enable":
-			vc.handleEnable(s, i)
+			vc.handleEnable(e)
 		case "disable":
-			vc.handleDisable(s, i)
+			vc.handleDisable(e)
 		default:
-			respondError(s, i, "Unknown subcommand: "+subcommand)
+			vc.respondError(e, "Unknown subcommand: "+subcommand)
 		}
 	}
 }
 
 // handleJoin handles the /voice join command.
-func (vc *VoiceCommands) handleJoin(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	ctx := context.Background()
-	guildID := i.GuildID
+func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreate) {
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
 
 	// Check if already connected
-	if vc.orchestrator.IsConnected(guildID) {
-		respond(s, i, "🔊 I'm already in a voice channel! Use `/voice leave` first.")
+	if vc.orchestrator.IsConnected(guildIDStr) {
+		vc.respond(e, "🔊 I'm already in a voice channel! Use `/voice leave` first.")
 		return
 	}
 
-	// Get the user's voice state
-	vs, err := s.State.VoiceState(guildID, i.Member.User.ID)
-	if err != nil || vs == nil || vs.ChannelID == "" {
-		respond(s, i, "❌ You need to be in a voice channel first!")
+	// Get member from interaction
+	member := e.Member()
+	if member == nil {
+		vc.respondError(e, "Could not get your user info. Try using `/voice autojoin enable` instead.")
 		return
 	}
+
+	// Try to get voice state from cache
+	voiceState, ok := vc.client.Caches.VoiceState(*guildID, member.User.ID)
+	if !ok || voiceState.ChannelID == nil {
+		vc.respond(e, "❌ You're not in a voice channel. Join one first, or use `/voice autojoin enable` to set a specific channel.")
+		return
+	}
+
+	channelID := voiceState.ChannelID.String()
+
+	// Find a text channel for fallback messages
+	textChannelID := vc.findTextChannel(*guildID)
 
 	// Join the voice channel
-	err = vc.orchestrator.JoinVoice(ctx, guildID, vs.ChannelID, i.ChannelID)
-	if err != nil {
+	if err := vc.orchestrator.JoinVoice(context.Background(), guildIDStr, channelID, textChannelID); err != nil {
 		logger.Error("Failed to join voice channel",
-			zap.String("guild_id", guildID),
-			zap.String("channel_id", vs.ChannelID),
+			zap.String("guild_id", guildIDStr),
+			zap.String("channel_id", channelID),
 			zap.Error(err))
-		respondError(s, i, "Failed to join voice channel: "+err.Error())
+		vc.respondError(e, "Failed to join voice channel: "+err.Error())
 		return
 	}
 
-	// Get channel name for display
-	channel, _ := s.Channel(vs.ChannelID)
-	channelName := "voice channel"
-	if channel != nil {
-		channelName = channel.Name
+	// Get channel name for response
+	channelName := "the voice channel"
+	ch, err := vc.client.Rest.GetChannel(*voiceState.ChannelID)
+	if err == nil && ch != nil {
+		channelName = ch.Name()
 	}
 
-	respond(s, i, fmt.Sprintf("🔊 Joined **%s**! I'm ready to listen. Say something!", channelName))
+	vc.respond(e, fmt.Sprintf("🔊 Joined **%s**! I'll listen and respond when you speak.", channelName))
 }
 
 // handleLeave handles the /voice leave command.
-func (vc *VoiceCommands) handleLeave(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	guildID := i.GuildID
+func (vc *VoiceCommands) handleLeave(e *events.ApplicationCommandInteractionCreate) {
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
 
-	if !vc.orchestrator.IsConnected(guildID) {
-		respond(s, i, "🔇 I'm not in a voice channel.")
+	if !vc.orchestrator.IsConnected(guildIDStr) {
+		vc.respond(e, "🔇 I'm not in a voice channel.")
 		return
 	}
 
-	err := vc.orchestrator.LeaveVoice(guildID)
+	err := vc.orchestrator.LeaveVoice(guildIDStr)
 	if err != nil {
 		logger.Error("Failed to leave voice channel",
-			zap.String("guild_id", guildID),
+			zap.String("guild_id", guildIDStr),
 			zap.Error(err))
-		respondError(s, i, "Failed to leave voice channel: "+err.Error())
+		vc.respondError(e, "Failed to leave voice channel: "+err.Error())
 		return
 	}
 
-	respond(s, i, "👋 Left the voice channel. See you next time!")
+	vc.respond(e, "👋 Left the voice channel. See you next time!")
 }
 
 // handleStatus handles the /voice status command.
-func (vc *VoiceCommands) handleStatus(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (vc *VoiceCommands) handleStatus(e *events.ApplicationCommandInteractionCreate) {
 	ctx := context.Background()
-	guildID := i.GuildID
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
 
 	// Get voice settings
-	enabled := vc.repo.GetVoiceEnabled(ctx, guildID)
-	autoJoin := vc.repo.GetVoiceAutoJoin(ctx, guildID)
-	autoJoinChannel, hasAutoJoinChannel := vc.repo.GetVoiceAutoJoinChannel(ctx, guildID)
+	enabled := vc.repo.GetVoiceEnabled(ctx, guildIDStr)
+	autoJoin := vc.repo.GetVoiceAutoJoin(ctx, guildIDStr)
+	autoJoinChannel, hasAutoJoinChannel := vc.repo.GetVoiceAutoJoinChannel(ctx, guildIDStr)
 
 	// Check current connection
-	connected := vc.orchestrator.IsConnected(guildID)
-	state := vc.orchestrator.GetState(guildID)
+	connected := vc.orchestrator.IsConnected(guildIDStr)
+	state := vc.orchestrator.GetState(guildIDStr)
 
 	// Build status message
 	status := "**Voice Chat Status**\n\n"
@@ -221,133 +255,147 @@ func (vc *VoiceCommands) handleStatus(s *discordgo.Session, i *discordgo.Interac
 
 		// Get current voice channel
 		manager := vc.orchestrator.GetManager()
-		if session, exists := manager.GetSession(guildID); exists {
-			channel, _ := s.Channel(session.ChannelID)
-			if channel != nil {
-				status += fmt.Sprintf("• Channel: %s\n", channel.Name)
+		if session, exists := manager.GetSession(guildIDStr); exists {
+			channelID, err := snowflake.Parse(session.ChannelID)
+			if err == nil {
+				channel, err := vc.client.Rest.GetChannel(channelID)
+				if err == nil && channel != nil {
+					status += fmt.Sprintf("• Channel: %s\n", channel.Name())
+				}
 			}
 		}
 	}
 
 	status += fmt.Sprintf("• Auto-Join: %s\n", boolEmoji(autoJoin))
 	if hasAutoJoinChannel && autoJoinChannel != "" {
-		channel, _ := s.Channel(autoJoinChannel)
-		if channel != nil {
-			status += fmt.Sprintf("• Auto-Join Channel: %s\n", channel.Name)
+		channelID, err := snowflake.Parse(autoJoinChannel)
+		if err == nil {
+			channel, err := vc.client.Rest.GetChannel(channelID)
+			if err == nil && channel != nil {
+				status += fmt.Sprintf("• Auto-Join Channel: %s\n", channel.Name())
+			}
 		}
 	}
 
-	respond(s, i, status)
+	vc.respond(e, status)
 }
 
 // handleAutojoin handles autojoin subcommands.
-func (vc *VoiceCommands) handleAutojoin(s *discordgo.Session, i *discordgo.InteractionCreate, subcommand string) {
+func (vc *VoiceCommands) handleAutojoin(e *events.ApplicationCommandInteractionCreate, subcommand string) {
 	ctx := context.Background()
-	guildID := i.GuildID
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
 
 	switch subcommand {
 	case "enable":
-		// Get user's current voice channel
-		vs, err := s.State.VoiceState(guildID, i.Member.User.ID)
-		if err != nil || vs == nil || vs.ChannelID == "" {
-			respond(s, i, "❌ You need to be in a voice channel to set auto-join!")
+		// Get the channel from the command option
+		data := e.SlashCommandInteractionData()
+		channel := data.Channel("channel")
+
+		ctx := context.Background()
+		if err := vc.repo.SetVoiceAutoJoin(ctx, guildIDStr, true); err != nil {
+			vc.respondError(e, "Failed to enable auto-join")
+			return
+		}
+		if err := vc.repo.SetVoiceAutoJoinChannel(ctx, guildIDStr, channel.ID.String()); err != nil {
+			vc.respondError(e, "Failed to set auto-join channel")
 			return
 		}
 
-		// Save settings
-		if err := vc.repo.SetVoiceAutoJoin(ctx, guildID, true); err != nil {
-			respondError(s, i, "Failed to enable auto-join")
-			return
-		}
-		if err := vc.repo.SetVoiceAutoJoinChannel(ctx, guildID, vs.ChannelID); err != nil {
-			respondError(s, i, "Failed to set auto-join channel")
-			return
-		}
-
-		channel, _ := s.Channel(vs.ChannelID)
+		ch, err := vc.client.Rest.GetChannel(channel.ID)
 		channelName := "this channel"
-		if channel != nil {
-			channelName = channel.Name
+		if err == nil && ch != nil {
+			channelName = ch.Name()
 		}
 
-		respond(s, i, fmt.Sprintf("✅ Auto-join enabled for **%s**! I'll automatically join when someone enters.", channelName))
+		vc.respond(e, fmt.Sprintf("✅ Auto-join enabled for **%s**! I'll automatically join when someone enters.", channelName))
 
 	case "disable":
-		if err := vc.repo.SetVoiceAutoJoin(ctx, guildID, false); err != nil {
-			respondError(s, i, "Failed to disable auto-join")
+		if err := vc.repo.SetVoiceAutoJoin(ctx, guildIDStr, false); err != nil {
+			vc.respondError(e, "Failed to disable auto-join")
 			return
 		}
-		respond(s, i, "✅ Auto-join disabled.")
+		vc.respond(e, "✅ Auto-join disabled.")
 
 	case "status":
-		autoJoin := vc.repo.GetVoiceAutoJoin(ctx, guildID)
-		autoJoinChannel, hasChannel := vc.repo.GetVoiceAutoJoinChannel(ctx, guildID)
+		autoJoin := vc.repo.GetVoiceAutoJoin(ctx, guildIDStr)
+		autoJoinChannel, hasChannel := vc.repo.GetVoiceAutoJoinChannel(ctx, guildIDStr)
 
 		status := fmt.Sprintf("**Auto-Join Status**\n• Enabled: %s\n", boolEmoji(autoJoin))
 		if hasChannel && autoJoinChannel != "" {
-			channel, _ := s.Channel(autoJoinChannel)
-			if channel != nil {
-				status += fmt.Sprintf("• Channel: %s\n", channel.Name)
+			channelID, err := snowflake.Parse(autoJoinChannel)
+			if err == nil {
+				channel, err := vc.client.Rest.GetChannel(channelID)
+				if err == nil && channel != nil {
+					status += fmt.Sprintf("• Channel: %s\n", channel.Name())
+				}
 			}
 		}
 
-		respond(s, i, status)
+		vc.respond(e, status)
 
 	default:
-		respondError(s, i, "Unknown autojoin subcommand: "+subcommand)
+		vc.respondError(e, "Unknown autojoin subcommand: "+subcommand)
 	}
 }
 
 // handleEnable handles the /voice enable command.
-func (vc *VoiceCommands) handleEnable(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (vc *VoiceCommands) handleEnable(e *events.ApplicationCommandInteractionCreate) {
 	ctx := context.Background()
-
-	if err := vc.repo.SetVoiceEnabled(ctx, i.GuildID, true); err != nil {
-		respondError(s, i, "Failed to enable voice chat")
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
 		return
 	}
 
-	respond(s, i, "✅ Voice chat enabled for this server!")
+	if err := vc.repo.SetVoiceEnabled(ctx, guildID.String(), true); err != nil {
+		vc.respondError(e, "Failed to enable voice chat")
+		return
+	}
+
+	vc.respond(e, "✅ Voice chat enabled for this server!")
 }
 
 // handleDisable handles the /voice disable command.
-func (vc *VoiceCommands) handleDisable(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (vc *VoiceCommands) handleDisable(e *events.ApplicationCommandInteractionCreate) {
 	ctx := context.Background()
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
 
 	// Leave voice channel if connected
-	if vc.orchestrator.IsConnected(i.GuildID) {
-		_ = vc.orchestrator.LeaveVoice(i.GuildID)
+	if vc.orchestrator.IsConnected(guildIDStr) {
+		_ = vc.orchestrator.LeaveVoice(guildIDStr)
 	}
 
-	if err := vc.repo.SetVoiceEnabled(ctx, i.GuildID, false); err != nil {
-		respondError(s, i, "Failed to disable voice chat")
+	if err := vc.repo.SetVoiceEnabled(ctx, guildIDStr, false); err != nil {
+		vc.respondError(e, "Failed to disable voice chat")
 		return
 	}
 
-	respond(s, i, "✅ Voice chat disabled for this server.")
+	vc.respond(e, "✅ Voice chat disabled for this server.")
 }
 
 // Helper functions
 
-func respond(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-		},
-	})
+func (vc *VoiceCommands) respond(e *events.ApplicationCommandInteractionCreate, content string) {
+	err := e.CreateMessage(discord.MessageCreate{Content: content})
 	if err != nil {
 		logger.Error("Failed to respond to interaction", zap.Error(err))
 	}
 }
 
-func respondError(s *discordgo.Session, i *discordgo.InteractionCreate, message string) {
-	err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "❌ " + message,
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
+func (vc *VoiceCommands) respondError(e *events.ApplicationCommandInteractionCreate, message string) {
+	err := e.CreateMessage(discord.MessageCreate{
+		Content: "❌ " + message,
+		Flags:   discord.MessageFlagEphemeral,
 	})
 	if err != nil {
 		logger.Error("Failed to respond with error", zap.Error(err))
@@ -359,4 +407,19 @@ func boolEmoji(b bool) string {
 		return "✅"
 	}
 	return "❌"
+}
+
+// findTextChannel finds a suitable text channel for fallback messages.
+func (vc *VoiceCommands) findTextChannel(guildID snowflake.ID) string {
+	channels, err := vc.client.Rest.GetGuildChannels(guildID)
+	if err != nil {
+		return ""
+	}
+
+	for _, channel := range channels {
+		if channel.Type() == discord.ChannelTypeGuildText {
+			return channel.ID().String()
+		}
+	}
+	return ""
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
@@ -28,12 +29,12 @@ var defaultPrompt string
 
 // RegisterAll registers all bot commands.
 // If voiceOrchestrator is nil, voice commands will not be registered.
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string, voiceOrchestrator *voice.Orchestrator) {
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
 	defaultPrompt = cfgDefaultPrompt
 
 	// Register voice commands if orchestrator is available
 	if voiceOrchestrator != nil {
-		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator)
+		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator, client)
 		RegisterVoiceCommands(registry, voiceCmds)
 	}
 

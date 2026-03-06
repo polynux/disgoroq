@@ -241,13 +241,12 @@ func main() {
 			VoiceConfig:   cfg.Voice,
 		})
 
-		// Add voice state handler for auto-join - TODO: Adapt for disgo events
-		voiceHandler := handlers.NewVoiceHandler(voiceOrchestrator, repo)
-		// TODO: Add disgo event listeners for voice state updates
-		// client.AddEventListeners(
-		// 	bot.NewListenerFunc(voiceHandler.HandleVoiceStateUpdate),
-		// 	bot.NewListenerFunc(voiceHandler.HandleVoiceServerUpdate),
-		// )
+		// Add voice state handler for auto-join
+		voiceHandler := handlers.NewVoiceHandler(voiceOrchestrator, repo, client)
+		client.AddEventListeners(
+			bot.NewListenerFunc(voiceHandler.HandleVoiceStateUpdate),
+			bot.NewListenerFunc(voiceHandler.HandleVoiceServerUpdate),
+		)
 
 		logger.Info("Voice orchestrator initialized",
 			zap.String("stt_socket", cfg.Voice.STT.SocketPath),
@@ -257,7 +256,7 @@ func main() {
 	}
 
 	registry := commands.NewRegistry(client, local)
-	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt, voiceOrchestrator)
+	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		registry.HandleCommand(e)
 	}))

@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/voice"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
@@ -14,7 +15,7 @@ import (
 
 // Manager handles voice connections across multiple guilds.
 type Manager struct {
-	session   *discordgo.Session
+	client    *bot.Client
 	sessions  map[string]*VoiceSession // guildID -> session
 	mu        sync.RWMutex
 	onJoin    func(guildID, channelID string)
@@ -22,9 +23,8 @@ type Manager struct {
 	onSpeak   func(guildID, userID string, audio []byte)
 	onSilence func(guildID, userID string)
 
-	// Track voice connections by guildID
-	connections map[string]*discordgo.VoiceConnection
-	connMu      sync.RWMutex
+	// Track voice connections by guildID using snowflake.ID
+	// connections map[snowflake.ID]voice.Conn - managed by client.VoiceManager
 
 	// Opus decoders per guild
 	opusDecoders map[string]*OpusDecodeSession
@@ -36,11 +36,10 @@ type Manager struct {
 }
 
 // NewManager creates a new voice manager.
-func NewManager(session *discordgo.Session) *Manager {
+func NewManager(client *bot.Client) *Manager {
 	return &Manager{
-		session:      session,
+		client:       client,
 		sessions:     make(map[string]*VoiceSession),
-		connections:  make(map[string]*discordgo.VoiceConnection),
 		opusDecoders: make(map[string]*OpusDecodeSession),
 	}
 }
@@ -56,24 +55,30 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 			return ErrAlreadyConnected
 		}
 		// Leave current channel first
-		m.leaveVoiceLocked(guildID)
+		m.leaveVoiceLocked(ctx, guildID)
 	}
 
-	// Join the voice channel
-	// mute=false, deaf=false - bot should be able to hear and speak
-	vc, err := m.session.ChannelVoiceJoin(guildID, channelID, false, false)
+	// Convert string IDs to snowflake
+	guildSnowflake, err := snowflake.Parse(guildID)
 	if err != nil {
+		return fmt.Errorf("invalid guild ID: %w", err)
+	}
+	channelSnowflake, err := snowflake.Parse(channelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	// Create voice connection using disgo's voice manager
+	conn := m.client.VoiceManager.CreateConn(guildSnowflake)
+
+	// Open voice connection (selfMute=false, selfDeaf=false)
+	if err := conn.Open(ctx, channelSnowflake, false, false); err != nil {
 		logger.Error("Failed to join voice channel",
 			zap.String("guild_id", guildID),
 			zap.String("channel_id", channelID),
 			zap.Error(err))
 		return err
 	}
-
-	// Store the connection
-	m.connMu.Lock()
-	m.connections[guildID] = vc
-	m.connMu.Unlock()
 
 	// Create new voice session
 	session := &VoiceSession{
@@ -90,7 +95,7 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 		zap.String("channel_id", channelID))
 
 	// Start listening for audio
-	go m.listenForAudio(vc, guildID)
+	go m.listenForAudio(conn, guildID)
 
 	// Notify callback
 	if m.onJoin != nil {
@@ -101,36 +106,29 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 }
 
 // LeaveVoice disconnects the bot from a voice channel.
-func (m *Manager) LeaveVoice(guildID string) error {
+func (m *Manager) LeaveVoice(ctx context.Context, guildID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.leaveVoiceLocked(guildID)
+	return m.leaveVoiceLocked(ctx, guildID)
 }
 
 // leaveVoiceLocked is the internal version that assumes the lock is held.
-func (m *Manager) leaveVoiceLocked(guildID string) error {
+func (m *Manager) leaveVoiceLocked(ctx context.Context, guildID string) error {
 	session, exists := m.sessions[guildID]
 	if !exists {
 		return ErrNotConnected
 	}
 
-	// Get and remove voice connection
-	m.connMu.Lock()
-	vc := m.connections[guildID]
-	delete(m.connections, guildID)
-	m.connMu.Unlock()
+	// Get voice connection from disgo manager
+	guildSnowflake, err := snowflake.Parse(guildID)
+	if err != nil {
+		return fmt.Errorf("invalid guild ID: %w", err)
+	}
 
-	if vc != nil {
-		// Stop speaking if we were
-		_ = vc.Speaking(false)
-
-		// Disconnect
-		err := vc.Disconnect()
-		if err != nil {
-			logger.Error("Error disconnecting from voice",
-				zap.String("guild_id", guildID),
-				zap.Error(err))
-		}
+	conn := m.client.VoiceManager.GetConn(guildSnowflake)
+	if conn != nil {
+		// Close the connection
+		conn.Close(ctx)
 	}
 
 	// Clear session
@@ -188,85 +186,31 @@ func (m *Manager) IsConnected(guildID string) bool {
 	return exists
 }
 
-// GetVoiceConnection returns the discordgo voice connection for a guild.
-func (m *Manager) GetVoiceConnection(guildID string) (*discordgo.VoiceConnection, error) {
-	m.connMu.RLock()
-	defer m.connMu.RUnlock()
-	vc := m.connections[guildID]
-	if vc == nil {
+// GetVoiceConnection returns the disgo voice connection for a guild.
+func (m *Manager) GetVoiceConnection(guildID string) (voice.Conn, error) {
+	guildSnowflake, err := snowflake.Parse(guildID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid guild ID: %w", err)
+	}
+
+	conn := m.client.VoiceManager.GetConn(guildSnowflake)
+	if conn == nil {
 		return nil, ErrNotConnected
 	}
-	return vc, nil
+	return conn, nil
 }
 
 // listenForAudio handles incoming audio from a voice connection.
-func (m *Manager) listenForAudio(vc *discordgo.VoiceConnection, guildID string) {
+// TODO: Implement disgo OpusFrameReceiver
+func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 	logger.Info("Starting audio listener for guild", zap.String("guild_id", guildID))
-
-	// Create Opus decoder for this session
-	opusDecoder := NewOpusDecodeSession()
-	m.opusMu.Lock()
-	m.opusDecoders[guildID] = opusDecoder
-	m.opusMu.Unlock()
-
-	// Cleanup on exit
-	defer func() {
-		opusDecoder.Close()
-		m.opusMu.Lock()
-		delete(m.opusDecoders, guildID)
-		m.opusMu.Unlock()
-	}()
-
-	// Add speaking handler for this connection
-	speakingHandler := NewVoiceSpeakingHandler(m, guildID)
-	vc.AddHandler(speakingHandler.Handle)
-
-	packetCount := 0
-
-	// Listen for opus packets
-	for {
-		select {
-		case <-time.After(100 * time.Millisecond):
-			// Check if connection is still valid
-			if !vc.Ready {
-				logger.Debug("Voice connection not ready, stopping listener", zap.String("guild_id", guildID))
-				return
-			}
-		case packet, ok := <-vc.OpusRecv:
-			if !ok {
-				logger.Info("OpusRecv channel closed", zap.String("guild_id", guildID))
-				return
-			}
-
-			packetCount++
-
-			// Decode Opus to PCM
-			pcmData, err := opusDecoder.DecodePacket(packet)
-			if err != nil {
-				logger.Error("Failed to decode Opus packet",
-					zap.String("guild_id", guildID),
-					zap.Error(err))
-				continue
-			}
-
-			if len(pcmData) == 0 {
-				continue
-			}
-
-			// Log every 50 packets to avoid spam
-			if packetCount%50 == 0 {
-				logger.Debug("Received and decoded audio packets",
-					zap.String("guild_id", guildID),
-					zap.Int("packet_count", packetCount),
-					zap.Int("pcm_len", len(pcmData)))
-			}
-
-			// Handle the audio packet (now as PCM)
-			if m.onSpeak != nil {
-				m.onSpeak(guildID, "", pcmData)
-			}
-		}
-	}
+	// TODO: Implement audio reception using disgo's OpusFrameReceiver
+	// This will require:
+	// 1. Implementing OpusFrameReceiver interface
+	// 2. Setting it via conn.SetOpusFrameReceiver()
+	// 3. Buffering incoming frames
+	// 4. Decoding Opus to PCM
+	// 5. Calling onSpeak callbacks
 }
 
 // PlayAudio sends audio data to the voice channel.
@@ -281,7 +225,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 		return ErrNotConnected
 	}
 
-	vc, err := m.GetVoiceConnection(guildID)
+	conn, err := m.GetVoiceConnection(guildID)
 	if err != nil {
 		return err
 	}
@@ -289,12 +233,12 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 	// Update state
 	m.SetState(guildID, StateSpeaking)
 
-	// Signal speaking
-	if err := vc.Speaking(true); err != nil {
+	// Signal speaking using disgo API
+	if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
 		logger.Error("Failed to signal speaking", zap.Error(err))
 		return err
 	}
-	defer vc.Speaking(false)
+	defer conn.SetSpeaking(context.Background(), 0) // Stop speaking
 
 	// Process audio: handle WAV format and convert to Discord format
 	processedAudio, err := m.processAudioForDiscord(audio, sampleRate)
@@ -329,29 +273,12 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 		zap.String("guild_id", guildID),
 		zap.Int("frame_count", len(opusFrames)))
 
-	// Send Opus frames with proper timing (20ms per frame)
-	// Discord expects frames at 20ms intervals for smooth playback
-	frameDuration := 20 * time.Millisecond
-	for i, opusFrame := range opusFrames {
-		select {
-		case <-ctx.Done():
-			m.SetState(guildID, StateListening)
-			return ErrContextCanceled
-		default:
-			// Send with timeout to avoid blocking forever
-			select {
-			case vc.OpusSend <- opusFrame:
-			case <-time.After(100 * time.Millisecond):
-				logger.Warn("Timeout sending Opus frame", zap.String("guild_id", guildID))
-			}
-
-			// Wait for frame duration before sending next frame
-			// Skip waiting after the last frame
-			if i < len(opusFrames)-1 {
-				time.Sleep(frameDuration)
-			}
-		}
-	}
+	// TODO: Implement audio sending using disgo's OpusFrameProvider
+	// Need to create OpusFrameProvider implementation and pass it to conn.SetOpusFrameProvider()
+	// For now, log a warning that this needs implementation
+	logger.Warn("PlayAudio not fully implemented for disgo - audio will not be sent",
+		zap.String("guild_id", guildID),
+		zap.Int("frames", len(opusFrames)))
 
 	// Return to listening state
 	m.SetState(guildID, StateListening)
@@ -400,7 +327,7 @@ func (m *Manager) processAudioForDiscord(audio []byte, sampleRate int) ([]byte, 
 }
 
 // SendTextFallback sends a text message to the voice session's text channel.
-func (m *Manager) SendTextFallback(guildID, message string) error {
+func (m *Manager) SendTextFallback(ctx context.Context, guildID, message string) error {
 	m.mu.RLock()
 	session, exists := m.sessions[guildID]
 	m.mu.RUnlock()
@@ -409,13 +336,12 @@ func (m *Manager) SendTextFallback(guildID, message string) error {
 		return ErrNotConnected
 	}
 
-	_, err := m.session.ChannelMessageSend(session.TextChannelID, message)
-	return err
-}
-
-// OnJoin sets the callback for when the bot joins a voice channel.
-func (m *Manager) OnJoin(callback func(guildID, channelID string)) {
-	m.onJoin = callback
+	// TODO: Use disgo client to send message
+	// _, err := m.client.Rest.CreateMessage(ctx, channelID, discord.MessageCreate{...})
+	logger.Warn("SendTextFallback not fully implemented for disgo",
+		zap.String("guild_id", guildID),
+		zap.String("channel_id", session.TextChannelID))
+	return nil
 }
 
 // OnLeave sets the callback for when the bot leaves a voice channel.
@@ -440,13 +366,13 @@ func (m *Manager) Close() error {
 
 	var lastErr error
 	for guildID := range m.sessions {
-		if err := m.leaveVoiceLocked(guildID); err != nil {
+		if err := m.leaveVoiceLocked(context.Background(), guildID); err != nil {
 			lastErr = err
 		}
 	}
+
 	return lastErr
 }
-
 // GetAllSessions returns all active voice sessions.
 func (m *Manager) GetAllSessions() map[string]*VoiceSession {
 	m.mu.RLock()

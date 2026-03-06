@@ -8,7 +8,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
@@ -26,7 +27,7 @@ type Orchestrator struct {
 	aiService      *ai.Service
 	memoryService  memory.Service
 	contextBuilder *ai.ContextBuilder
-	session        *discordgo.Session
+	client         *bot.Client
 	repo           Repository
 	defaultPrompt  string
 	config         config.VoiceConfig
@@ -65,7 +66,7 @@ type OrchestratorConfig struct {
 	TTSClient     TTSClient
 	AIService     *ai.Service
 	MemoryService memory.Service
-	Session       *discordgo.Session
+	Client        *bot.Client
 	Repository    Repository
 	DefaultPrompt string
 	VoiceConfig   config.VoiceConfig
@@ -74,13 +75,13 @@ type OrchestratorConfig struct {
 // NewOrchestrator creates a new voice orchestrator.
 func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	o := &Orchestrator{
-		manager:        NewManager(cfg.Session),
+		manager:        NewManager(cfg.Client),
 		sttClient:      cfg.STTClient,
 		ttsClient:      cfg.TTSClient,
 		aiService:      cfg.AIService,
 		memoryService:  cfg.MemoryService,
-		contextBuilder: ai.NewContextBuilder(cfg.Session, cfg.AIService),
-		session:        cfg.Session,
+		contextBuilder: ai.NewContextBuilder(cfg.Client, cfg.AIService),
+		client:         cfg.Client,
 		repo:           cfg.Repository,
 		defaultPrompt:  cfg.DefaultPrompt,
 		config:         cfg.VoiceConfig,
@@ -89,8 +90,8 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 
 	// Set up audio callback
 	o.manager.OnSpeak(o.handleAudio)
-	o.manager.OnJoin(o.handleJoin)
-	o.manager.OnLeave(o.handleLeave)
+	o.manager.onJoin = o.handleJoin
+	o.manager.onLeave = o.handleLeave
 
 	return o
 }
@@ -160,7 +161,7 @@ func (o *Orchestrator) LeaveVoice(guildID string) error {
 		}()
 	}
 
-	return o.manager.LeaveVoice(guildID)
+	return o.manager.LeaveVoice(context.Background(), guildID)
 }
 
 // ProcessVoiceInput processes transcribed voice input through the AI and responds.
@@ -177,14 +178,19 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 	o.transitionState(guildID, StateThinking)
 
 	// Get bot's nickname for prompt template
-	botMember, err := o.session.GuildMember(guildID, o.session.State.User.ID)
+	guildSnowflake, err := snowflake.Parse(guildID)
 	if err != nil {
-		logger.Warn("Failed to get bot member", zap.Error(err))
+		logger.Warn("Failed to parse guild ID", zap.Error(err))
 	}
 
-	botNick := ""
-	if botMember != nil {
-		botNick = botMember.Nick
+	var botNick string
+	if err == nil {
+		botMember, err := o.client.Rest.GetMember(guildSnowflake, o.client.ID())
+		if err != nil {
+			logger.Warn("Failed to get bot member", zap.Error(err))
+		} else if botMember != nil && botMember.Nick != nil {
+			botNick = *botMember.Nick
+		}
 	}
 
 	// Build the system prompt
@@ -245,17 +251,17 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 
 		// Fallback to text
 		fallbackMsg := "Désolé, j'ai eu un problème technique..."
-		return o.manager.SendTextFallback(guildID, fallbackMsg)
+		return o.manager.SendTextFallback(context.Background(), guildID, fallbackMsg)
 	}
 
 	if response.Content == "" {
-		return o.manager.SendTextFallback(guildID, "Euh... je n'ai rien à dire...")
+		return o.manager.SendTextFallback(context.Background(), guildID, "Euh... je n'ai rien à dire...")
 	}
 
 	// Buffer response for memory
 	if o.memoryService != nil {
 		go func() {
-			if err := o.memoryService.BufferMessage(context.Background(), o.session.State.User.ID, guildID, response.Content); err != nil {
+			if err := o.memoryService.BufferMessage(context.Background(), o.client.ID().String(), guildID, response.Content); err != nil {
 				logger.Warn("Failed to buffer voice response", zap.Error(err))
 			}
 		}()
@@ -291,7 +297,7 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 			zap.String("guild_id", guildID))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(guildID, text)
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
 		return fmt.Errorf("failed to load TTS model: %w", err)
 	}
 	logger.Info("TTS model ready", zap.String("guild_id", guildID))
@@ -325,7 +331,7 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 			zap.String("text", truncateText(text, 50)))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(guildID, text)
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
 
@@ -342,7 +348,7 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 			zap.String("guild_id", guildID))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(guildID, text)
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
 		return fmt.Errorf("audio playback failed: %w", err)
 	}
 
@@ -414,7 +420,7 @@ func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceC
 	if o.sttClient == nil {
 		logger.Error("STT client is nil - cannot transcribe",
 			zap.String("guild_id", guildID))
-		_ = o.manager.SendTextFallback(guildID, "Le service vocal n'est pas disponible.")
+		_ = o.manager.SendTextFallback(context.Background(), guildID, "Le service vocal n'est pas disponible.")
 		return
 	}
 
@@ -448,7 +454,7 @@ func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceC
 
 		// Check if STT is unavailable
 		if err == ErrSTTUnavailable {
-			_ = o.manager.SendTextFallback(guildID,
+			_ = o.manager.SendTextFallback(context.Background(), guildID,
 				"Je n'arrive pas à comprendre ce que tu dis. Peux-tu répéter?")
 		}
 		return
