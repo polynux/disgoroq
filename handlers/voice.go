@@ -49,17 +49,17 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 	}
 
 	// Create a context with timeout for database operations
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer dbCancel()
 
 	// Check if auto-join is enabled for this guild
-	autoJoin := h.repo.GetVoiceAutoJoin(ctx, guildID)
+	autoJoin := h.repo.GetVoiceAutoJoin(dbCtx, guildID)
 	if !autoJoin {
 		return
 	}
 
 	// Get the configured auto-join channel
-	autoJoinChannel, hasChannel := h.repo.GetVoiceAutoJoinChannel(ctx, guildID)
+	autoJoinChannel, hasChannel := h.repo.GetVoiceAutoJoinChannel(dbCtx, guildID)
 	if !hasChannel || autoJoinChannel == "" {
 		return
 	}
@@ -69,7 +69,7 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 		// Check if we're not already connected
 		if !h.orchestrator.IsConnected(guildID) {
 			// Check if voice is enabled
-			if !h.repo.GetVoiceEnabled(ctx, guildID) {
+			if !h.repo.GetVoiceEnabled(dbCtx, guildID) {
 				return
 			}
 
@@ -81,8 +81,12 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 			// Find a text channel for fallback messages
 			textChannelID := h.findDefaultTextChannel(e.VoiceState.GuildID)
 
+			// Use a longer context for voice join (DAVE handshake can take 30+ seconds)
+			joinCtx, joinCancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer joinCancel()
+
 			// Join the voice channel
-			if err := h.orchestrator.JoinVoice(ctx, guildID, autoJoinChannel, textChannelID); err != nil {
+			if err := h.orchestrator.JoinVoice(joinCtx, guildID, autoJoinChannel, textChannelID); err != nil {
 				logger.Error("Failed to auto-join voice channel",
 					zap.String("guild_id", guildID),
 					zap.String("channel_id", autoJoinChannel),

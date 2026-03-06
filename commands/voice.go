@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
@@ -180,8 +181,12 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 	// Find a text channel for fallback messages
 	textChannelID := vc.findTextChannel(*guildID)
 
+	// Use a longer timeout for voice join (DAVE handshake can take 30+ seconds)
+	joinCtx, joinCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer joinCancel()
+
 	// Join the voice channel
-	if err := vc.orchestrator.JoinVoice(context.Background(), guildIDStr, channelID, textChannelID); err != nil {
+	if err := vc.orchestrator.JoinVoice(joinCtx, guildIDStr, channelID, textChannelID); err != nil {
 		logger.Error("Failed to join voice channel",
 			zap.String("guild_id", guildIDStr),
 			zap.String("channel_id", channelID),
