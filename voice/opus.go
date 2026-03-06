@@ -3,7 +3,6 @@ package voice
 import (
 	"sync"
 
-	"github.com/bwmarrin/discordgo"
 	"go.uber.org/zap"
 	"layeh.com/gopus"
 
@@ -23,9 +22,11 @@ func NewOpusDecodeSession() *OpusDecodeSession {
 	}
 }
 
-// DecodePacket decodes an Opus packet from Discord to PCM.
-func (s *OpusDecodeSession) DecodePacket(packet *discordgo.Packet) ([]byte, error) {
-	if packet == nil || len(packet.Opus) == 0 {
+// DecodePacket decodes a raw Opus packet to PCM.
+// The packet should be raw Opus data (after DAVE decryption by libdave).
+// ssrc is optional for tracking multiple speakers.
+func (s *OpusDecodeSession) DecodePacket(opusData []byte, ssrc uint32) ([]byte, error) {
+	if len(opusData) == 0 {
 		return nil, nil
 	}
 
@@ -33,26 +34,26 @@ func (s *OpusDecodeSession) DecodePacket(packet *discordgo.Packet) ([]byte, erro
 	defer s.mu.Unlock()
 
 	// Get or create decoder for this SSRC
-	decoder, exists := s.decoders[packet.SSRC]
+	decoder, exists := s.decoders[ssrc]
 	if !exists {
 		var err error
 		decoder, err = gopus.NewDecoder(48000, 2) // Discord uses 48kHz stereo
 		if err != nil {
 			logger.Error("Failed to create Opus decoder",
-				zap.Uint32("ssrc", packet.SSRC),
+				zap.Uint32("ssrc", ssrc),
 				zap.Error(err))
 			return nil, err
 		}
-		s.decoders[packet.SSRC] = decoder
+		s.decoders[ssrc] = decoder
 	}
 
 	// Decode Opus to PCM
 	// 960 samples = 20ms at 48kHz stereo
-	pcm, err := decoder.Decode(packet.Opus, 960, false)
+	pcm, err := decoder.Decode(opusData, 960, false)
 	if err != nil {
 		logger.Error("Failed to decode Opus packet",
-			zap.Uint32("ssrc", packet.SSRC),
-			zap.Int("opus_len", len(packet.Opus)),
+			zap.Uint32("ssrc", ssrc),
+			zap.Int("opus_len", len(opusData)),
 			zap.Error(err))
 		return nil, err
 	}

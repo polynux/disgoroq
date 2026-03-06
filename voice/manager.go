@@ -3,7 +3,9 @@ package voice
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
+	"time"
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/voice"
@@ -201,16 +203,73 @@ func (m *Manager) GetVoiceConnection(guildID string) (voice.Conn, error) {
 }
 
 // listenForAudio handles incoming audio from a voice connection.
-// TODO: Implement disgo OpusFrameReceiver
 func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 	logger.Info("Starting audio listener for guild", zap.String("guild_id", guildID))
-	// TODO: Implement audio reception using disgo's OpusFrameReceiver
-	// This will require:
-	// 1. Implementing OpusFrameReceiver interface
-	// 2. Setting it via conn.SetOpusFrameReceiver()
-	// 3. Buffering incoming frames
-	// 4. Decoding Opus to PCM
-	// 5. Calling onSpeak callbacks
+
+	// Create Opus decoder for this session
+	opusDecoder := NewOpusDecodeSession()
+	m.opusMu.Lock()
+	m.opusDecoders[guildID] = opusDecoder
+	m.opusMu.Unlock()
+
+	// Cleanup on exit
+	defer func() {
+		opusDecoder.Close()
+		m.opusMu.Lock()
+		delete(m.opusDecoders, guildID)
+		m.opusMu.Unlock()
+		logger.Info("Audio listener stopped", zap.String("guild_id", guildID))
+	}()
+
+	packetCount := 0
+
+	// Listen for UDP packets
+	for {
+		packet, err := conn.UDP().ReadPacket()
+		if err != nil {
+			if err == io.EOF {
+				logger.Info("UDP connection closed", zap.String("guild_id", guildID))
+				return
+			}
+			logger.Error("Error reading UDP packet",
+				zap.String("guild_id", guildID),
+				zap.Error(err))
+			return
+		}
+
+		if packet == nil || len(packet.Opus) == 0 {
+			continue
+		}
+
+		// Decode Opus to PCM
+		pcmData, err := opusDecoder.DecodePacket(packet.Opus, packet.SSRC)
+		if err != nil {
+			logger.Error("Failed to decode Opus packet",
+				zap.String("guild_id", guildID),
+				zap.Uint32("ssrc", packet.SSRC),
+				zap.Error(err))
+			continue
+		}
+
+		if len(pcmData) == 0 {
+			continue
+		}
+
+		packetCount++
+
+		// Log every 50 packets to avoid spam
+		if packetCount%50 == 0 {
+			logger.Debug("Received and decoded audio packets",
+				zap.String("guild_id", guildID),
+				zap.Int("packet_count", packetCount),
+				zap.Int("pcm_len", len(pcmData)))
+		}
+
+		// Handle the audio packet (now as PCM)
+		if m.onSpeak != nil {
+			m.onSpeak(guildID, "", pcmData)
+		}
+	}
 }
 
 // PlayAudio sends audio data to the voice channel.
@@ -273,12 +332,37 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 		zap.String("guild_id", guildID),
 		zap.Int("frame_count", len(opusFrames)))
 
-	// TODO: Implement audio sending using disgo's OpusFrameProvider
-	// Need to create OpusFrameProvider implementation and pass it to conn.SetOpusFrameProvider()
-	// For now, log a warning that this needs implementation
-	logger.Warn("PlayAudio not fully implemented for disgo - audio will not be sent",
+	// Send Opus frames with proper timing (20ms per frame)
+	// Discord expects frames at 20ms intervals for smooth playback
+	frameDuration := 20 * time.Millisecond
+	writer := conn.UDP()
+
+	for i, opusFrame := range opusFrames {
+		select {
+		case <-ctx.Done():
+			m.SetState(guildID, StateListening)
+			return ErrContextCanceled
+		default:
+			// Write raw Opus frame to UDP
+			if _, err := writer.Write(opusFrame); err != nil {
+				logger.Error("Failed to write Opus frame",
+					zap.String("guild_id", guildID),
+					zap.Int("frame", i),
+					zap.Error(err))
+				continue
+			}
+
+			// Wait for frame duration before sending next frame
+			// Skip waiting after the last frame
+			if i < len(opusFrames)-1 {
+				time.Sleep(frameDuration)
+			}
+		}
+	}
+
+	logger.Info("Finished sending audio",
 		zap.String("guild_id", guildID),
-		zap.Int("frames", len(opusFrames)))
+		zap.Int("frames_sent", len(opusFrames)))
 
 	// Return to listening state
 	m.SetState(guildID, StateListening)
@@ -373,6 +457,7 @@ func (m *Manager) Close() error {
 
 	return lastErr
 }
+
 // GetAllSessions returns all active voice sessions.
 func (m *Manager) GetAllSessions() map[string]*VoiceSession {
 	m.mu.RLock()

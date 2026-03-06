@@ -14,6 +14,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/disgo/voice"
+	"github.com/disgoorg/godave/golibdave"
 	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 
@@ -27,7 +29,7 @@ import (
 	"polynux/disgoroq/memory"
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
-	"polynux/disgoroq/voice"
+	voicepkg "polynux/disgoroq/voice"
 )
 
 var (
@@ -81,6 +83,9 @@ func main() {
 				gateway.IntentMessageContent,
 				gateway.IntentGuildVoiceStates,
 			),
+		),
+		bot.WithVoiceManagerConfigOpts(
+			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
 		),
 	)
 	if err != nil {
@@ -211,17 +216,12 @@ func main() {
 	)
 
 	// Initialize voice orchestrator if enabled
-	var voiceOrchestrator *voice.Orchestrator
+	var voiceOrchestrator *voicepkg.Orchestrator
 	if cfg.Voice.Enabled {
-		// Create STT client
-		sttClient := voice.NewWhisperClient(voice.WhisperConfig{
+		sttClient := voicepkg.NewWhisperClient(voicepkg.WhisperConfig{
 			SocketPath: cfg.Voice.STT.SocketPath,
-			Model:      cfg.Voice.STT.Model,
-			Language:   cfg.Voice.STT.Language,
 		})
-
-		// Create TTS client
-		ttsClient := voice.NewTTSHTTPClient(voice.TTSHTTPConfig{
+		ttsClient := voicepkg.NewTTSHTTPClient(voicepkg.TTSHTTPConfig{
 			Endpoint:     cfg.Voice.TTS.Endpoint,
 			Model:        cfg.Voice.TTS.Model,
 			DefaultVoice: cfg.Voice.TTS.DefaultVoice,
@@ -229,8 +229,8 @@ func main() {
 			TimeoutMs:    cfg.Voice.TTS.TimeoutMs,
 		})
 
-		// Create orchestrator - TODO: Adapt voice.Orchestrator and handlers.VoiceHandler for disgo client
-		voiceOrchestrator = voice.NewOrchestrator(voice.OrchestratorConfig{
+		// Create orchestrator
+		voiceOrchestrator = voicepkg.NewOrchestrator(voicepkg.OrchestratorConfig{
 			STTClient:     sttClient,
 			TTSClient:     ttsClient,
 			AIService:     aiService,
