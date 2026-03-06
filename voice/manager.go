@@ -2,6 +2,7 @@ package voice
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"sync"
@@ -259,10 +260,20 @@ func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 
 		// Log every 50 packets to avoid spam
 		if packetCount%50 == 0 {
-			logger.Debug("Received and decoded audio packets",
+			// Calculate audio level
+			var maxSample int16
+			for i := 0; i < len(pcmData)-1; i += 2 {
+				sample := int16(binary.LittleEndian.Uint16(pcmData[i:]))
+				if sample > maxSample {
+					maxSample = sample
+				}
+			}
+			logger.Info("Received audio packet",
 				zap.String("guild_id", guildID),
 				zap.Int("packet_count", packetCount),
-				zap.Int("pcm_len", len(pcmData)))
+				zap.Int("pcm_len", len(pcmData)),
+				zap.Uint32("ssrc", packet.SSRC),
+				zap.Int16("max_amplitude", maxSample))
 		}
 
 		// Handle the audio packet (now as PCM)
