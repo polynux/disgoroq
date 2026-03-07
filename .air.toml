@@ -5,7 +5,8 @@ tmp_dir = "tmp"
 [build]
   args_bin = []
   bin = "./tmp/main"
-  cmd = "go build -o ./tmp/main ."
+  # Set PKG_CONFIG_PATH for libdave, suppress Opus warnings, enable optimization
+  cmd = "PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig CGO_CFLAGS='-Wno-stringop-overread -O2' go build -o ./tmp/main ."
   delay = 1000
   exclude_dir = ["assets", "tmp", "vendor", "testdata"]
   exclude_file = []

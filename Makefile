@@ -1,5 +1,10 @@
 .PHONY: test test-unit test-integration test-all run build clean help
 
+# Set PKG_CONFIG_PATH for libdave (Discord E2EE voice)
+# Set CGO_CFLAGS to suppress Opus warnings and enable optimization
+PKG_CONFIG_PATH := $(HOME)/.local/lib/pkgconfig
+CGO_CFLAGS := -Wno-stringop-overread -O2
+
 test: test-all
 	@echo "Running all tests..."
 
@@ -17,11 +22,11 @@ test-all:
 
 run:
 	@echo "Running bot..."
-	@go run main.go -local
+	@PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" CGO_CFLAGS="$(CGO_CFLAGS)" go run main.go -local
 
 build:
 	@echo "Building bot..."
-	@go build -o disgoroq main.go
+	@PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" CGO_CFLAGS="$(CGO_CFLAGS)" go build -o disgoroq main.go
 
 clean:
 	@echo "Cleaning build artifacts..."
