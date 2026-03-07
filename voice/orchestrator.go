@@ -121,6 +121,11 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 		LastActivity: time.Now(),
 	}
 
+	// Configure VAD threshold from config
+	if o.config.Audio.VADAmplitudeThreshold > 0 {
+		conv.AudioBuffer.SetSilenceThresholdFromNormalized(o.config.Audio.VADAmplitudeThreshold)
+	}
+
 	o.sessionsMu.Lock()
 	o.sessions[guildID] = conv
 	o.sessionsMu.Unlock()
@@ -279,11 +284,13 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 }
 
 // Speak generates TTS audio and plays it in the voice channel.
-// Uses static generation: generates the entire response first, then plays it.
+// Uses streaming generation when StaticMode is false (recommended for lower latency),
+// or static generation when StaticMode is true.
 func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 	logger.Info("Speak() called",
 		zap.String("guild_id", guildID),
-		zap.Int("text_len", len(text)))
+		zap.Int("text_len", len(text)),
+		zap.Bool("static_mode", o.config.TTS.StaticMode))
 
 	// Update state to speaking
 	o.transitionState(guildID, StateSpeaking)
@@ -310,16 +317,68 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 	default:
 	}
 
-	// Generate audio for entire text at once (static mode)
+	// Use streaming mode for lower latency, or fallback to static mode
+	if !o.config.TTS.StaticMode {
+		return o.speakStreaming(ctx, guildID, text)
+	}
+	return o.speakStatic(ctx, guildID, text)
+}
+
+// speakStreaming generates audio with real-time streaming for lower latency.
+// First audio starts playing in ~400-800ms instead of waiting for complete generation.
+func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string) error {
+	logger.Info("Using streaming TTS mode",
+		zap.String("guild_id", guildID),
+		zap.Int("text_len", len(text)))
+
 	req := &TTSRequest{
 		Text: text,
 	}
 
-	logger.Info("Generating TTS audio",
+	// Use a fresh context with timeout for TTS
+	ttsCtx, ttsCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer ttsCancel()
+
+	// Start streaming TTS
+	audioStream, err := o.ttsClient.StreamStreaming(ttsCtx, req)
+	if err != nil {
+		logger.Error("TTS streaming failed, falling back to static",
+			zap.Error(err),
+			zap.String("guild_id", guildID))
+
+		// Fallback to static mode
+		return o.speakStatic(ctx, guildID, text)
+	}
+
+	logger.Info("TTS streaming started, playing audio",
+		zap.String("guild_id", guildID))
+
+	// Play streaming audio
+	if err := o.manager.PlayAudioStream(ctx, guildID, audioStream); err != nil {
+		logger.Error("Failed to play streaming audio",
+			zap.Error(err),
+			zap.String("guild_id", guildID))
+
+		// Fallback to text
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		return fmt.Errorf("audio playback failed: %w", err)
+	}
+
+	o.lastTTSAudio = time.Now()
+	return nil
+}
+
+// speakStatic generates complete audio before playing (legacy mode).
+func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) error {
+	logger.Info("Using static TTS mode",
 		zap.String("guild_id", guildID),
 		zap.Int("text_len", len(text)))
 
-	// Use a fresh context with timeout for TTS to avoid deadline exceeded from parent context
+	req := &TTSRequest{
+		Text: text,
+	}
+
+	// Use a fresh context with timeout for TTS
 	ttsCtx, ttsCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer ttsCancel()
 
@@ -341,7 +400,6 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 		zap.Int("sample_rate", o.config.TTS.SampleRate))
 
 	// Play the complete audio
-	logger.Info("Calling PlayAudio", zap.String("guild_id", guildID))
 	if err := o.manager.PlayAudio(ctx, guildID, audio, o.config.TTS.SampleRate); err != nil {
 		logger.Error("Failed to play audio",
 			zap.Error(err),
@@ -374,30 +432,64 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 		return
 	}
 
-	// Log audio reception (every 50 frames to avoid spam)
+	// Add audio frame to buffer
 	conv.AudioBuffer.AddFrame(audio)
 	conv.LastActivity = time.Now()
 
-	// Check if we have enough silence to process
-	silenceThreshold := time.Duration(o.config.Audio.BufferMs) * time.Millisecond
-	silenceDuration := conv.AudioBuffer.SilenceDuration()
-	bufferDuration := conv.AudioBuffer.Duration()
+	// Get VAD settings from config
+	silenceThresholdMs := o.config.Audio.VADSilenceMs
+	if silenceThresholdMs == 0 {
+		silenceThresholdMs = 700 // Default: 700ms silence = user stopped talking
+	}
+	maxDurationMs := o.config.Audio.VADMaxDurationMs
+	if maxDurationMs == 0 {
+		maxDurationMs = 10000 // Default: 10 seconds max
+	}
+	speechMinMs := o.config.Audio.VADSpeechMinMs
+	if speechMinMs == 0 {
+		speechMinMs = 300 // Default: 300ms minimum speech
+	}
+
+	bufferMs := conv.AudioBuffer.Duration()
+	silenceMs := conv.AudioBuffer.SilenceDuration()
+	speechMs := conv.AudioBuffer.SpeechDuration()
+	hasSpeech := conv.AudioBuffer.HasSpeech()
 
 	logger.Debug("Audio buffer status",
 		zap.String("guild_id", guildID),
-		zap.Int("buffer_ms", bufferDuration),
-		zap.Int("silence_ms", silenceDuration),
-		zap.Int("threshold_ms", int(silenceThreshold.Milliseconds())),
-		zap.Bool("has_speech", conv.AudioBuffer.HasSpeech()))
+		zap.Int("buffer_ms", bufferMs),
+		zap.Int("silence_ms", silenceMs),
+		zap.Int("speech_ms", speechMs),
+		zap.Int("silence_threshold_ms", silenceThresholdMs),
+		zap.Bool("has_speech", hasSpeech))
 
-	if silenceDuration >= int(silenceThreshold.Milliseconds()) {
-		if conv.AudioBuffer.HasSpeech() {
-			logger.Info("Processing buffered audio",
+	// Check for max duration (user talking too long)
+	if bufferMs >= maxDurationMs && hasSpeech {
+		logger.Info("Max duration reached, processing audio",
+			zap.String("guild_id", guildID),
+			zap.Int("buffer_ms", bufferMs),
+			zap.Int("speech_ms", speechMs))
+		go o.processBufferedAudio(guildID, userID, conv)
+		return
+	}
+
+	// Check for silence after speech (user stopped talking)
+	// Only process if we have enough speech content
+	if silenceMs >= silenceThresholdMs {
+		if hasSpeech && speechMs >= speechMinMs {
+			logger.Info("Silence detected after speech, processing audio",
 				zap.String("guild_id", guildID),
-				zap.Int("buffer_ms", bufferDuration))
-
-			// Process the buffered audio
+				zap.Int("buffer_ms", bufferMs),
+				zap.Int("speech_ms", speechMs),
+				zap.Int("silence_ms", silenceMs))
 			go o.processBufferedAudio(guildID, userID, conv)
+		} else if hasSpeech && speechMs < speechMinMs {
+			// Very short speech - clear buffer, likely noise
+			logger.Debug("Discarding short speech segment (likely noise)",
+				zap.String("guild_id", guildID),
+				zap.Int("speech_ms", speechMs),
+				zap.Int("min_speech_ms", speechMinMs))
+			conv.AudioBuffer.Clear()
 		}
 	}
 }

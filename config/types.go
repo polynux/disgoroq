@@ -209,15 +209,22 @@ func DefaultConfig() *Config {
 				Language:   "fr",
 			},
 			VRAM: VRAMConfig{
-				MinFreeMB:          1500,
-				AutoUnload:         true,
+				MinFreeMB:            1500,
+				AutoUnload:           true,
 				UnloadTimeoutSeconds: 60,
 			},
 			Audio: AudioConfig{
 				FrameSize:  960,
 				SampleRate: 48000,
 				Channels:   2,
-				BufferMs:   500,
+				BufferMs:   0, // Deprecated
+				// VAD settings
+				VADSilenceMs:          700,   // 700ms silence = user stopped talking
+				VADSpeechMinMs:        300,   // Minimum 300ms speech to process
+				VADMaxDurationMs:      10000, // 10 seconds max recording
+				VADAmplitudeThreshold: 0.02,  // 2% of max amplitude
+				// Streaming settings
+				StreamBufferSize: 200, // Pre-buffer 200ms before playing
 			},
 		},
 	}

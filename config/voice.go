@@ -4,10 +4,10 @@ import "time"
 
 // VoiceConfig contains voice chat configuration.
 type VoiceConfig struct {
-	Enabled bool      `yaml:"enabled"`
-	TTS     TTSConfig `yaml:"tts"`
-	STT     STTConfig `yaml:"stt"`
-	VRAM    VRAMConfig `yaml:"vram"`
+	Enabled bool        `yaml:"enabled"`
+	TTS     TTSConfig   `yaml:"tts"`
+	STT     STTConfig   `yaml:"stt"`
+	VRAM    VRAMConfig  `yaml:"vram"`
 	Audio   AudioConfig `yaml:"audio"`
 }
 
@@ -32,17 +32,24 @@ type STTConfig struct {
 
 // VRAMConfig contains GPU memory management configuration.
 type VRAMConfig struct {
-	MinFreeMB          int `yaml:"min_free_mb"`
-	AutoUnload         bool `yaml:"auto_unload"`
-	UnloadTimeoutSeconds int `yaml:"unload_timeout_seconds"`
+	MinFreeMB            int  `yaml:"min_free_mb"`
+	AutoUnload           bool `yaml:"auto_unload"`
+	UnloadTimeoutSeconds int  `yaml:"unload_timeout_seconds"`
 }
 
 // AudioConfig contains audio processing configuration.
 type AudioConfig struct {
-	FrameSize   int `yaml:"frame_size"`    // Samples per frame (20ms at 48kHz = 960)
-	SampleRate  int `yaml:"sample_rate"`   // Discord uses 48kHz
-	Channels    int `yaml:"channels"`      // Stereo = 2
-	BufferMs    int `yaml:"buffer_ms"`     // Audio buffer before transcription
+	FrameSize  int `yaml:"frame_size"`  // Samples per frame (20ms at 48kHz = 960)
+	SampleRate int `yaml:"sample_rate"` // Discord uses 48kHz
+	Channels   int `yaml:"channels"`    // Stereo = 2
+	BufferMs   int `yaml:"buffer_ms"`   // Deprecated: use VAD settings instead
+	// VAD (Voice Activity Detection) settings
+	VADSilenceMs          int     `yaml:"vad_silence_ms"`          // Silence duration to trigger transcription (ms)
+	VADSpeechMinMs        int     `yaml:"vad_speech_min_ms"`       // Minimum speech duration to process (ms)
+	VADMaxDurationMs      int     `yaml:"vad_max_duration_ms"`     // Maximum recording duration (ms)
+	VADAmplitudeThreshold float64 `yaml:"vad_amplitude_threshold"` // Amplitude threshold (0.0-1.0)
+	// Streaming playback settings
+	StreamBufferSize int `yaml:"stream_buffer_size"` // Pre-buffer size for streaming (ms)
 }
 
 // GetVoiceConfigDefaults returns the default voice configuration.
@@ -65,15 +72,22 @@ func GetVoiceConfigDefaults() VoiceConfig {
 			Language:   "fr",
 		},
 		VRAM: VRAMConfig{
-			MinFreeMB:          1500,
-			AutoUnload:         true,
+			MinFreeMB:            1500,
+			AutoUnload:           true,
 			UnloadTimeoutSeconds: 60,
 		},
 		Audio: AudioConfig{
 			FrameSize:  960,   // 20ms at 48kHz
 			SampleRate: 48000, // Discord uses 48kHz
 			Channels:   2,     // Stereo
-			BufferMs:   500,   // 500ms buffer before transcription
+			BufferMs:   0,     // Deprecated: VAD handles this now
+			// VAD settings - trigger transcription after silence
+			VADSilenceMs:          700,   // 700ms silence = user stopped talking
+			VADSpeechMinMs:        300,   // Minimum 300ms of speech to process
+			VADMaxDurationMs:      10000, // 10 seconds max recording
+			VADAmplitudeThreshold: 0.02,  // Voice activity threshold
+			// Streaming settings
+			StreamBufferSize: 200, // Pre-buffer 200ms before playing
 		},
 	}
 }

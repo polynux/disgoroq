@@ -87,7 +87,7 @@ func Resample(input []byte, inRate, outRate, channels int) []byte {
 
 				// Get source indices for this channel
 				idx1 := (srcIndex*channels + ch) * 2
-				idx2 := ((srcIndex + 1)*channels + ch) * 2
+				idx2 := ((srcIndex+1)*channels + ch) * 2
 
 				s1 := int16(binary.LittleEndian.Uint16(input[idx1:]))
 				s2 := int16(binary.LittleEndian.Uint16(input[idx2:]))
@@ -149,15 +149,19 @@ func MonoToStereo(input []byte) []byte {
 }
 
 // AudioBufferManager manages audio buffering for transcription.
-// It accumulates audio frames and provides silence detection.
+// It accumulates audio frames and provides silence detection with VAD support.
 type AudioBufferManager struct {
-	buffer       *bytes.Buffer
-	sampleRate   int
-	channels     int
-	frameMs      int
-	totalMs      int
-	silenceMs    int
-	silenceLevel int16 // Amplitude threshold for silence detection
+	buffer            *bytes.Buffer
+	sampleRate        int
+	channels          int
+	frameMs           int
+	totalMs           int
+	silenceMs         int
+	silenceLevel      int16 // Amplitude threshold for silence detection
+	speechStartMs     int   // When speech started (for VAD)
+	hasSpeech         bool  // Whether buffer contains speech
+	speechDurationMs  int   // Total speech duration
+	consecutiveSilent int   // Consecutive silent frames
 }
 
 // NewAudioBufferManager creates a new audio buffer manager.
@@ -179,8 +183,16 @@ func (m *AudioBufferManager) AddFrame(frame []byte) {
 	// Check for silence
 	if m.isSilent(frame) {
 		m.silenceMs += m.frameMs
+		m.consecutiveSilent++
 	} else {
 		m.silenceMs = 0
+		m.consecutiveSilent = 0
+		// Track start of speech
+		if !m.hasSpeech {
+			m.speechStartMs = m.totalMs - m.frameMs
+			m.hasSpeech = true
+		}
+		m.speechDurationMs += m.frameMs
 	}
 }
 
@@ -206,6 +218,10 @@ func (m *AudioBufferManager) GetAudio() []byte {
 	m.buffer.Reset()
 	m.totalMs = 0
 	m.silenceMs = 0
+	m.speechStartMs = 0
+	m.hasSpeech = false
+	m.speechDurationMs = 0
+	m.consecutiveSilent = 0
 	return audio
 }
 
@@ -226,7 +242,22 @@ func (m *AudioBufferManager) SilenceDuration() int {
 
 // HasSpeech returns true if the buffer contains non-silent audio.
 func (m *AudioBufferManager) HasSpeech() bool {
-	return m.totalMs > 0 && m.silenceMs < m.totalMs
+	return m.hasSpeech
+}
+
+// SpeechDuration returns the duration of speech in milliseconds.
+func (m *AudioBufferManager) SpeechDuration() int {
+	return m.speechDurationMs
+}
+
+// ConsecutiveSilentFrames returns the number of consecutive silent frames.
+func (m *AudioBufferManager) ConsecutiveSilentFrames() int {
+	return m.consecutiveSilent
+}
+
+// ConsecutiveSilentMs returns the duration of consecutive silence in milliseconds.
+func (m *AudioBufferManager) ConsecutiveSilentMs() int {
+	return m.consecutiveSilent * m.frameMs
 }
 
 // Clear clears the buffer.
@@ -234,11 +265,29 @@ func (m *AudioBufferManager) Clear() {
 	m.buffer.Reset()
 	m.totalMs = 0
 	m.silenceMs = 0
+	m.speechStartMs = 0
+	m.hasSpeech = false
+	m.speechDurationMs = 0
+	m.consecutiveSilent = 0
 }
 
 // SetSilenceLevel sets the amplitude threshold for silence detection.
 func (m *AudioBufferManager) SetSilenceLevel(level int16) {
 	m.silenceLevel = level
+}
+
+// SetSilenceThresholdFromNormalized sets the silence threshold from a normalized 0.0-1.0 value.
+// Values like 0.02 (2% of max amplitude) are good for voice detection.
+func (m *AudioBufferManager) SetSilenceThresholdFromNormalized(threshold float64) {
+	// Convert normalized threshold (0.0-1.0) to int16 amplitude
+	// threshold of 0.02 -> ~655 (0.02 * 32767)
+	if threshold < 0.0 {
+		threshold = 0.0
+	}
+	if threshold > 1.0 {
+		threshold = 1.0
+	}
+	m.silenceLevel = int16(threshold * 32767.0)
 }
 
 // DetectVoiceActivity performs Voice Activity Detection (VAD) on audio.
@@ -447,8 +496,8 @@ func IsWAV(data []byte) bool {
 // VoiceSpeakingHandler handles Discord voice speaking events.
 // Note: VoiceSpeakingUpdate doesn't include GuildID, so it must be provided separately.
 type VoiceSpeakingHandler struct {
-	manager  *Manager
-	guildID  string
+	manager *Manager
+	guildID string
 }
 
 // NewVoiceSpeakingHandler creates a new voice speaking handler.
