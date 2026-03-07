@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"fmt"
-	"text/template"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -621,9 +620,4 @@ func (vc *VoiceCommands) handlePromptReset(e *events.ApplicationCommandInteracti
 	}
 
 	vc.respond(e, fmt.Sprintf("✅ Voice prompt reset to default!\n\n**Default prompt:**\n```\n%s\n```", vc.voicePrompt))
-}
-
-// ptr returns a pointer to the given value.
-func ptr[T any](v T) *T {
-	return &v
 }
