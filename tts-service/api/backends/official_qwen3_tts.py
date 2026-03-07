@@ -7,6 +7,7 @@ This backend uses the official Qwen3-TTS Python implementation
 from the qwen_tts package.
 """
 
+import hashlib
 import logging
 import re
 import asyncio
@@ -513,8 +514,10 @@ class OfficialQwen3TTSBackend(TTSBackend):
             # Always use ICL mode (x_vector_only_mode=False)
             x_vector_only_mode = False
 
-            # Check for cached prompt
-            cache_path = entry / ".cached_prompt.pt"
+            # Check for cached prompt (include model_name in cache to invalidate on model change)
+            # Hash model name to avoid path issues with special characters
+            model_hash = hashlib.md5(self.model_name.encode()).hexdigest()[:8]
+            cache_path = entry / f".cached_prompt_{model_hash}.pt"
 
             if cache_path.exists():
                 try:
@@ -525,7 +528,9 @@ class OfficialQwen3TTSBackend(TTSBackend):
                     )
                     self._custom_voices[voice_name] = prompt_items
                     loaded.append(voice_name)
-                    logger.info(f"Loaded cached custom voice '{voice_name}'")
+                    logger.info(
+                        f"Loaded cached custom voice '{voice_name}' (model: {self.model_name})"
+                    )
                     continue
                 except Exception as e:
                     logger.warning(
@@ -541,9 +546,11 @@ class OfficialQwen3TTSBackend(TTSBackend):
                     x_vector_only_mode=x_vector_only_mode,
                 )
 
-                # Cache to disk
+                # Cache to disk (model-specific)
                 torch.save(prompt_items, cache_path)
-                logger.info(f"Cached custom voice '{voice_name}' to {cache_path}")
+                logger.info(
+                    f"Cached custom voice '{voice_name}' to {cache_path} (model: {self.model_name})"
+                )
 
                 self._custom_voices[voice_name] = prompt_items
                 loaded.append(voice_name)
