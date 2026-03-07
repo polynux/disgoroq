@@ -21,6 +21,7 @@ type TTSConfig struct {
 	StaticMode     bool   `yaml:"static_mode"`      // Use static generation (generate entire response before playing)
 	MaxTextLength  int    `yaml:"max_text_length"`  // Maximum text length per TTS request
 	FallbackToText bool   `yaml:"fallback_to_text"` // Send text message if TTS fails
+	AlwaysSendText bool   `yaml:"always_send_text"` // Always send text response in chat (in addition to TTS)
 }
 
 // STTConfig contains speech-to-text configuration.

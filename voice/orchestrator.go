@@ -365,6 +365,12 @@ func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string)
 	}
 
 	o.lastTTSAudio = time.Now()
+
+	// Send text to chat if AlwaysSendText is enabled
+	if o.config.TTS.AlwaysSendText {
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+	}
+
 	return nil
 }
 
@@ -411,6 +417,12 @@ func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) er
 	}
 
 	o.lastTTSAudio = time.Now()
+
+	// Send text to chat if AlwaysSendText is enabled
+	if o.config.TTS.AlwaysSendText {
+		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+	}
+
 	return nil
 }
 

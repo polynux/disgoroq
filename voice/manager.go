@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/disgo/voice"
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
@@ -666,9 +668,23 @@ func (m *Manager) SendTextFallback(ctx context.Context, guildID, message string)
 		return ErrNotConnected
 	}
 
-	// TODO: Use disgo client to send message
-	// _, err := m.client.Rest.CreateMessage(ctx, channelID, discord.MessageCreate{...})
-	logger.Warn("SendTextFallback not fully implemented for disgo",
+	channelID, err := snowflake.Parse(session.TextChannelID)
+	if err != nil {
+		return fmt.Errorf("invalid channel ID: %w", err)
+	}
+
+	_, err = m.client.Rest.CreateMessage(channelID, discord.MessageCreate{
+		Content: message,
+	}, rest.WithCtx(ctx))
+	if err != nil {
+		logger.Error("Failed to send text fallback",
+			zap.String("guild_id", guildID),
+			zap.String("channel_id", session.TextChannelID),
+			zap.Error(err))
+		return err
+	}
+
+	logger.Debug("Sent text fallback",
 		zap.String("guild_id", guildID),
 		zap.String("channel_id", session.TextChannelID))
 	return nil
