@@ -155,9 +155,18 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 	}
 
 	// Configure VAD threshold from config
-	if o.config.Audio.VADAmplitudeThreshold > 0 {
-		conv.AudioBuffer.SetSilenceThresholdFromNormalized(o.config.Audio.VADAmplitudeThreshold)
+	vadThreshold := o.config.Audio.VADAmplitudeThreshold
+	if vadThreshold <= 0 {
+		vadThreshold = 0.02 // Default 2% of max amplitude
 	}
+	conv.AudioBuffer.SetSilenceThresholdFromNormalized(vadThreshold)
+
+	logger.Info("Voice session created with VAD settings",
+		zap.String("guild_id", guildID),
+		zap.Float64("vad_threshold", vadThreshold),
+		zap.Int16("silence_level", conv.AudioBuffer.GetSilenceLevel()),
+		zap.Int("silence_threshold_ms", o.config.Audio.VADSilenceMs),
+		zap.Int("speech_min_ms", o.config.Audio.VADSpeechMinMs))
 
 	o.sessionsMu.Lock()
 	o.sessions[guildID] = conv
@@ -595,13 +604,15 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 	speechMs := conv.AudioBuffer.SpeechDuration()
 	hasSpeech := conv.AudioBuffer.HasSpeech()
 
-	logger.Debug("Audio buffer status",
-		zap.String("guild_id", guildID),
-		zap.Int("buffer_ms", bufferMs),
-		zap.Int("silence_ms", silenceMs),
-		zap.Int("speech_ms", speechMs),
-		zap.Int("silence_threshold_ms", silenceThresholdMs),
-		zap.Bool("has_speech", hasSpeech))
+	// Log VAD status when approaching silence threshold or when speech detected
+	if silenceMs > 0 || speechMs > 100 {
+		logger.Debug("Audio VAD status",
+			zap.String("guild_id", guildID),
+			zap.Int("buffer_ms", bufferMs),
+			zap.Int("consecutive_silence_ms", silenceMs),
+			zap.Int("speech_ms", speechMs),
+			zap.Bool("has_speech", hasSpeech))
+	}
 
 	// Check for max duration (user talking too long)
 	if bufferMs >= maxDurationMs && hasSpeech {

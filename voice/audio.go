@@ -156,7 +156,6 @@ type AudioBufferManager struct {
 	channels          int
 	frameMs           int
 	totalMs           int
-	silenceMs         int
 	silenceLevel      int16 // Amplitude threshold for silence detection
 	speechStartMs     int   // When speech started (for VAD)
 	hasSpeech         bool  // Whether buffer contains speech
@@ -182,10 +181,11 @@ func (m *AudioBufferManager) AddFrame(frame []byte) {
 
 	// Check for silence
 	if m.isSilent(frame) {
-		m.silenceMs += m.frameMs
 		m.consecutiveSilent++
+		// Only count consecutive silent frames as silence
+		// This prevents brief silence during speech from resetting speech tracking
 	} else {
-		m.silenceMs = 0
+		// Frame has speech
 		m.consecutiveSilent = 0
 		// Track start of speech
 		if !m.hasSpeech {
@@ -196,6 +196,12 @@ func (m *AudioBufferManager) AddFrame(frame []byte) {
 	}
 }
 
+// SilenceDuration returns the duration of consecutive silence in milliseconds.
+// This is based on consecutive silent frames, not cumulative silence.
+func (m *AudioBufferManager) SilenceDuration() int {
+	return m.consecutiveSilent * m.frameMs
+}
+
 // isSilent checks if a frame is silent (below threshold).
 func (m *AudioBufferManager) isSilent(frame []byte) bool {
 	if len(frame) < 2 {
@@ -203,13 +209,20 @@ func (m *AudioBufferManager) isSilent(frame []byte) bool {
 	}
 
 	// Find peak amplitude
+	var maxSample int16
 	for i := 0; i < len(frame)-1; i += 2 {
 		sample := int16(binary.LittleEndian.Uint16(frame[i:]))
-		if sample > m.silenceLevel || sample < -m.silenceLevel {
-			return false
+		absSample := sample
+		if absSample < 0 {
+			absSample = -absSample
+		}
+		if absSample > maxSample {
+			maxSample = absSample
 		}
 	}
-	return true
+
+	// Frame is silent if peak amplitude is below threshold
+	return maxSample < m.silenceLevel
 }
 
 // GetAudio returns the buffered audio and clears the buffer.
@@ -217,7 +230,6 @@ func (m *AudioBufferManager) GetAudio() []byte {
 	audio := m.buffer.Bytes()
 	m.buffer.Reset()
 	m.totalMs = 0
-	m.silenceMs = 0
 	m.speechStartMs = 0
 	m.hasSpeech = false
 	m.speechDurationMs = 0
@@ -237,7 +249,7 @@ func (m *AudioBufferManager) Duration() int {
 
 // SilenceDuration returns the duration of consecutive silence.
 func (m *AudioBufferManager) SilenceDuration() int {
-	return m.silenceMs
+	return m.consecutiveSilent * m.frameMs
 }
 
 // HasSpeech returns true if the buffer contains non-silent audio.
@@ -264,7 +276,6 @@ func (m *AudioBufferManager) ConsecutiveSilentMs() int {
 func (m *AudioBufferManager) Clear() {
 	m.buffer.Reset()
 	m.totalMs = 0
-	m.silenceMs = 0
 	m.speechStartMs = 0
 	m.hasSpeech = false
 	m.speechDurationMs = 0
@@ -300,6 +311,11 @@ func (m *AudioBufferManager) PrependAudio(audio []byte) {
 // SetSilenceLevel sets the amplitude threshold for silence detection.
 func (m *AudioBufferManager) SetSilenceLevel(level int16) {
 	m.silenceLevel = level
+}
+
+// GetSilenceLevel returns the current silence level threshold.
+func (m *AudioBufferManager) GetSilenceLevel() int16 {
+	return m.silenceLevel
 }
 
 // SetSilenceThresholdFromNormalized sets the silence threshold from a normalized 0.0-1.0 value.

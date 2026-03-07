@@ -230,7 +230,11 @@ voice:
     vad_max_duration_ms: 10000
 
     # Amplitude threshold for voice detection (0.0-1.0)
-    vad_amplitude_threshold: 0.02
+    # Higher values = less sensitive (filters more background noise)
+    # 0.02 = 2% (~655) - very sensitive, may trigger on noise
+    # 0.10 = 10% (~3276) - moderate sensitivity
+    # 0.15 = 15% (~4915) - less sensitive, better noise rejection
+    vad_amplitude_threshold: 0.15
 
     # Pre-buffer size for streaming playback (in milliseconds)
     stream_buffer_size: 200

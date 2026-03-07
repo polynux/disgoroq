@@ -89,7 +89,7 @@ func GetVoiceConfigDefaults() VoiceConfig {
 			VADSilenceMs:          700,   // 700ms silence = user stopped talking
 			VADSpeechMinMs:        300,   // Minimum 300ms of speech to process
 			VADMaxDurationMs:      10000, // 10 seconds max recording
-			VADAmplitudeThreshold: 0.02,  // Voice activity threshold
+			VADAmplitudeThreshold: 0.15,  // Voice activity threshold (15% of max amplitude)
 			// Streaming settings
 			StreamBufferSize: 200, // Pre-buffer 200ms before playing
 		},
