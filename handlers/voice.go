@@ -7,6 +7,7 @@ import (
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/disgo/gateway"
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
@@ -32,8 +33,12 @@ func NewVoiceHandler(orchestrator *voice.Orchestrator, repo *database.Repository
 }
 
 // HandleVoiceStateUpdate handles voice state update events from Discord.
-// This is used for auto-join functionality.
+// This is used for auto-join functionality and DAVE encryption tracking.
 func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
+	// Forward voice state update to active voice connection for DAVE encryption
+	// This must happen before any other logic to ensure DAVE can track users
+	h.forwardToVoiceConnection(e)
+
 	// Skip if orchestrator or repo is not initialized
 	if h.orchestrator == nil || h.repo == nil {
 		return
@@ -99,6 +104,41 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 	}
 }
 
+// forwardToVoiceConnection forwards voice state updates to the active voice connection.
+// This is required for DAVE encryption to track users joining/leaving the voice channel.
+func (h *VoiceHandler) forwardToVoiceConnection(e *events.GuildVoiceStateUpdate) {
+	// Check if we have an active voice connection for this guild
+	guildSnowflake := e.VoiceState.GuildID
+	conn := h.client.VoiceManager.GetConn(guildSnowflake)
+	if conn == nil {
+		return
+	}
+
+	// Convert event to the format expected by voice.Conn
+	// The voice connection needs this to track users for DAVE encryption
+	// Note: GuildVoiceStateUpdate embeds GenericGuildVoiceState which has VoiceState and Member
+	evt := gateway.EventVoiceStateUpdate{
+		VoiceState: e.GenericGuildVoiceState.VoiceState,
+		Member:     e.GenericGuildVoiceState.Member,
+	}
+
+	// Forward the update to the voice connection
+	conn.HandleVoiceStateUpdate(evt)
+
+	logger.Debug("Forwarded voice state update to connection",
+		zap.String("guild_id", e.VoiceState.GuildID.String()),
+		zap.String("user_id", e.VoiceState.UserID.String()),
+		zap.String("channel_id", channelIDStr(e.VoiceState.ChannelID)))
+}
+
+// channelIDStr safely converts a channel ID pointer to string.
+func channelIDStr(id *snowflake.ID) string {
+	if id == nil {
+		return "nil"
+	}
+	return id.String()
+}
+
 // handleBotVoiceStateUpdate handles voice state updates for the bot itself.
 func (h *VoiceHandler) handleBotVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 	// If the bot was disconnected
@@ -158,6 +198,7 @@ func (h *VoiceHandler) findDefaultTextChannel(guildID snowflake.ID) string {
 
 // HandleVoiceServerUpdate handles voice server update events.
 // This is called when the voice server changes (e.g., during region migration).
+// It forwards the update to the active voice connection for DAVE encryption handling.
 func (h *VoiceHandler) HandleVoiceServerUpdate(e *events.VoiceServerUpdate) {
 	endpoint := ""
 	if e.Endpoint != nil {
@@ -166,9 +207,18 @@ func (h *VoiceHandler) HandleVoiceServerUpdate(e *events.VoiceServerUpdate) {
 
 	logger.Debug("Voice server update",
 		zap.String("guild_id", e.GuildID.String()),
-		zap.String("endpoint", endpoint),
-		zap.String("token", "***")) // Don't log the token
+		zap.String("endpoint", endpoint))
 
-	// The disgo library handles this automatically via the voice connection
-	// We just log it for debugging purposes
+	// Forward to active voice connection for DAVE handling
+	conn := h.client.VoiceManager.GetConn(e.GuildID)
+	if conn != nil {
+		evt := gateway.EventVoiceServerUpdate{
+			GuildID:  e.GuildID,
+			Token:    e.Token,
+			Endpoint: e.Endpoint,
+		}
+		conn.HandleVoiceServerUpdate(evt)
+		logger.Debug("Forwarded voice server update to connection",
+			zap.String("guild_id", e.GuildID.String()))
+	}
 }
