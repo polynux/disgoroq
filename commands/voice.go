@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"text/template"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -12,6 +13,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/voice"
@@ -22,14 +24,27 @@ type VoiceCommands struct {
 	repo         *database.Repository
 	orchestrator *voice.Orchestrator
 	client       *bot.Client
+	voicePrompt  string // Default voice prompt from config
 }
 
 // NewVoiceCommands creates a new VoiceCommands instance.
 func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client) *VoiceCommands {
+	// Get default voice prompt from config
+	cfg, err := config.Load(config.DefaultConfigPath)
+	if err != nil {
+		logger.Warn("Failed to load config for voice prompt, using fallback", zap.Error(err))
+		return &VoiceCommands{
+			repo:         repo,
+			orchestrator: orchestrator,
+			client:       client,
+			voicePrompt:  "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues.",
+		}
+	}
 	return &VoiceCommands{
 		repo:         repo,
 		orchestrator: orchestrator,
 		client:       client,
+		voicePrompt:  cfg.Voice.VoiceSystemPrompt,
 	}
 }
 
@@ -60,6 +75,14 @@ func RegisterVoiceCommands(registry *Registry, voiceCmds *VoiceCommands) {
 					Name:        "status",
 					Description: "Show voice chat status",
 				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "enable",
+					Description: "Enable voice chat for this server",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "disable",
+					Description: "Disable voice chat for this server",
+				},
 				discord.ApplicationCommandOptionSubCommandGroup{
 					Name:        "autojoin",
 					Description: "Configure auto-join settings",
@@ -88,13 +111,43 @@ func RegisterVoiceCommands(registry *Registry, voiceCmds *VoiceCommands) {
 						},
 					},
 				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "enable",
-					Description: "Enable voice chat for this server",
-				},
-				discord.ApplicationCommandOptionSubCommand{
-					Name:        "disable",
-					Description: "Disable voice chat for this server",
+				discord.ApplicationCommandOptionSubCommandGroup{
+					Name:        "prompt",
+					Description: "Manage the voice system prompt",
+					Options: []discord.ApplicationCommandOptionSubCommand{
+						{
+							Name:        "see",
+							Description: "View the current voice prompt",
+						},
+						{
+							Name:        "append",
+							Description: "Append text to the current voice prompt",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionString{
+									Name:        "text",
+									Description: "Text to append to the voice prompt",
+									Required:    true,
+									MaxLength:   ptr(1000),
+								},
+							},
+						},
+						{
+							Name:        "set",
+							Description: "Set a custom voice prompt",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionString{
+									Name:        "prompt",
+									Description: "The custom prompt for voice",
+									Required:    true,
+									MaxLength:   ptr(1000),
+								},
+							},
+						},
+						{
+							Name:        "reset",
+							Description: "Reset to the default voice prompt",
+						},
+					},
 				},
 			},
 			DefaultMemberPermissions: omit.NewPtr(perms),
@@ -115,13 +168,23 @@ func (vc *VoiceCommands) voiceHandler() func(e *events.ApplicationCommandInterac
 		data := e.SlashCommandInteractionData()
 
 		// Check for subcommand group first
-		if data.SubCommandGroupName != nil && *data.SubCommandGroupName == "autojoin" {
-			if data.SubCommandName == nil {
-				vc.respondError(e, "No autojoin subcommand specified")
+		if data.SubCommandGroupName != nil {
+			switch *data.SubCommandGroupName {
+			case "autojoin":
+				if data.SubCommandName == nil {
+					vc.respondError(e, "No autojoin subcommand specified")
+					return
+				}
+				vc.handleAutojoin(e, *data.SubCommandName)
+				return
+			case "prompt":
+				if data.SubCommandName == nil {
+					vc.respondError(e, "No prompt subcommand specified")
+					return
+				}
+				vc.handlePrompt(e, *data.SubCommandName)
 				return
 			}
-			vc.handleAutojoin(e, *data.SubCommandName)
-			return
 		}
 
 		// Handle regular subcommands
@@ -460,4 +523,107 @@ func (vc *VoiceCommands) findTextChannel(guildID snowflake.ID) string {
 		}
 	}
 	return ""
+}
+
+// handlePrompt handles the /voice prompt subcommands.
+func (vc *VoiceCommands) handlePrompt(e *events.ApplicationCommandInteractionCreate, subcommand string) {
+	ctx := context.Background()
+	guildID := e.GuildID()
+	if guildID == nil {
+		vc.respondError(e, "This command can only be used in a guild")
+		return
+	}
+	guildIDStr := guildID.String()
+
+	switch subcommand {
+	case "see":
+		vc.handlePromptSee(e, ctx, guildIDStr)
+	case "append":
+		vc.handlePromptAppend(e, ctx, guildIDStr)
+	case "set":
+		vc.handlePromptSet(e, ctx, guildIDStr)
+	case "reset":
+		vc.handlePromptReset(e, ctx, guildIDStr)
+	default:
+		vc.respondError(e, "Unknown prompt subcommand: "+subcommand)
+	}
+}
+
+// handlePromptSee shows the current voice prompt.
+func (vc *VoiceCommands) handlePromptSee(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
+	prompt, hasCustom := vc.repo.GetVoicePrompt(ctx, guildID)
+
+	if !hasCustom {
+		prompt = vc.voicePrompt
+	}
+
+	// Truncate if too long for Discord message (max 2000, leave room for prefix)
+	content := prompt
+	if len(content) > 1900 {
+		content = content[:1900] + "\n... (truncated)"
+	}
+
+	prefix := "**Current voice prompt:**\n"
+	if !hasCustom {
+		prefix = "**Current voice prompt (default):**\n"
+	}
+
+	vc.respond(e, prefix+"```\n"+content+"\n```")
+}
+
+// handlePromptAppend appends text to the current voice prompt.
+func (vc *VoiceCommands) handlePromptAppend(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
+	data := e.SlashCommandInteractionData()
+	textToAppend := data.String("text")
+
+	currentPrompt, hasCustom := vc.repo.GetVoicePrompt(ctx, guildID)
+	if !hasCustom {
+		currentPrompt = vc.voicePrompt
+	}
+
+	newPrompt := currentPrompt + "\n" + textToAppend
+
+	err := vc.repo.SetGuildSetting(ctx, guildID, "voice_prompt", newPrompt)
+	if err != nil {
+		vc.respondError(e, "Failed to update voice prompt")
+		return
+	}
+
+	// Show preview of new prompt
+	preview := newPrompt
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
+	}
+
+	vc.respond(e, fmt.Sprintf("✅ Voice prompt updated!\n\n**Preview:**\n```\n%s\n```", preview))
+}
+
+// handlePromptSet sets a custom voice prompt.
+func (vc *VoiceCommands) handlePromptSet(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
+	data := e.SlashCommandInteractionData()
+	customPrompt := data.String("prompt")
+
+	err := vc.repo.SetGuildSetting(ctx, guildID, "voice_prompt", customPrompt)
+	if err != nil {
+		vc.respondError(e, "Failed to set voice prompt")
+		return
+	}
+
+	vc.respond(e, "✅ Voice prompt set successfully!\n\n**New prompt:**\n```\n"+customPrompt+"\n```")
+}
+
+// handlePromptReset resets the voice prompt to default.
+func (vc *VoiceCommands) handlePromptReset(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
+	err := vc.repo.DeleteGuildSetting(ctx, guildID, "voice_prompt")
+	if err != nil {
+		vc.respondError(e, "Failed to reset voice prompt")
+		return
+	}
+
+	vc.respond(e, fmt.Sprintf("✅ Voice prompt reset to default!\n\n**Default prompt:**\n```\n%s\n```", vc.voicePrompt))
+}
+
+// ptr returns a pointer to the given value.
+func ptr[T any](v T) *T {
+	return &v
 }

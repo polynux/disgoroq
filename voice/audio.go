@@ -271,6 +271,32 @@ func (m *AudioBufferManager) Clear() {
 	m.consecutiveSilent = 0
 }
 
+// PrependAudio adds audio to the beginning of the buffer.
+// This is useful for prepending idle-buffered audio to get context
+// of what was said during the pause.
+func (m *AudioBufferManager) PrependAudio(audio []byte) {
+	if len(audio) == 0 {
+		return
+	}
+
+	// Get current buffer content
+	current := m.buffer.Bytes()
+
+	// Create new buffer with prepended content
+	m.buffer.Reset()
+	m.buffer.Write(audio)
+	m.buffer.Write(current)
+
+	// Update duration tracking
+	framesAdded := len(audio) / (2 * m.channels) // bytes / (2 bytes per sample * channels)
+	msAdded := (framesAdded * 1000) / m.sampleRate
+	m.totalMs += msAdded
+
+	// Note: we don't recalculate silence tracking for prepended audio,
+	// as it's assumed to be context audio (idle buffer) that should be
+	// processed as-is
+}
+
 // SetSilenceLevel sets the amplitude threshold for silence detection.
 func (m *AudioBufferManager) SetSilenceLevel(level int16) {
 	m.silenceLevel = level

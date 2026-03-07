@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 )
 
 // AgentState represents the current state of the voice agent.
@@ -20,6 +21,9 @@ const (
 	StateThinking
 	// StateSpeaking means the bot is playing TTS audio back to the channel.
 	StateSpeaking
+	// StateIdleProcessing means the bot is idle but buffering audio for context
+	// during the idle timeout period after speaking.
+	StateIdleProcessing
 )
 
 // String returns a human-readable representation of the state.
@@ -33,6 +37,8 @@ func (s AgentState) String() string {
 		return "thinking"
 	case StateSpeaking:
 		return "speaking"
+	case StateIdleProcessing:
+		return "idle_processing"
 	default:
 		return "unknown"
 	}
@@ -224,6 +230,25 @@ func NewAudioBuffer(initialCapacity int, sampleRate, channels int) *AudioBuffer 
 		SampleRate: sampleRate,
 		Channels:   channels,
 	}
+}
+
+// VoiceMessage represents a message in voice conversation history.
+// Used for maintaining context across multiple voice interactions.
+type VoiceMessage struct {
+	// UserID is the Discord user ID of the speaker.
+	UserID string
+
+	// Username is the display name of the speaker.
+	Username string
+
+	// Content is the transcribed text of the voice message.
+	Content string
+
+	// Timestamp is when the message was spoken.
+	Timestamp time.Time
+
+	// IsBot indicates if this message is from the bot (true) or a user (false).
+	IsBot bool
 }
 
 // TranscriptionResult represents the result of a transcription.

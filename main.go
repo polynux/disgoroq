@@ -235,14 +235,15 @@ func main() {
 
 		// Create orchestrator
 		voiceOrchestrator = voicepkg.NewOrchestrator(voicepkg.OrchestratorConfig{
-			STTClient:     sttClient,
-			TTSClient:     ttsClient,
-			AIService:     aiService,
-			MemoryService: memoryService,
-			Client:        client,
-			Repository:    repo,
-			DefaultPrompt: cfg.Bot.DefaultPrompt,
-			VoiceConfig:   cfg.Voice,
+			STTClient:         sttClient,
+			TTSClient:         ttsClient,
+			AIService:         aiService,
+			MemoryService:     memoryService,
+			Client:            client,
+			Repository:        repo,
+			DefaultPrompt:     cfg.Bot.DefaultPrompt,
+			VoiceConfig:       cfg.Voice,
+			VoiceSystemPrompt: cfg.Voice.VoiceSystemPrompt,
 		})
 
 		// Add voice state handler for auto-join

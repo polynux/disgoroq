@@ -140,6 +140,17 @@ func (r *Repository) GetPrompt(ctx context.Context, guildID string) (string, boo
 	return prompt, true
 }
 
+func (r *Repository) GetVoicePrompt(ctx context.Context, guildID string) (string, bool) {
+	prompt, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "voice_prompt",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return "", false
+	}
+	return prompt, true
+}
+
 func (r *Repository) SetGuildSetting(ctx context.Context, guildID, name, value string) error {
 	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
 		GuildID: guildID,

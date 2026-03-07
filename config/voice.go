@@ -4,11 +4,14 @@ import "time"
 
 // VoiceConfig contains voice chat configuration.
 type VoiceConfig struct {
-	Enabled bool        `yaml:"enabled"`
-	TTS     TTSConfig   `yaml:"tts"`
-	STT     STTConfig   `yaml:"stt"`
-	VRAM    VRAMConfig  `yaml:"vram"`
-	Audio   AudioConfig `yaml:"audio"`
+	Enabled               bool        `yaml:"enabled"`
+	TTS                   TTSConfig   `yaml:"tts"`
+	STT                   STTConfig   `yaml:"stt"`
+	VRAM                  VRAMConfig  `yaml:"vram"`
+	Audio                 AudioConfig `yaml:"audio"`
+	IdleTimeoutMs         int         `yaml:"idle_timeout_ms"`          // Idle timeout between AI speech and next voice processing (ms)
+	VoiceContextMaxLength int         `yaml:"voice_context_max_length"` // Maximum messages in voice conversation history
+	VoiceSystemPrompt     string      `yaml:"voice_system_prompt"`      // Separate system prompt for voice mode
 }
 
 // TTSConfig contains TTS service configuration.
@@ -90,6 +93,9 @@ func GetVoiceConfigDefaults() VoiceConfig {
 			// Streaming settings
 			StreamBufferSize: 200, // Pre-buffer 200ms before playing
 		},
+		IdleTimeoutMs:         3000, // 3 seconds between AI speech and next voice processing
+		VoiceContextMaxLength: 10,   // Keep last 10 messages in voice conversation history
+		VoiceSystemPrompt:     "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues.",
 	}
 }
 
@@ -113,4 +119,9 @@ func (c AudioConfig) FrameDuration() time.Duration {
 	// Frame size / sample rate = duration in seconds
 	// e.g., 960 / 48000 = 0.02 seconds = 20ms
 	return time.Duration(c.FrameSize*1000/c.SampleRate) * time.Millisecond
+}
+
+// IdleTimeout returns the idle timeout as a duration.
+func (c VoiceConfig) IdleTimeout() time.Duration {
+	return time.Duration(c.IdleTimeoutMs) * time.Millisecond
 }

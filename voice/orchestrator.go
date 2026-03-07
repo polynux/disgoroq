@@ -21,16 +21,17 @@ import (
 // Orchestrator manages the voice conversation flow.
 // It coordinates between STT (speech-to-text), AI service, and TTS (text-to-speech).
 type Orchestrator struct {
-	manager        *Manager
-	sttClient      STTClient
-	ttsClient      TTSClient
-	aiService      *ai.Service
-	memoryService  memory.Service
-	contextBuilder *ai.ContextBuilder
-	client         *bot.Client
-	repo           Repository
-	defaultPrompt  string
-	config         config.VoiceConfig
+	manager           *Manager
+	sttClient         STTClient
+	ttsClient         TTSClient
+	aiService         *ai.Service
+	memoryService     memory.Service
+	contextBuilder    *ai.ContextBuilder
+	client            *bot.Client
+	repo              Repository
+	defaultPrompt     string
+	voiceSystemPrompt string // Separate prompt for voice mode
+	config            config.VoiceConfig
 
 	// State management
 	sessions   map[string]*VoiceConversation // guildID -> conversation
@@ -48,6 +49,7 @@ type Orchestrator struct {
 type Repository interface {
 	GetTemperature(ctx context.Context, guildID string) float32
 	GetPrompt(ctx context.Context, guildID string) (string, bool)
+	GetVoicePrompt(ctx context.Context, guildID string) (string, bool)
 }
 
 // VoiceConversation represents an active voice conversation in a guild.
@@ -58,34 +60,51 @@ type VoiceConversation struct {
 	AudioBuffer   *AudioBufferManager
 	LastActivity  time.Time
 	CancelFunc    context.CancelFunc
+
+	// History tracks voice conversation messages for context
+	History *VoiceHistoryManager
+
+	// StateManager handles idle timeout and audio buffering during pauses
+	StateManager *VoiceStateManager
+
+	// LastSpeakerID tracks the most recent speaker
+	LastSpeakerID string
 }
 
 // OrchestratorConfig contains configuration for the orchestrator.
 type OrchestratorConfig struct {
-	STTClient     STTClient
-	TTSClient     TTSClient
-	AIService     *ai.Service
-	MemoryService memory.Service
-	Client        *bot.Client
-	Repository    Repository
-	DefaultPrompt string
-	VoiceConfig   config.VoiceConfig
+	STTClient         STTClient
+	TTSClient         TTSClient
+	AIService         *ai.Service
+	MemoryService     memory.Service
+	Client            *bot.Client
+	Repository        Repository
+	DefaultPrompt     string
+	VoiceConfig       config.VoiceConfig
+	VoiceSystemPrompt string // Separate system prompt for voice mode
 }
 
 // NewOrchestrator creates a new voice orchestrator.
 func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
+	// Use VoiceSystemPrompt from config if set, otherwise use DefaultPrompt
+	voicePrompt := cfg.VoiceSystemPrompt
+	if voicePrompt == "" {
+		voicePrompt = cfg.DefaultPrompt
+	}
+
 	o := &Orchestrator{
-		manager:        NewManager(cfg.Client),
-		sttClient:      cfg.STTClient,
-		ttsClient:      cfg.TTSClient,
-		aiService:      cfg.AIService,
-		memoryService:  cfg.MemoryService,
-		contextBuilder: ai.NewContextBuilder(cfg.Client, cfg.AIService),
-		client:         cfg.Client,
-		repo:           cfg.Repository,
-		defaultPrompt:  cfg.DefaultPrompt,
-		config:         cfg.VoiceConfig,
-		sessions:       make(map[string]*VoiceConversation),
+		manager:           NewManager(cfg.Client),
+		sttClient:         cfg.STTClient,
+		ttsClient:         cfg.TTSClient,
+		aiService:         cfg.AIService,
+		memoryService:     cfg.MemoryService,
+		contextBuilder:    ai.NewContextBuilder(cfg.Client, cfg.AIService),
+		client:            cfg.Client,
+		repo:              cfg.Repository,
+		defaultPrompt:     cfg.DefaultPrompt,
+		voiceSystemPrompt: voicePrompt,
+		config:            cfg.VoiceConfig,
+		sessions:          make(map[string]*VoiceConversation),
 	}
 
 	// Set up audio callback
@@ -109,6 +128,18 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 	}
 
 	// Create conversation session
+	// Calculate idle timeout from config (default to 3000ms if not set)
+	idleTimeoutMs := o.config.IdleTimeoutMs
+	if idleTimeoutMs <= 0 {
+		idleTimeoutMs = 3000 // Default: 3 seconds
+	}
+
+	// Get max history length from config (default to 10 if not set)
+	maxHistoryLength := o.config.VoiceContextMaxLength
+	if maxHistoryLength <= 0 {
+		maxHistoryLength = 10 // Default: 10 messages
+	}
+
 	conv := &VoiceConversation{
 		GuildID:       guildID,
 		TextChannelID: textChannelID,
@@ -119,6 +150,8 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 			20, // 20ms frames
 		),
 		LastActivity: time.Now(),
+		History:      NewVoiceHistoryManager(maxHistoryLength),
+		StateManager: NewVoiceStateManager(time.Duration(idleTimeoutMs) * time.Millisecond),
 	}
 
 	// Configure VAD threshold from config
@@ -198,14 +231,50 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 		}
 	}
 
-	// Build the system prompt
-	instructions := o.getDefaultPrompt(botNick)
-	if prompt, ok := o.repo.GetPrompt(ctx, guildID); ok {
+	// Build the system prompt - use voice-specific prompt
+	var instructions string
+
+	// Try to get custom voice prompt first (completely replaces the default)
+	if prompt, ok := o.repo.GetVoicePrompt(ctx, guildID); ok {
 		instructions = prompt
+	} else {
+		// Use the voice system prompt (already includes voice context instructions)
+		instructions = o.voiceSystemPrompt
+
+		// Apply bot nickname template if needed
+		if strings.Contains(instructions, "{{.BotNick}}") {
+			tmpl, err := template.New("prompt").Parse(instructions)
+			if err == nil {
+				var result strings.Builder
+				data := map[string]string{"BotNick": botNick}
+				if err := tmpl.Execute(&result, data); err == nil {
+					instructions = result.String()
+				}
+			}
+		}
 	}
 
-	// Add voice context
-	instructions += "\n\n[Voice mode: Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues.]"
+	// Get username for history
+	username := userID // Default to user ID
+	if guildSnowflake, err := snowflake.Parse(guildID); err == nil {
+		userSnowflake, err := snowflake.Parse(userID)
+		if err == nil {
+			if member, err := o.client.Rest.GetMember(guildSnowflake, userSnowflake); err == nil {
+				if member.Nick != nil && *member.Nick != "" {
+					username = *member.Nick
+				} else {
+					username = member.User.Username
+				}
+			}
+		}
+	}
+
+	// Add user message to voice history
+	botID := o.client.ID().String()
+	conv.History.AddMessage(userID, username, text, false)
+
+	// Build voice context from history
+	voiceContext := conv.History.FormatForContext()
 
 	// Build memory context if available
 	var memoryContext string
@@ -218,8 +287,41 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 					memoryContext += fmt.Sprintf("- %s\n", summary.Content)
 				}
 			}
-			instructions += memoryContext
 		}
+	}
+
+	// Build messages including voice history for context
+	var messages []ai.Message
+
+	// Add voice history messages for context
+	if voiceContext != "" {
+		// Parse history and add to messages
+		// History format: "[Username]: message\n"
+		historyMsgs := conv.History.GetHistory()
+		for _, msg := range historyMsgs {
+			role := "user"
+			if msg.IsBot {
+				role = "assistant"
+			}
+			messages = append(messages, ai.Message{
+				Role:     role,
+				Content:  msg.Content,
+				AuthorID: msg.UserID,
+			})
+		}
+	}
+
+	// Add current message
+	messages = append(messages, ai.Message{
+		Role:     "user",
+		Content:  text,
+		AuthorID: userID,
+	})
+
+	// Add memory context to system prompt
+	systemPrompt := instructions
+	if memoryContext != "" {
+		systemPrompt += memoryContext
 	}
 
 	// Buffer message for memory
@@ -234,17 +336,10 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 	// Get temperature
 	temperature := o.repo.GetTemperature(ctx, guildID)
 
-	// Build message context
-	message := ai.Message{
-		Role:     "user",
-		Content:  text,
-		AuthorID: userID,
-	}
-
 	// Call AI service
 	response, err := o.aiService.Chat(ctx, &ai.ChatRequest{
-		SystemPrompt: instructions,
-		Messages:     []ai.Message{message},
+		SystemPrompt: systemPrompt,
+		Messages:     messages,
 		Temperature:  temperature,
 		MaxTokens:    150, // Shorter responses for voice
 	})
@@ -263,10 +358,13 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 		return o.manager.SendTextFallback(context.Background(), guildID, "Euh... je n'ai rien à dire...")
 	}
 
+	// Add bot response to voice history
+	conv.History.AddMessage(botID, "Bot", response.Content, true)
+
 	// Buffer response for memory
 	if o.memoryService != nil {
 		go func() {
-			if err := o.memoryService.BufferMessage(context.Background(), o.client.ID().String(), guildID, response.Content); err != nil {
+			if err := o.memoryService.BufferMessage(context.Background(), botID, guildID, response.Content); err != nil {
 				logger.Warn("Failed to buffer voice response", zap.Error(err))
 			}
 		}()
@@ -294,7 +392,16 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 
 	// Update state to speaking
 	o.transitionState(guildID, StateSpeaking)
-	defer o.transitionState(guildID, StateListening)
+	defer func() {
+		o.transitionState(guildID, StateListening)
+
+		// Mark speech end and start idle timeout
+		o.sessionsMu.RLock()
+		if conv, exists := o.sessions[guildID]; exists {
+			conv.StateManager.MarkSpeechEnd()
+		}
+		o.sessionsMu.RUnlock()
+	}()
 
 	// Send text to chat first if AlwaysSendText is enabled
 	if o.config.TTS.AlwaysSendText {
@@ -435,6 +542,16 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 		return
 	}
 
+	// Check if we're in idle timeout period
+	if conv.StateManager.IsInIdle() {
+		// Buffer audio during idle, don't process yet
+		conv.StateManager.BufferAudio(audio)
+		logger.Debug("Buffering audio during idle timeout",
+			zap.String("guild_id", guildID),
+			zap.Int("audio_bytes", len(audio)))
+		return
+	}
+
 	// Only process audio when in listening state
 	if conv.State != StateListening {
 		logger.Debug("Ignoring audio - not in listening state",
@@ -443,9 +560,21 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 		return
 	}
 
+	// Track last speaker
+	conv.LastSpeakerID = userID
+
 	// Add audio frame to buffer
 	conv.AudioBuffer.AddFrame(audio)
 	conv.LastActivity = time.Now()
+
+	// Check if we should include idle buffered audio
+	if idleBuffer := conv.StateManager.GetIdleBuffer(); len(idleBuffer) > 0 {
+		// Prepend idle buffer to audio for context
+		conv.AudioBuffer.PrependAudio(idleBuffer)
+		logger.Info("Prepended idle buffer to audio",
+			zap.String("guild_id", guildID),
+			zap.Int("idle_buffer_bytes", len(idleBuffer)))
+	}
 
 	// Get VAD settings from config
 	silenceThresholdMs := o.config.Audio.VADSilenceMs
