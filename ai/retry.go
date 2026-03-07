@@ -51,6 +51,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	// Attempt up to MaxRetries + 1 times (initial attempt + retries)
 	maxAttempts := r.config.MaxRetries + 1
 
+	// In QuickFail mode, only attempt once (no retries)
+	if r.config.QuickFail {
+		maxAttempts = 1
+	}
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		logger.Debug("AI chat attempt",
 			zap.Int("attempt", attempt),
@@ -71,6 +76,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				zap.Int("attempt", attempt),
 				zap.String("provider", r.provider.Name()),
 				zap.Duration("duration", duration))
+
+			// In QuickFail mode, return immediately on first error
+			if r.config.QuickFail {
+				return nil, fmt.Errorf("AI chat failed (quick-fail): %w", err)
+			}
 
 			// Check if we should retry on error
 			if !r.config.RetryOnError || attempt >= maxAttempts {
@@ -123,6 +133,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				DurationMS: duration.Milliseconds(),
 			}
 			logger.LogEvent(ctxWithFields, event)
+		}
+
+		// In QuickFail mode, return immediately on empty response
+		if r.config.QuickFail {
+			return nil, fmt.Errorf("AI chat returned empty response (quick-fail): %s", validation.Reason)
 		}
 
 		// Check if we should retry on empty response

@@ -16,6 +16,7 @@ type RetryConfig struct {
 	BackoffFactor float64       // Exponential backoff factor (default: 2.0)
 	RetryOnEmpty  bool          // Retry on empty responses (default: true)
 	RetryOnError  bool          // Retry on API errors (default: true)
+	QuickFail     bool          // Skip retries on first failure, immediately try fallback (default: false)
 }
 
 // DefaultRetryConfig returns the default retry configuration
@@ -27,6 +28,7 @@ func DefaultRetryConfig() RetryConfig {
 		BackoffFactor: 2.0,
 		RetryOnEmpty:  true,
 		RetryOnError:  true,
+		QuickFail:     false,
 	}
 }
 
