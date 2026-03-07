@@ -288,8 +288,10 @@ func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 				logger.Info("UDP connection closed", zap.String("guild_id", guildID))
 				return
 			}
-			// Log DAVE decryption errors but continue listening
-			// These can happen when users join before their key is exchanged
+			if strings.Contains(err.Error(), "use of closed network connection") {
+				logger.Info("UDP connection closed (leave)", zap.String("guild_id", guildID))
+				return
+			}
 			if strings.Contains(err.Error(), "missing key ratchet") ||
 				strings.Contains(err.Error(), "failed to DAVE decrypt") {
 				logger.Debug("DAVE decryption error (key exchange may be in progress)",
