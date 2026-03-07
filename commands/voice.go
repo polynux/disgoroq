@@ -239,16 +239,29 @@ func (vc *VoiceCommands) handleLeave(e *events.ApplicationCommandInteractionCrea
 		return
 	}
 
-	err := vc.orchestrator.LeaveVoice(guildIDStr)
-	if err != nil {
-		logger.Error("Failed to leave voice channel",
-			zap.String("guild_id", guildIDStr),
-			zap.Error(err))
-		vc.respondError(e, "Failed to leave voice channel: "+err.Error())
+	// Defer the interaction to avoid 3s timeout (LeaveVoice can block on connection close)
+	if err := e.DeferCreateMessage(false); err != nil {
+		logger.Error("Failed to defer interaction", zap.Error(err))
 		return
 	}
 
-	vc.respond(e, "👋 Left the voice channel. See you next time!")
+	// Process leave asynchronously
+	go func() {
+		err := vc.orchestrator.LeaveVoice(guildIDStr)
+		if err != nil {
+			logger.Error("Failed to leave voice channel",
+				zap.String("guild_id", guildIDStr),
+				zap.Error(err))
+			_, _ = vc.client.Rest.CreateFollowupMessage(e.ApplicationID(), e.Token(), discord.MessageCreate{
+				Content: "❌ Failed to leave voice channel: " + err.Error(),
+			})
+			return
+		}
+
+		_, _ = vc.client.Rest.CreateFollowupMessage(e.ApplicationID(), e.Token(), discord.MessageCreate{
+			Content: "👋 Left the voice channel. See you next time!",
+		})
+	}()
 }
 
 // handleStatus handles the /voice status command.
