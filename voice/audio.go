@@ -237,6 +237,19 @@ func (m *AudioBufferManager) GetAudio() []byte {
 	return audio
 }
 
+// GetTrimmedAudio returns the buffered audio with silence trimmed from start and end,
+// then clears the buffer. This prevents Whisper from hallucinating on pure silence.
+func (m *AudioBufferManager) GetTrimmedAudio() []byte {
+	trimmed := m.TrimSilence()
+	m.buffer.Reset()
+	m.totalMs = 0
+	m.speechStartMs = 0
+	m.hasSpeech = false
+	m.speechDurationMs = 0
+	m.consecutiveSilent = 0
+	return trimmed
+}
+
 // PeekAudio returns the buffered audio without clearing.
 func (m *AudioBufferManager) PeekAudio() []byte {
 	return m.buffer.Bytes()
@@ -280,6 +293,59 @@ func (m *AudioBufferManager) Clear() {
 	m.hasSpeech = false
 	m.speechDurationMs = 0
 	m.consecutiveSilent = 0
+}
+
+// TrimSilence removes silent frames from the beginning and end of the audio buffer.
+// This prevents Whisper from hallucinating on pure silence (common issue with "Sous-titres..." artifacts).
+// Returns the trimmed audio data.
+func (m *AudioBufferManager) TrimSilence() []byte {
+	audio := m.buffer.Bytes()
+	if len(audio) < 2 {
+		return audio
+	}
+
+	// Frame size in bytes: 2 bytes per sample * channels
+	frameBytes := 2 * m.channels
+
+	// Find first non-silent frame from start
+	startFrame := 0
+	for i := 0; i < len(audio)-frameBytes; i += frameBytes {
+		frame := audio[i : i+frameBytes]
+		if !m.isSilent(frame) {
+			startFrame = i / frameBytes
+			break
+		}
+	}
+
+	// Find last non-silent frame from end
+	endFrame := len(audio) / frameBytes
+	for i := len(audio) - frameBytes; i >= 0; i -= frameBytes {
+		if i+frameBytes > len(audio) {
+			continue
+		}
+		frame := audio[i : i+frameBytes]
+		if !m.isSilent(frame) {
+			endFrame = (i / frameBytes) + 1
+			break
+		}
+	}
+
+	// If entirely silent or start >= end, return empty
+	if startFrame >= endFrame {
+		return nil
+	}
+
+	// Extract trimmed audio
+	trimmedStart := startFrame * frameBytes
+	trimmedEnd := endFrame * frameBytes
+
+	logger.Debug("Trimmed silence from audio",
+		zap.Int("original_bytes", len(audio)),
+		zap.Int("trimmed_bytes", trimmedEnd-trimmedStart),
+		zap.Int("frames_removed_start", startFrame),
+		zap.Int("frames_removed_end", (len(audio)/frameBytes)-endFrame))
+
+	return audio[trimmedStart:trimmedEnd]
 }
 
 // PrependAudio adds audio to the beginning of the buffer.

@@ -647,10 +647,10 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 
 // processBufferedAudio processes accumulated audio through STT and AI.
 func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceConversation) {
-	// Get audio from buffer
-	audio := conv.AudioBuffer.GetAudio()
+	// Get audio from buffer with silence trimmed (prevents Whisper hallucinations)
+	audio := conv.AudioBuffer.GetTrimmedAudio()
 	if len(audio) == 0 {
-		logger.Debug("No audio in buffer to process", zap.String("guild_id", guildID))
+		logger.Debug("No audio in buffer to process (after trimming silence)", zap.String("guild_id", guildID))
 		return
 	}
 
