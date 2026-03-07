@@ -145,6 +145,19 @@ voice:
   # Enable voice chat functionality
   enabled: false
 
+  # Idle timeout in milliseconds between AI speech and next voice processing
+  # During this time, audio is buffered for context. Default: 3000ms (3 seconds)
+  idle_timeout_ms: 3000
+
+  # Maximum messages to keep in voice conversation history
+  # This provides context for multi-turn conversations. Default: 10
+  voice_context_max_length: 10
+
+  # Separate system prompt for voice mode (replaces main bot prompt for voice)
+  # Use {{.BotNick}} to insert the bot's nickname
+  # Leave empty to use the default from config.voice_system_prompt
+  voice_system_prompt: "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues."
+
   tts:
     # TTS service endpoint (FastAPI server)
     endpoint: "http://localhost:8880"
@@ -203,5 +216,21 @@ voice:
     # Number of audio channels (2 = stereo)
     channels: 2
 
-    # Audio buffer duration in milliseconds before transcription
+    # Audio buffer duration in milliseconds before transcription (deprecated, use VAD settings)
     buffer_ms: 500
+
+    # Voice Activity Detection (VAD) settings
+    # Silence duration to trigger transcription (in milliseconds)
+    vad_silence_ms: 700
+
+    # Minimum speech duration to process (in milliseconds)
+    vad_speech_min_ms: 300
+
+    # Maximum recording duration (in milliseconds)
+    vad_max_duration_ms: 10000
+
+    # Amplitude threshold for voice detection (0.0-1.0)
+    vad_amplitude_threshold: 0.02
+
+    # Pre-buffer size for streaming playback (in milliseconds)
+    stream_buffer_size: 200
