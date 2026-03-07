@@ -178,8 +178,8 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 
 	channelID := voiceState.ChannelID.String()
 
-	// Find a text channel for fallback messages
-	textChannelID := vc.findTextChannel(*guildID)
+	// Use the channel where the command was invoked for text messages
+	textChannelID := e.Channel().ID().String()
 
 	// Get channel name for response
 	channelName := "the voice channel"
