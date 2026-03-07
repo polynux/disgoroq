@@ -296,6 +296,15 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 	o.transitionState(guildID, StateSpeaking)
 	defer o.transitionState(guildID, StateListening)
 
+	// Send text to chat first if AlwaysSendText is enabled
+	if o.config.TTS.AlwaysSendText {
+		if err := o.manager.SendTextFallback(context.Background(), guildID, text); err != nil {
+			logger.Warn("Failed to send text fallback",
+				zap.String("guild_id", guildID),
+				zap.Error(err))
+		}
+	}
+
 	// Ensure TTS model is loaded
 	logger.Info("Checking TTS model availability", zap.String("guild_id", guildID))
 	if err := o.ensureTTSLoaded(ctx); err != nil {
@@ -303,8 +312,10 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 			zap.Error(err),
 			zap.String("guild_id", guildID))
 
-		// Fallback to text
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		// Fallback to text (already sent if AlwaysSendText, but send anyway if not)
+		if !o.config.TTS.AlwaysSendText {
+			_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		}
 		return fmt.Errorf("failed to load TTS model: %w", err)
 	}
 	logger.Info("TTS model ready", zap.String("guild_id", guildID))
@@ -365,12 +376,6 @@ func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string)
 	}
 
 	o.lastTTSAudio = time.Now()
-
-	// Send text to chat if AlwaysSendText is enabled
-	if o.config.TTS.AlwaysSendText {
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
-	}
-
 	return nil
 }
 
@@ -417,12 +422,6 @@ func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) er
 	}
 
 	o.lastTTSAudio = time.Now()
-
-	// Send text to chat if AlwaysSendText is enabled
-	if o.config.TTS.AlwaysSendText {
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
-	}
-
 	return nil
 }
 
