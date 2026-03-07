@@ -104,28 +104,22 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 	}
 }
 
-// forwardToVoiceConnection forwards voice state updates to the active voice connection.
-// This is required for DAVE encryption to track users joining/leaving the voice channel.
+// forwardToVoiceConnection forwards voice state updates to the voice manager.
+// The voice manager handles routing to active connections for DAVE encryption.
+// This is required for DAVE to track users joining/leaving the voice channel.
 func (h *VoiceHandler) forwardToVoiceConnection(e *events.GuildVoiceStateUpdate) {
-	// Check if we have an active voice connection for this guild
-	guildSnowflake := e.VoiceState.GuildID
-	conn := h.client.VoiceManager.GetConn(guildSnowflake)
-	if conn == nil {
-		return
-	}
-
-	// Convert event to the format expected by voice.Conn
-	// The voice connection needs this to track users for DAVE encryption
-	// Note: GuildVoiceStateUpdate embeds GenericGuildVoiceState which has VoiceState and Member
+	// Forward to the voice manager which handles routing to active connections
+	// The voice manager will check if there's an active connection for this guild
+	// and forward the event to DAVE for encryption tracking
 	evt := gateway.EventVoiceStateUpdate{
 		VoiceState: e.GenericGuildVoiceState.VoiceState,
 		Member:     e.GenericGuildVoiceState.Member,
 	}
 
-	// Forward the update to the voice connection
-	conn.HandleVoiceStateUpdate(evt)
+	// Use the bot's voice manager which handles connection lifecycle properly
+	h.client.VoiceManager.HandleVoiceStateUpdate(evt)
 
-	logger.Debug("Forwarded voice state update to connection",
+	logger.Debug("Forwarded voice state update to voice manager",
 		zap.String("guild_id", e.VoiceState.GuildID.String()),
 		zap.String("user_id", e.VoiceState.UserID.String()),
 		zap.String("channel_id", channelIDStr(e.VoiceState.ChannelID)))
@@ -198,7 +192,7 @@ func (h *VoiceHandler) findDefaultTextChannel(guildID snowflake.ID) string {
 
 // HandleVoiceServerUpdate handles voice server update events.
 // This is called when the voice server changes (e.g., during region migration).
-// It forwards the update to the active voice connection for DAVE encryption handling.
+// The voice manager handles routing to active connections automatically.
 func (h *VoiceHandler) HandleVoiceServerUpdate(e *events.VoiceServerUpdate) {
 	endpoint := ""
 	if e.Endpoint != nil {
@@ -209,16 +203,11 @@ func (h *VoiceHandler) HandleVoiceServerUpdate(e *events.VoiceServerUpdate) {
 		zap.String("guild_id", e.GuildID.String()),
 		zap.String("endpoint", endpoint))
 
-	// Forward to active voice connection for DAVE handling
-	conn := h.client.VoiceManager.GetConn(e.GuildID)
-	if conn != nil {
-		evt := gateway.EventVoiceServerUpdate{
-			GuildID:  e.GuildID,
-			Token:    e.Token,
-			Endpoint: e.Endpoint,
-		}
-		conn.HandleVoiceServerUpdate(evt)
-		logger.Debug("Forwarded voice server update to connection",
-			zap.String("guild_id", e.GuildID.String()))
+	// Forward to the voice manager which handles routing to active connections
+	evt := gateway.EventVoiceServerUpdate{
+		GuildID:  e.GuildID,
+		Token:    e.Token,
+		Endpoint: e.Endpoint,
 	}
+	h.client.VoiceManager.HandleVoiceServerUpdate(evt)
 }
