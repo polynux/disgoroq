@@ -97,6 +97,33 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 		return err
 	}
 
+	// Wait for gateway to be ready (DAVE key exchange must complete before receiving audio)
+	readyTimeout := 30 * time.Second
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), readyTimeout)
+	defer readyCancel()
+
+	for {
+		status := conn.Gateway().Status()
+		if status == voice.StatusReady {
+			break
+		}
+		select {
+		case <-readyCtx.Done():
+			logger.Error("Timeout waiting for voice gateway ready",
+				zap.String("guild_id", guildID),
+				zap.String("channel_id", channelID),
+				zap.Int("status", int(status)))
+			conn.Close(context.Background())
+			return fmt.Errorf("timeout waiting for voice gateway ready")
+		case <-time.After(100 * time.Millisecond):
+			// Continue polling
+		}
+	}
+
+	logger.Info("Voice gateway ready",
+		zap.String("guild_id", guildID),
+		zap.String("channel_id", channelID))
+
 	// Create new voice session
 	session := &VoiceSession{
 		GuildID:       guildID,
