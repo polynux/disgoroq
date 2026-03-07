@@ -126,6 +126,14 @@ func (m *Manager) JoinVoice(ctx context.Context, guildID, channelID, textChannel
 		zap.String("guild_id", guildID),
 		zap.String("channel_id", channelID))
 
+	// Wait additional time for DAVE key exchange to complete
+	// Even after StatusReady, DAVE needs time to set up MLS keys
+	daveSetupDelay := 500 * time.Millisecond
+	logger.Debug("Waiting for DAVE key exchange",
+		zap.String("guild_id", guildID),
+		zap.Duration("delay", daveSetupDelay))
+	time.Sleep(daveSetupDelay)
+
 	// Create new voice session
 	session := &VoiceSession{
 		GuildID:       guildID,

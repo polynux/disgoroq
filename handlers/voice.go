@@ -191,23 +191,11 @@ func (h *VoiceHandler) findDefaultTextChannel(guildID snowflake.ID) string {
 }
 
 // HandleVoiceServerUpdate handles voice server update events.
-// This is called when the voice server changes (e.g., during region migration).
-// The voice manager handles routing to active connections automatically.
+// Note: We do NOT forward this to VoiceManager because:
+// 1. Disgo's VoiceManager already receives these events from the gateway
+// 2. Forwarding causes "voice gateway already connected" errors
+// 3. Reconnection logic is handled internally by disgo
 func (h *VoiceHandler) HandleVoiceServerUpdate(e *events.VoiceServerUpdate) {
-	endpoint := ""
-	if e.Endpoint != nil {
-		endpoint = *e.Endpoint
-	}
-
-	logger.Debug("Voice server update",
-		zap.String("guild_id", e.GuildID.String()),
-		zap.String("endpoint", endpoint))
-
-	// Forward to the voice manager which handles routing to active connections
-	evt := gateway.EventVoiceServerUpdate{
-		GuildID:  e.GuildID,
-		Token:    e.Token,
-		Endpoint: e.Endpoint,
-	}
-	h.client.VoiceManager.HandleVoiceServerUpdate(evt)
+	// No-op - disgo handles VoiceServerUpdate internally
+	// Forwarding causes duplicate connection attempts
 }
