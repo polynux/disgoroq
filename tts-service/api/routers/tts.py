@@ -10,6 +10,7 @@ from typing import Literal, Optional
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..config import TTS_DEFAULT_LANGUAGE, VOICE_NAME
@@ -47,6 +48,10 @@ class TTSGenerateRequest(BaseModel):
         default=None,
         description=f"Language code for TTS. Default: {TTS_DEFAULT_LANGUAGE}",
     )
+    stream: bool = Field(
+        default=False,
+        description="If True, stream audio chunks as they are generated for lower latency.",
+    )
     normalization_options: Optional[NormalizationOptions] = Field(
         default_factory=NormalizationOptions,
         description="Options for the text normalization system",
@@ -76,6 +81,8 @@ async def generate_tts(request: TTSGenerateRequest):
     The voice must have:
     - reference.wav: Audio file of the voice to clone
     - reference.txt: Transcript of the reference audio (REQUIRED for ICL)
+
+    If stream=True, audio is streamed as it's generated for lower latency.
     """
     try:
         backend = await get_tts_backend()
@@ -111,6 +118,57 @@ async def generate_tts(request: TTSGenerateRequest):
         # Use configured default language if not specified
         language = request.language or TTS_DEFAULT_LANGUAGE
 
+        # STREAMING MODE
+        if request.stream:
+            # For streaming, we must use PCM format because WAV requires
+            # a header with total file size which is unknown until generation completes
+            stream_format = "pcm"  # Force PCM for streaming
+            logger.info(
+                f"Starting streaming TTS generation for text: {normalized_text[:50]}..."
+            )
+
+            async def generate_audio_chunks():
+                """Async generator that yields audio chunks."""
+                try:
+                    chunk_count = 0
+                    async for (
+                        pcm_chunk,
+                        sample_rate,
+                    ) in backend.generate_speech_streaming(
+                        text=normalized_text,
+                        voice=voice_to_use,
+                        language=language,
+                        speed=request.speed,
+                    ):
+                        # Encode chunk to PCM format (raw bytes, no header needed)
+                        chunk_bytes = encode_audio(
+                            pcm_chunk, stream_format, sample_rate
+                        )
+                        chunk_count += 1
+                        logger.debug(
+                            f"Streaming chunk {chunk_count}: {len(chunk_bytes)} bytes"
+                        )
+                        yield chunk_bytes
+                    logger.info(f"Streaming completed: {chunk_count} chunks")
+                except Exception as e:
+                    logger.error(f"Streaming failed: {e}")
+                    raise
+
+            content_type = get_content_type(stream_format)
+            # Use audio/raw for PCM streaming
+            return StreamingResponse(
+                generate_audio_chunks(),
+                media_type="audio/raw",  # Raw PCM
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "X-Audio-Format": "pcm",
+                    "X-Sample-Rate": "24000",
+                    "X-Channels": "1",
+                    "X-Bits-Per-Sample": "16",
+                },
+            )
+
+        # NON-STREAMING MODE
         # Generate speech using custom voice
         audio, sample_rate = await backend.generate_speech_with_custom_voice(
             text=normalized_text,

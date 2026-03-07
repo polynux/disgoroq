@@ -49,6 +49,7 @@ type TTSGenerateRequest struct {
 	ResponseFormat string                `json:"response_format,omitempty"`
 	Speed          float64               `json:"speed,omitempty"`
 	Language       string                `json:"language,omitempty"`
+	Stream         bool                  `json:"stream,omitempty"`
 	Normalization  *NormalizationOptions `json:"normalization_options,omitempty"`
 }
 
@@ -183,6 +184,104 @@ func (c *TTSHTTPClient) Stream(ctx context.Context, req *TTSRequest) (io.ReadClo
 		zap.String("text", truncateText(req.Text, 50)))
 
 	return resp.Body, nil
+}
+
+// StreamStreaming generates audio with real-time streaming chunks.
+// It returns a channel that yields audio chunks as they arrive from the server.
+// This is significantly faster than waiting for complete generation because
+// the first audio starts playing within ~400-800ms instead of waiting for
+// the entire response to be generated.
+func (c *TTSHTTPClient) StreamStreaming(ctx context.Context, req *TTSRequest) (<-chan StreamChunk, error) {
+	ch := make(chan StreamChunk, 10)
+
+	// Build TTS request with streaming enabled
+	ttsReq := TTSGenerateRequest{
+		Input:          req.Text,
+		ResponseFormat: "pcm", // PCM is best for streaming (no encoding overhead)
+		Speed:          1.0,
+		Language:       "French",
+		Stream:         true, // Enable streaming on server
+		Normalization: &NormalizationOptions{
+			Normalize:                 true,
+			UnitNormalization:         true,
+			URLNormalization:          true,
+			EmailNormalization:        true,
+			OptionalPluralizationNorm: true,
+			PhoneNormalization:        true,
+			ReplaceRemainingSymbols:   true,
+		},
+	}
+
+	jsonBody, err := json.Marshal(ttsReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	c.mu.RLock()
+	endpoint := c.endpoint
+	c.mu.RUnlock()
+
+	// Create HTTP request
+	httpReq, err := http.NewRequestWithContext(ctx, "POST",
+		endpoint+"/v1/tts/generate", bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	// Send request with longer timeout for streaming
+	httpClient := &http.Client{
+		Timeout: 120 * time.Second, // Long timeout for streaming
+	}
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		logger.Error("TTS streaming request failed", zap.Error(err))
+		return nil, fmt.Errorf("TTS streaming request failed: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("TTS service returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	c.mu.Lock()
+	c.modelLoaded = true
+	c.mu.Unlock()
+
+	logger.Info("TTS streaming started",
+		zap.String("text", truncateText(req.Text, 50)))
+
+	// Start goroutine to read chunks
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		// Read PCM chunks from response body
+		// Each chunk is approximately 200-400ms of audio
+		buf := make([]byte, 8192) // ~170ms of 24kHz mono audio
+		for {
+			n, err := resp.Body.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				ch <- StreamChunk{
+					Data:       chunk,
+					SampleRate: c.sampleRate,
+					Format:     "pcm",
+				}
+			}
+			if err != nil {
+				if err != io.EOF {
+					logger.Error("TTS streaming read error", zap.Error(err))
+					ch <- StreamChunk{Err: err}
+				}
+				return
+			}
+		}
+	}()
+
+	return ch, nil
 }
 
 // LoadModel loads the TTS model into VRAM.
@@ -372,6 +471,29 @@ func (m *MockTTSClient) Stream(ctx context.Context, req *TTSRequest) (io.ReadClo
 	}
 	m.ModelLoaded = true
 	return io.NopCloser(bytes.NewReader(m.Audio)), nil
+}
+
+// StreamStreaming implements TTSClient.
+func (m *MockTTSClient) StreamStreaming(ctx context.Context, req *TTSRequest) (<-chan StreamChunk, error) {
+	ch := make(chan StreamChunk, 1)
+	if m.Error != nil {
+		go func() {
+			defer close(ch)
+			ch <- StreamChunk{Err: m.Error}
+		}()
+		return ch, nil
+	}
+	m.ModelLoaded = true
+	go func() {
+		defer close(ch)
+		// Send all audio in one chunk
+		ch <- StreamChunk{
+			Data:       m.Audio,
+			SampleRate: 24000,
+			Format:     "pcm",
+		}
+	}()
+	return ch, nil
 }
 
 // Generate implements TTSClient.

@@ -460,6 +460,175 @@ func (m *Manager) processAudioForDiscord(audio []byte, sampleRate int) ([]byte, 
 	return converted, nil
 }
 
+// PlayAudioStream streams audio chunks from a channel and plays them in real-time.
+// This is more efficient than PlayAudio for longer responses as it starts
+// playback immediately instead of waiting for complete generation.
+// The audio stream should be raw PCM data at the specified sample rate.
+func (m *Manager) PlayAudioStream(ctx context.Context, guildID string, audioStream <-chan StreamChunk) error {
+	logger.Info("PlayAudioStream: starting",
+		zap.String("guild_id", guildID))
+
+	// Check context before starting
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+
+	m.mu.RLock()
+	_, exists := m.sessions[guildID]
+	m.mu.RUnlock()
+
+	if !exists {
+		return ErrNotConnected
+	}
+
+	conn, err := m.GetVoiceConnection(guildID)
+	if err != nil {
+		return err
+	}
+
+	// Update state
+	m.SetState(guildID, StateSpeaking)
+
+	// Signal speaking
+	if err := conn.SetSpeaking(ctx, voice.SpeakingFlagMicrophone); err != nil {
+		return err
+	}
+	defer conn.SetSpeaking(context.Background(), 0)
+
+	// Get or create Opus encoder
+	m.encoderMu.Lock()
+	if m.opusEncoder == nil {
+		m.opusEncoder, err = NewOpusEncoder()
+		if err != nil {
+			m.encoderMu.Unlock()
+			return fmt.Errorf("failed to create Opus encoder: %w", err)
+		}
+	}
+	encoder := m.opusEncoder
+	m.encoderMu.Unlock()
+
+	// Pre-buffer for smoother playback
+	// Buffer first 500ms (25 frames) before starting to play
+	// This prevents audio chopping at the start
+	preBufferFrames := 50 // 500ms / 20ms per frame = 25 frames
+	var preBuffer [][]byte
+
+	// Stream processing
+	writer := conn.UDP()
+	frameDuration := 20 * time.Millisecond
+	totalFrames := 0
+	preBufferCount := 0
+
+	for chunk := range audioStream {
+		if chunk.Err != nil {
+			logger.Error("Stream error",
+				zap.String("guild_id", guildID),
+				zap.Error(chunk.Err))
+			break
+		}
+
+		// Convert PCM chunk to Discord format (48kHz stereo)
+		converted, err := ConvertToDiscordFormat(chunk.Data, chunk.SampleRate, 1) // assuming mono
+		if err != nil {
+			logger.Error("Failed to convert audio",
+				zap.String("guild_id", guildID),
+				zap.Error(err))
+			continue
+		}
+
+		// Encode to Opus
+		opusFrames, err := encoder.Encode(converted)
+		if err != nil {
+			logger.Error("Failed to encode Opus",
+				zap.String("guild_id", guildID),
+				zap.Error(err))
+			continue
+		}
+
+		// Pre-buffer first few frames for smoother start
+		if preBufferCount < preBufferFrames {
+			preBuffer = append(preBuffer, opusFrames...)
+			preBufferCount += len(opusFrames)
+			continue
+		}
+
+		// Send pre-buffered frames first (only once)
+		if len(preBuffer) > 0 {
+			for i, frame := range preBuffer {
+				select {
+				case <-ctx.Done():
+					m.SetState(guildID, StateListening)
+					return ctx.Err()
+				default:
+					if _, err := writer.Write(frame); err != nil {
+						logger.Error("Failed to write pre-buffer frame",
+							zap.String("guild_id", guildID),
+							zap.Error(err))
+					}
+					if i < len(preBuffer)-1 {
+						time.Sleep(frameDuration)
+					}
+				}
+			}
+			preBuffer = nil // Clear after sending
+			logger.Debug("Pre-buffer sent",
+				zap.String("guild_id", guildID),
+				zap.Int("frames", preBufferCount))
+		}
+
+		// Send frames with proper timing
+		for i, frame := range opusFrames {
+			select {
+			case <-ctx.Done():
+				m.SetState(guildID, StateListening)
+				return ctx.Err()
+			default:
+				if _, err := writer.Write(frame); err != nil {
+					logger.Error("Failed to write frame",
+						zap.String("guild_id", guildID),
+						zap.Error(err))
+					continue
+				}
+				// Wait 20ms between frames (except last)
+				if i < len(opusFrames)-1 {
+					time.Sleep(frameDuration)
+				}
+			}
+		}
+		totalFrames += len(opusFrames)
+	}
+
+	// Send any remaining pre-buffer if stream ended early
+	if len(preBuffer) > 0 && preBufferCount > 0 {
+		for i, frame := range preBuffer {
+			select {
+			case <-ctx.Done():
+				m.SetState(guildID, StateListening)
+				return ctx.Err()
+			default:
+				if _, err := writer.Write(frame); err != nil {
+					logger.Error("Failed to write remaining frame",
+						zap.String("guild_id", guildID),
+						zap.Error(err))
+				}
+				if i < len(preBuffer)-1 {
+					time.Sleep(frameDuration)
+				}
+			}
+		}
+	}
+
+	logger.Info("PlayAudioStream: finished",
+		zap.String("guild_id", guildID),
+		zap.Int("total_frames", totalFrames))
+
+	// Return to listening state
+	m.SetState(guildID, StateListening)
+	return nil
+}
+
 // SendTextFallback sends a text message to the voice session's text channel.
 func (m *Manager) SendTextFallback(ctx context.Context, guildID, message string) error {
 	m.mu.RLock()

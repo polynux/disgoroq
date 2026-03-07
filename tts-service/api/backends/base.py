@@ -6,7 +6,7 @@ Base class for TTS backends.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, AsyncGenerator
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -21,19 +21,19 @@ class TTSBackend(ABC):
         self.device = None
         self.dtype = None
         self._custom_voices: Dict[str, Any] = {}
-    
+
     @abstractmethod
     async def initialize(self) -> None:
         """
         Initialize the backend and load the model.
-        
+
         This method should:
         - Load the model
         - Set up device and dtype
         - Perform any necessary warmup
         """
         pass
-    
+
     @abstractmethod
     async def generate_speech(
         self,
@@ -45,44 +45,44 @@ class TTSBackend(ABC):
     ) -> Tuple[np.ndarray, int]:
         """
         Generate speech from text.
-        
+
         Args:
             text: The text to synthesize
             voice: Voice name/identifier to use
             language: Language code (e.g., "English", "Chinese", "Auto")
             instruct: Optional instruction for voice style/emotion
             speed: Speech speed multiplier (0.25 to 4.0)
-        
+
         Returns:
             Tuple of (audio_array, sample_rate)
         """
         pass
-    
+
     @abstractmethod
     def get_backend_name(self) -> str:
         """Return the name of this backend."""
         pass
-    
+
     @abstractmethod
     def get_model_id(self) -> str:
         """Return the model identifier."""
         pass
-    
+
     @abstractmethod
     def get_supported_voices(self) -> List[str]:
         """Return list of supported voice names."""
         pass
-    
+
     @abstractmethod
     def get_supported_languages(self) -> List[str]:
         """Return list of supported language names."""
         pass
-    
+
     @abstractmethod
     def is_ready(self) -> bool:
         """Return whether the backend is initialized and ready."""
         pass
-    
+
     @abstractmethod
     def get_device_info(self) -> Dict[str, Any]:
         """
@@ -177,4 +177,39 @@ class TTSBackend(ABC):
         Raises:
             NotImplementedError: If not supported by this backend
         """
-        raise NotImplementedError("Custom voice generation is not supported by this backend")
+        raise NotImplementedError(
+            "Custom voice generation is not supported by this backend"
+        )
+
+    def generate_speech_streaming(
+        self,
+        text: str,
+        voice: str,
+        language: str = "Auto",
+        speed: float = 1.0,
+        emit_every_frames: int = 8,
+        decode_window_frames: int = 80,
+    ) -> AsyncGenerator[Tuple[np.ndarray, int], None]:
+        """
+        Stream speech generation, yielding PCM chunks as they are generated.
+
+        This is an optional method. Backends that don't support streaming
+        should raise NotImplementedError.
+
+        Args:
+            text: The text to synthesize
+            voice: Voice name/identifier to use
+            language: Language code (e.g., "English", "Chinese", "Auto")
+            speed: Speech speed multiplier
+            emit_every_frames: Emit PCM chunk every N codec frames (default: 8)
+            decode_window_frames: Window size for streaming decode (default: 80)
+
+        Yields:
+            Tuple[np.ndarray, int]: (pcm_chunk as float32, sample_rate)
+
+        Raises:
+            NotImplementedError: If streaming is not supported by this backend
+        """
+        raise NotImplementedError("Streaming is not supported by this backend")
+        # This line is never reached, but needed for type checker
+        yield  # type: ignore[unreachable]

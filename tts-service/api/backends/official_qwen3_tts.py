@@ -9,14 +9,20 @@ from the qwen_tts package.
 
 import logging
 import re
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any, AsyncGenerator
 import numpy as np
 
 from .base import TTSBackend
 from ..config import TTS_COMPILE_MODEL, TTS_DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for running sync generators in async context
+_stream_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts-stream-")
 
 # Generation parameters - use model's internal defaults
 # The model's _merge_generate_kwargs() handles defaults automatically
@@ -601,3 +607,99 @@ class OfficialQwen3TTSBackend(TTSBackend):
         except Exception as e:
             logger.error(f"Custom voice generation failed: {e}")
             raise RuntimeError(f"Custom voice generation failed: {e}")
+
+    async def generate_speech_streaming(
+        self,
+        text: str,
+        voice: str,
+        language: str = TTS_DEFAULT_LANGUAGE,
+        speed: float = 1.0,
+        emit_every_frames: int = 8,
+        decode_window_frames: int = 80,
+    ) -> AsyncGenerator[Tuple[np.ndarray, int], None]:
+        """
+        Stream speech generation using a custom cloned voice.
+
+        Yields PCM chunks as they are generated for real-time playback.
+
+        Args:
+            text: The text to synthesize
+            voice: Custom voice name
+            language: Language code
+            speed: Speech speed multiplier (NOT applied during streaming)
+            emit_every_frames: Emit PCM chunk every N codec frames (default: 8)
+            decode_window_frames: Window size for streaming decode (default: 80)
+
+        Yields:
+            Tuple[np.ndarray, int]: (pcm_chunk as float32, sample_rate)
+        """
+        if not self._ready:
+            await self.initialize()
+
+        if not self.supports_voice_cloning():
+            raise RuntimeError(
+                "Streaming requires the Base model (Qwen3-TTS-12Hz-1.7B-Base). "
+                "CustomVoice models do not support streaming."
+            )
+
+        if not hasattr(self.model, "stream_generate_voice_clone"):
+            raise RuntimeError(
+                "This model version does not support streaming. "
+                "Please use generate_speech_with_custom_voice() instead."
+            )
+
+        prompt_items = self._custom_voices.get(voice)
+        if prompt_items is None:
+            raise ValueError(
+                f"Custom voice '{voice}' not found. "
+                f"Available voices: {list(self._custom_voices.keys())}"
+            )
+
+        # Note: streaming_optimizations with torch.compile can crash on some setups
+        # We rely on the model's default streaming implementation instead
+        # The overhead of not using CUDA graphs is acceptable for voice chat use cases
+
+        logger.debug(
+            f"Starting streaming generation: text_len={len(text)}, "
+            f"voice={voice}, language={language}"
+        )
+
+        # Create a sync generator function to run in thread pool
+        def _sync_generator():
+            """Sync generator that runs in thread pool."""
+            try:
+                for pcm_chunk, sr in self.model.stream_generate_voice_clone(
+                    text=text,
+                    language=language,
+                    voice_clone_prompt=prompt_items,
+                    emit_every_frames=emit_every_frames,
+                    decode_window_frames=decode_window_frames,
+                ):
+                    yield pcm_chunk, sr
+            except Exception as e:
+                logger.error(f"Streaming generation failed in thread: {e}")
+                raise
+
+        # Run the sync generator in a thread pool and yield results asynchronously
+        loop = asyncio.get_event_loop()
+        gen = _sync_generator()
+
+        try:
+            while True:
+                # Run next() in thread pool to avoid blocking
+                try:
+                    result = await loop.run_in_executor(
+                        _stream_executor, lambda: next(gen, None)
+                    )
+                    if result is None:
+                        break
+                    pcm_chunk, sr = result
+                    yield pcm_chunk, sr
+                except StopIteration:
+                    break
+
+            logger.debug("Streaming generation completed successfully")
+
+        except Exception as e:
+            logger.error(f"Streaming generation failed: {e}")
+            raise RuntimeError(f"Streaming generation failed: {e}")

@@ -42,7 +42,7 @@ func (s AgentState) String() string {
 var (
 	ErrNotConnected      = errors.New("not connected to voice channel")
 	ErrAlreadyConnected  = errors.New("already connected to a voice channel")
-	ErrStateTransition    = errors.New("invalid state transition")
+	ErrStateTransition   = errors.New("invalid state transition")
 	ErrSTTUnavailable    = errors.New("speech-to-text service unavailable")
 	ErrTTSUnavailable    = errors.New("text-to-speech service unavailable")
 	ErrInsufficientVRAM  = errors.New("insufficient VRAM for TTS model")
@@ -73,10 +73,29 @@ type STTClient interface {
 	Close() error
 }
 
+// StreamChunk represents a chunk of streaming audio from the TTS service.
+type StreamChunk struct {
+	// Data is the raw PCM audio bytes.
+	Data []byte
+	// SampleRate is the sample rate of the audio.
+	SampleRate int
+	// Format is the audio format (pcm, wav, etc.).
+	Format string
+	// Err contains any error that occurred during streaming.
+	Err error
+}
+
 // TTSClient defines the interface for text-to-speech clients.
 type TTSClient interface {
 	// Stream generates audio from text and returns a stream of audio data.
 	Stream(ctx context.Context, req *TTSRequest) (io.ReadCloser, error)
+
+	// StreamStreaming generates audio with real-time streaming chunks.
+	// Returns a channel that yields audio chunks as they arrive from the server.
+	// This is significantly faster than waiting for complete generation because
+	// the first audio starts playing within ~400-800ms instead of waiting for
+	// the entire response to be generated.
+	StreamStreaming(ctx context.Context, req *TTSRequest) (<-chan StreamChunk, error)
 
 	// Generate generates complete audio for text and returns it as a byte slice.
 	// This is the recommended method for static (non-streaming) TTS.
@@ -242,15 +261,15 @@ type StateTransition struct {
 
 // VoiceConfig contains the voice configuration from the main config.
 type VoiceConfig struct {
-	Enabled    bool
-	TTSEndpoint string
-	TTSModel    string
-	TTSTimeout  int
-	STTSocket   string
-	STTModel    string
-	STTLanguage string
-	MinVRAM     int
-	AutoUnload  bool
+	Enabled         bool
+	TTSEndpoint     string
+	TTSModel        string
+	TTSTimeout      int
+	STTSocket       string
+	STTModel        string
+	STTLanguage     string
+	MinVRAM         int
+	AutoUnload      bool
 	AudioFrameSize  int
 	AudioSampleRate int
 	AudioChannels   int
