@@ -458,14 +458,22 @@ func promptHandler(repo *database.Repository) func(e *events.ApplicationCommandI
 		if data.SubCommandName != nil {
 			subcommandName = *data.SubCommandName
 		}
+		subGroupName := ""
+		if data.SubCommandGroupName != nil {
+			subGroupName = *data.SubCommandGroupName
+		}
+
+		// Handle subcommand groups (e.g., "set" -> "custom" or "default")
+		if subGroupName == "set" {
+			handlePromptSet(e, repo)
+			return
+		}
 
 		switch subcommandName {
 		case "see":
 			handlePromptSee(e, repo)
 		case "append":
 			handlePromptAppend(e, repo)
-		case "set":
-			handlePromptSet(e, repo)
 		default:
 			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand!"})
 		}
@@ -553,25 +561,19 @@ func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *databa
 	ctx := stdcontext.Background()
 	data := e.SlashCommandInteractionData()
 
-	subGroupName := ""
-	if data.SubCommandGroupName != nil {
-		subGroupName = *data.SubCommandGroupName
+	subName := ""
+	if data.SubCommandName != nil {
+		subName = *data.SubCommandName
 	}
 
-	if subGroupName == "set" {
-		subName := ""
-		if data.SubCommandName != nil {
-			subName = *data.SubCommandName
+	if subName == "default" {
+		content := "Prompt set to default"
+		err := repo.DeleteGuildSetting(ctx, getGuildID(e), "prompt")
+		if err != nil {
+			content = "Error setting prompt"
 		}
-		if subName == "default" {
-			content := "Prompt set to default"
-			err := repo.DeleteGuildSetting(ctx, getGuildID(e), "prompt")
-			if err != nil {
-				content = "Error setting prompt"
-			}
-			_ = e.CreateMessage(discord.MessageCreate{Content: content})
-			return
-		}
+		_ = e.CreateMessage(discord.MessageCreate{Content: content})
+		return
 	}
 
 	// Must be "custom"
