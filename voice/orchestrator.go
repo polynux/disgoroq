@@ -905,8 +905,28 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 				continue
 			}
 
-			// Check if we're in idle timeout period
+			// If we're in idle period, check if we can exit idle
 			if conv.StateManager.IsInIdle() {
+				if !conv.StateManager.CanProcess() {
+					// Still in idle timeout, skip processing
+					continue
+				}
+				// Idle timeout passed - exit idle and check for buffered audio
+				idleBuffer := conv.StateManager.GetIdleBuffer()
+				if len(idleBuffer) > 0 {
+					// Check if idle buffer has speech
+					conv.AudioBuffer.PrependAudio(idleBuffer)
+					if conv.AudioBuffer.HasSpeech() && conv.AudioBuffer.SpeechDuration() >= speechMinMs {
+						logger.Info("Processing idle-buffered audio after idle timeout",
+							zap.String("guild_id", guildID),
+							zap.Int("buffer_ms", conv.AudioBuffer.Duration()),
+							zap.Int("speech_ms", conv.AudioBuffer.SpeechDuration()))
+						go o.processBufferedAudio(guildID, "", conv)
+					} else {
+						// No speech in idle buffer, clear it
+						conv.AudioBuffer.Clear()
+					}
+				}
 				continue
 			}
 
