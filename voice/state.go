@@ -74,6 +74,16 @@ func (m *VoiceStateManager) CanProcess() bool {
 	return elapsed >= m.idleTimeout
 }
 
+// ExitIdle exits the idle state without returning the buffer.
+// Use this when there's no idle buffer to process but we need to exit idle.
+func (m *VoiceStateManager) ExitIdle() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.inIdle = false
+	m.idleBuffer = make([]byte, 0, 4096)
+}
+
 // BufferAudio adds audio data to the idle buffer during the idle period.
 // This audio will be transcribed after the idle timeout expires, preserving
 // context of what was said during the pause.

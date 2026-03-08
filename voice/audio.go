@@ -384,6 +384,17 @@ func (m *AudioBufferManager) PrependAudio(audio []byte) {
 		return
 	}
 
+	// Analyze prepended audio for speech content
+	frameBytes := 2 * m.channels
+	hasSpeechInPrepended := false
+	for i := 0; i < len(audio)-frameBytes; i += frameBytes {
+		frame := audio[i : i+frameBytes]
+		if !m.isSilent(frame) {
+			hasSpeechInPrepended = true
+			break
+		}
+	}
+
 	// Get current buffer content
 	current := m.buffer.Bytes()
 
@@ -393,13 +404,33 @@ func (m *AudioBufferManager) PrependAudio(audio []byte) {
 	m.buffer.Write(current)
 
 	// Update duration tracking
-	framesAdded := len(audio) / (2 * m.channels) // bytes / (2 bytes per sample * channels)
+	framesAdded := len(audio) / frameBytes
 	msAdded := (framesAdded * 1000) / m.sampleRate
 	m.totalMs += msAdded
 
-	// Note: we don't recalculate silence tracking for prepended audio,
-	// as it's assumed to be context audio (idle buffer) that should be
-	// processed as-is
+	// If prepended audio has speech, mark it
+	if hasSpeechInPrepended && !m.hasSpeech {
+		m.hasSpeech = true
+		m.speechStartMs = 0 // Speech starts at the beginning of prepended audio
+	}
+
+	// Update lastAudioTime to now since we just received audio
+	m.lastAudioTime = time.Now()
+
+	// Reset speech duration tracking - we'll recalculate on next analysis
+	m.speechDurationMs = 0
+	m.silenceStartMs = 0
+
+	// Recalculate speech duration for all content
+	for i := 0; i < m.totalMs; i += m.frameMs {
+		frameIdx := (i / m.frameMs) * frameBytes
+		if frameIdx+frameBytes <= m.buffer.Len() {
+			frame := m.buffer.Bytes()[frameIdx : frameIdx+frameBytes]
+			if !m.isSilent(frame) {
+				m.speechDurationMs += m.frameMs
+			}
+		}
+	}
 }
 
 // SetSilenceLevel sets the amplitude threshold for silence detection.
