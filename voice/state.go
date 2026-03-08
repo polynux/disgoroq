@@ -104,11 +104,14 @@ func (m *VoiceStateManager) GetIdleBuffer() []byte {
 	buffer := m.idleBuffer
 	m.idleBuffer = make([]byte, 0, 4096) // Reset buffer with pre-allocated capacity
 
-	logger.Info("Exiting idle state, returning buffered audio",
-		zap.Int("buffer_bytes", len(buffer)))
-
 	// Exit idle state
 	m.inIdle = false
+
+	// Only log if there was actual buffered audio
+	if len(buffer) > 0 {
+		logger.Info("Exiting idle state, returning buffered audio",
+			zap.Int("buffer_bytes", len(buffer)))
+	}
 
 	return buffer
 }

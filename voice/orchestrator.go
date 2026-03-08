@@ -580,7 +580,7 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 	if idleBuffer := conv.StateManager.GetIdleBuffer(); len(idleBuffer) > 0 {
 		// Prepend idle buffer to audio for context
 		conv.AudioBuffer.PrependAudio(idleBuffer)
-		logger.Info("Prepended idle buffer to audio",
+		logger.Debug("Prepended idle buffer to audio",
 			zap.String("guild_id", guildID),
 			zap.Int("idle_buffer_bytes", len(idleBuffer)))
 	}
@@ -656,8 +656,7 @@ func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceC
 
 	logger.Info("Processing audio for STT",
 		zap.String("guild_id", guildID),
-		zap.Int("audio_bytes", len(audio)),
-		zap.Int("buffer_ms", conv.AudioBuffer.Duration()))
+		zap.Int("audio_bytes", len(audio)))
 
 	// Check if STT client is available
 	if o.sttClient == nil {
@@ -666,10 +665,6 @@ func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceC
 		_ = o.manager.SendTextFallback(context.Background(), guildID, "Le service vocal n'est pas disponible.")
 		return
 	}
-
-	logger.Info("Converting audio format",
-		zap.String("guild_id", guildID),
-		zap.Int("input_bytes", len(audio)))
 
 	// Convert from Discord format to STT format
 	// Discord uses 48kHz stereo, STT typically expects 16kHz mono
@@ -680,10 +675,6 @@ func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceC
 			zap.Error(err))
 		return
 	}
-
-	logger.Info("Sending audio to STT",
-		zap.String("guild_id", guildID),
-		zap.Int("stt_bytes", len(sttAudio)))
 
 	// Transcribe with timeout (60s total for STT + AI + TTS)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
