@@ -69,6 +69,9 @@ type VoiceConversation struct {
 
 	// LastSpeakerID tracks the most recent speaker
 	LastSpeakerID string
+
+	// SilenceCheckCancel cancels the silence checking goroutine
+	SilenceCheckCancel context.CancelFunc
 }
 
 // OrchestratorConfig contains configuration for the orchestrator.
@@ -168,6 +171,12 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 		zap.Int("silence_threshold_ms", o.config.Audio.VADSilenceMs),
 		zap.Int("speech_min_ms", o.config.Audio.VADSpeechMinMs))
 
+	// Start silence checker goroutine
+	// Discord doesn't send packets during silence, so we need to detect it via timeout
+	silenceCheckCtx, silenceCheckCancel := context.WithCancel(context.Background())
+	conv.SilenceCheckCancel = silenceCheckCancel
+	go o.silenceChecker(silenceCheckCtx, guildID, conv)
+
 	o.sessionsMu.Lock()
 	o.sessions[guildID] = conv
 	o.sessionsMu.Unlock()
@@ -195,6 +204,9 @@ func (o *Orchestrator) LeaveVoice(guildID string) error {
 	if conv, exists := o.sessions[guildID]; exists {
 		if conv.CancelFunc != nil {
 			conv.CancelFunc()
+		}
+		if conv.SilenceCheckCancel != nil {
+			conv.SilenceCheckCancel()
 		}
 		delete(o.sessions, guildID)
 	}
@@ -854,6 +866,86 @@ func (o *Orchestrator) IsConnected(guildID string) bool {
 // OnStateChange sets the callback for state changes.
 func (o *Orchestrator) OnStateChange(callback func(guildID string, oldState, newState AgentState)) {
 	o.onStateChange = callback
+}
+
+// silenceChecker periodically checks for silence based on wall-clock time.
+// This is needed because Discord doesn't send audio packets during silence,
+// so we can't rely on frame counting alone.
+func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv *VoiceConversation) {
+	// Get VAD settings from config
+	silenceThresholdMs := o.config.Audio.VADSilenceMs
+	if silenceThresholdMs == 0 {
+		silenceThresholdMs = 700 // Default: 700ms silence = user stopped talking
+	}
+	speechMinMs := o.config.Audio.VADSpeechMinMs
+	if speechMinMs == 0 {
+		speechMinMs = 300 // Default: 300ms minimum speech
+	}
+
+	silenceThreshold := time.Duration(silenceThresholdMs) * time.Millisecond
+	checkInterval := time.Duration(silenceThresholdMs/2) * time.Millisecond
+	if checkInterval < 50*time.Millisecond {
+		checkInterval = 50 * time.Millisecond
+	}
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// Check if we're in listening state
+			o.sessionsMu.RLock()
+			state := conv.State
+			o.sessionsMu.RUnlock()
+
+			if state != StateListening {
+				continue
+			}
+
+			// Check if we're in idle timeout period
+			if conv.StateManager.IsInIdle() {
+				continue
+			}
+
+			// Check time since last audio
+			timeSinceLastAudio := conv.AudioBuffer.TimeSinceLastAudio()
+			if timeSinceLastAudio == 0 {
+				// No audio received yet
+				continue
+			}
+
+			// If silence threshold reached, process audio
+			if timeSinceLastAudio >= silenceThreshold {
+				hasSpeech := conv.AudioBuffer.HasSpeech()
+				speechMs := conv.AudioBuffer.SpeechDuration()
+
+				if hasSpeech && speechMs >= speechMinMs {
+					bufferMs := conv.AudioBuffer.Duration()
+
+					logger.Info("Silence detected (time-based), processing audio",
+						zap.String("guild_id", guildID),
+						zap.Int("buffer_ms", bufferMs),
+						zap.Int("speech_ms", speechMs),
+						zap.Duration("silence_duration", timeSinceLastAudio))
+
+					go o.processBufferedAudio(guildID, "", conv)
+				} else if hasSpeech && speechMs < speechMinMs {
+					// Very short speech - clear buffer, likely noise
+					logger.Debug("Discarding short speech segment (likely noise)",
+						zap.String("guild_id", guildID),
+						zap.Int("speech_ms", speechMs),
+						zap.Int("min_speech_ms", speechMinMs))
+					conv.AudioBuffer.Clear()
+				} else {
+					// No speech - just clear
+					conv.AudioBuffer.Clear()
+				}
+			}
+		}
+	}
 }
 
 // Close shuts down the orchestrator.

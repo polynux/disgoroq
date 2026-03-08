@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"go.uber.org/zap"
@@ -151,16 +152,17 @@ func MonoToStereo(input []byte) []byte {
 // AudioBufferManager manages audio buffering for transcription.
 // It accumulates audio frames and provides silence detection with VAD support.
 type AudioBufferManager struct {
-	buffer            *bytes.Buffer
-	sampleRate        int
-	channels          int
-	frameMs           int
-	totalMs           int
-	silenceLevel      int16 // Amplitude threshold for silence detection
-	speechStartMs     int   // When speech started (for VAD)
-	hasSpeech         bool  // Whether buffer contains speech
-	speechDurationMs  int   // Total speech duration
-	consecutiveSilent int   // Consecutive silent frames
+	buffer           *bytes.Buffer
+	sampleRate       int
+	channels         int
+	frameMs          int
+	totalMs          int
+	silenceLevel     int16     // Amplitude threshold for silence detection
+	speechStartMs    int       // When speech started (for VAD)
+	hasSpeech        bool      // Whether buffer contains speech
+	speechDurationMs int       // Total speech duration
+	lastAudioTime    time.Time // Last time we received audio (for silence detection)
+	silenceStartMs   int       // When silence started (relative to totalMs)
 }
 
 // NewAudioBufferManager creates a new audio buffer manager.
@@ -181,12 +183,13 @@ func (m *AudioBufferManager) AddFrame(frame []byte) {
 
 	// Check for silence
 	if m.isSilent(frame) {
-		m.consecutiveSilent++
-		// Only count consecutive silent frames as silence
-		// This prevents brief silence during speech from resetting speech tracking
+		// Mark start of silence if this is first silent frame
+		if m.silenceStartMs == 0 {
+			m.silenceStartMs = m.totalMs
+		}
 	} else {
-		// Frame has speech
-		m.consecutiveSilent = 0
+		// Frame has speech - reset silence tracking
+		m.silenceStartMs = 0
 		// Track start of speech
 		if !m.hasSpeech {
 			m.speechStartMs = m.totalMs - m.frameMs
@@ -194,12 +197,9 @@ func (m *AudioBufferManager) AddFrame(frame []byte) {
 		}
 		m.speechDurationMs += m.frameMs
 	}
-}
 
-// SilenceDuration returns the duration of consecutive silence in milliseconds.
-// This is based on consecutive silent frames, not cumulative silence.
-func (m *AudioBufferManager) SilenceDuration() int {
-	return m.consecutiveSilent * m.frameMs
+	// Update last audio time
+	m.lastAudioTime = time.Now()
 }
 
 // isSilent checks if a frame is silent (below threshold).
@@ -225,39 +225,22 @@ func (m *AudioBufferManager) isSilent(frame []byte) bool {
 	return maxSample < m.silenceLevel
 }
 
-// GetAudio returns the buffered audio and clears the buffer.
-func (m *AudioBufferManager) GetAudio() []byte {
-	audio := m.buffer.Bytes()
-	m.buffer.Reset()
-	m.totalMs = 0
-	m.speechStartMs = 0
-	m.hasSpeech = false
-	m.speechDurationMs = 0
-	m.consecutiveSilent = 0
-	return audio
+// SilenceDuration returns the duration of consecutive silence in milliseconds.
+// This is based on consecutive silent frames, not cumulative silence.
+func (m *AudioBufferManager) SilenceDuration() int {
+	if m.silenceStartMs == 0 {
+		return 0
+	}
+	return m.totalMs - m.silenceStartMs
 }
 
-// GetTrimmedAudio returns the buffered audio with silence trimmed from start and end,
-// then clears the buffer. This prevents Whisper from hallucinating on pure silence.
-func (m *AudioBufferManager) GetTrimmedAudio() []byte {
-	trimmed := m.TrimSilence()
-	m.buffer.Reset()
-	m.totalMs = 0
-	m.speechStartMs = 0
-	m.hasSpeech = false
-	m.speechDurationMs = 0
-	m.consecutiveSilent = 0
-	return trimmed
-}
-
-// PeekAudio returns the buffered audio without clearing.
-func (m *AudioBufferManager) PeekAudio() []byte {
-	return m.buffer.Bytes()
-}
-
-// Duration returns the total duration of buffered audio in milliseconds.
-func (m *AudioBufferManager) Duration() int {
-	return m.totalMs
+// SilenceDurationFromTime returns the duration of silence based on wall clock time.
+// This is useful for detecting when Discord stops sending packets (true silence).
+func (m *AudioBufferManager) SilenceDurationFromTime() time.Duration {
+	if m.lastAudioTime.IsZero() {
+		return 0
+	}
+	return time.Since(m.lastAudioTime)
 }
 
 // HasSpeech returns true if the buffer contains non-silent audio.
@@ -272,12 +255,61 @@ func (m *AudioBufferManager) SpeechDuration() int {
 
 // ConsecutiveSilentFrames returns the number of consecutive silent frames.
 func (m *AudioBufferManager) ConsecutiveSilentFrames() int {
-	return m.consecutiveSilent
+	if m.silenceStartMs == 0 {
+		return 0
+	}
+	return (m.totalMs - m.silenceStartMs) / m.frameMs
 }
 
 // ConsecutiveSilentMs returns the duration of consecutive silence in milliseconds.
 func (m *AudioBufferManager) ConsecutiveSilentMs() int {
-	return m.consecutiveSilent * m.frameMs
+	return m.SilenceDuration()
+}
+
+// TimeSinceLastAudio returns the time elapsed since the last audio frame was received.
+// This is more reliable than frame counting because Discord doesn't send packets during silence.
+func (m *AudioBufferManager) TimeSinceLastAudio() time.Duration {
+	if m.lastAudioTime.IsZero() {
+		return 0
+	}
+	return time.Since(m.lastAudioTime)
+}
+
+// GetAudio returns the buffered audio and clears the buffer.
+func (m *AudioBufferManager) GetAudio() []byte {
+	audio := m.buffer.Bytes()
+	m.buffer.Reset()
+	m.totalMs = 0
+	m.speechStartMs = 0
+	m.hasSpeech = false
+	m.speechDurationMs = 0
+	m.silenceStartMs = 0
+	m.lastAudioTime = time.Time{}
+	return audio
+}
+
+// GetTrimmedAudio returns the buffered audio with silence trimmed from start and end,
+// then clears the buffer. This prevents Whisper from hallucinating on pure silence.
+func (m *AudioBufferManager) GetTrimmedAudio() []byte {
+	trimmed := m.TrimSilence()
+	m.buffer.Reset()
+	m.totalMs = 0
+	m.speechStartMs = 0
+	m.hasSpeech = false
+	m.speechDurationMs = 0
+	m.silenceStartMs = 0
+	m.lastAudioTime = time.Time{}
+	return trimmed
+}
+
+// PeekAudio returns the buffered audio without clearing.
+func (m *AudioBufferManager) PeekAudio() []byte {
+	return m.buffer.Bytes()
+}
+
+// Duration returns the total duration of buffered audio in milliseconds.
+func (m *AudioBufferManager) Duration() int {
+	return m.totalMs
 }
 
 // Clear clears the buffer.
@@ -287,7 +319,8 @@ func (m *AudioBufferManager) Clear() {
 	m.speechStartMs = 0
 	m.hasSpeech = false
 	m.speechDurationMs = 0
-	m.consecutiveSilent = 0
+	m.silenceStartMs = 0
+	m.lastAudioTime = time.Time{}
 }
 
 // TrimSilence removes silent frames from the beginning and end of the audio buffer.
