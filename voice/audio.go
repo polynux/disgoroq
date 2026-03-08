@@ -260,11 +260,6 @@ func (m *AudioBufferManager) Duration() int {
 	return m.totalMs
 }
 
-// SilenceDuration returns the duration of consecutive silence.
-func (m *AudioBufferManager) SilenceDuration() int {
-	return m.consecutiveSilent * m.frameMs
-}
-
 // HasSpeech returns true if the buffer contains non-silent audio.
 func (m *AudioBufferManager) HasSpeech() bool {
 	return m.hasSpeech
