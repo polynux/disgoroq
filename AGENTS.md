@@ -1,79 +1,68 @@
-# PROJECT KNOWLEDGE BASE
+# Project Knowledge Base
 
-**Generated:** 2026-01-16
-**Commit:** N/A
-**Branch:** N/A
+## Overview
 
-## OVERVIEW
-DisgoroQ is a Discord bot written in Go that integrates with GROQ AI for conversational responses, uses SQLite for guild settings storage, scrapes horoscopes from horoscope.com, and sends scheduled notifications including a "Farting Friday" feature.
+DisgoroQ is a Go Discord bot with:
 
-## STRUCTURE
-```
-.
-├── main.go          # Main bot logic, commands, message handling
-├── db/              # Database layer (sqlc generated)
-├── horoscope/       # Horoscope scraping functionality
-├── utils/           # Database initialization utilities
-├── .env.example     # Environment configuration template
-├── go.mod           # Go module dependencies
-├── go.sum           # Dependency checksums
-├── schema.sql       # Database schema
-├── query.sql        # SQL queries for sqlc
-├── sqlc.yaml        # sqlc configuration
-└── .air.toml        # Air live reload config
-```
+- AI chat through GROQ with Ollama fallback support.
+- Message and attachment context building.
+- Guild-scoped conversation memory.
+- Reengage checks for inactive channels.
+- Manual horoscope delivery.
+- Scheduled Farting Friday posts and log cleanup.
+- Optional voice chat with STT and TTS.
 
-## WHERE TO LOOK
+## Source Of Truth
+
+- Runtime behavior belongs in `config.yaml`.
+- Secrets come from environment variables referenced by config.
+- Generated SQL code in `db/` is not edited directly.
+- Shared runtime logging goes through `logger`.
+
+## Where To Look
+
 | Task | Location | Notes |
 |------|----------|-------|
-| Bot commands & slash commands | main.go (lines 40-173) | Command definitions and handlers |
-| Message processing logic | main.go (lines 844-1076) | messageCreate function with AI integration |
-| Database operations | db/ | Type-safe queries via sqlc |
-| Scheduled tasks | main.go (lines 500-532) | schedule function for horoscope/farting friday |
-| Horoscope scraping | horoscope/ | Web scraping from horoscope.com |
-| Image description | main.go (lines 803-842) | describeImage function using GROQ vision |
+| Startup and wiring | `main.go` | Builds config, DB, AI, handlers, scheduler, voice |
+| Message replies | `handlers/message.go` | Main text reply flow |
+| Slash commands | `commands/` | Registry, permissions, command handlers |
+| Guild settings | `database/repository.go` | App-facing settings repository |
+| Memory | `memory/` | Buffering, summaries, retrieval |
+| Voice | `voice/` and `handlers/voice.go` | Orchestration, audio, voice state events |
+| Scheduling | `scheduler/` | Farting Friday, cleanup, reengage checks |
+| AI providers | `ai/` | GROQ, Ollama, context building |
+| Config | `config/` | Defaults, loading, validation |
+| SQL queries | `query.sql` and `db/` | sqlc source and generated code |
 
-## CODE MAP
-Main symbols (from code analysis):
-- main() - Bot initialization and event loop
-- messageCreate() - Handles incoming Discord messages
-- sendHoroscope() - Processes and sends daily horoscopes
-- sendFartingFriday() - Sends scheduled farting friday notification
-- askGroq() - GROQ API integration for text generation
-- describeImage() - GROQ vision API for image analysis
+## Current Behavior Notes
 
-## CONVENTIONS
-- Uses sqlc for type-safe SQL query generation
-- Environment variables for configuration (.env)
-- Standard Go project structure with packages in subdirectories
-- Generated code in db/ package (DO NOT EDIT)
-- Context usage for database operations
-- Standard Go naming conventions
+- Horoscope is not scheduled; it is manual-only.
+- Local/dev slash command registration uses guild commands and requires `discord.dev_guild_ids`.
+- Reengage activity is tracked from all non-bot guild messages, not only when the bot replies.
+- Voice join now respects per-guild `voice_enabled`.
+- Voice playback uses configured default voice, text fallback policy, max text length, stream buffer size, and frame timing.
 
-## ANTI-PATTERNS (THIS PROJECT)
-- Large main.go file (1202 lines) - consider splitting into multiple files
-- No unit tests present
-- No CI/CD pipeline configured
-- Hardcoded URLs and limits in code
+## Conventions
 
-## UNIQUE STYLES
-- "Brainrot" AI persona with Gen Z slang and memes
-- Delirant horoscope transformation using GROQ
-- Scheduled "Farting Friday" notifications with embedded content
-- Image processing with short descriptions for context
-- Guild-specific settings stored in SQLite
+- Prefer small edits over broad refactors.
+- Keep behavior config-driven when the setting already exists.
+- Avoid direct `fmt` or stdlib `log` runtime logging in app code.
+- Use repositories instead of bypassing them for guild settings.
+- Keep manual code edits out of generated files.
 
-## COMMANDS
+## Known Risks
+
+- `main.go` is still large and centralizes a lot of wiring.
+- Some older tests are stale or blocked by driver/linker issues.
+- Voice behavior depends on external STT/TTS services being reachable.
+- Horoscope scraping remains brittle because it depends on a third-party site.
+
+## Useful Commands
+
 ```bash
-go run main.go              # Run the bot
-go mod download             # Install dependencies
-air                         # Development with live reload
+go run .
+go run . -local
+go test ./...
+go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0 generate
+air
 ```
-
-## NOTES
-- Requires DISCORD_TOKEN, GROQ_API_KEY, DB_URL, DB_TOKEN in .env.local
-- Uses libsql for SQLite with optional remote sync
-- Horoscope scraping may be brittle due to website changes
-- Bot responds randomly based on configurable threshold
-- Rate limiting implemented with last_message timestamp</content>
-<parameter name="filePath">./AGENTS.md
