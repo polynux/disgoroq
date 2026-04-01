@@ -48,6 +48,7 @@ func (s AgentState) String() string {
 var (
 	ErrNotConnected      = errors.New("not connected to voice channel")
 	ErrAlreadyConnected  = errors.New("already connected to a voice channel")
+	ErrVoiceDisabled     = errors.New("voice chat is disabled for this server")
 	ErrStateTransition   = errors.New("invalid state transition")
 	ErrSTTUnavailable    = errors.New("speech-to-text service unavailable")
 	ErrTTSUnavailable    = errors.New("text-to-speech service unavailable")

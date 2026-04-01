@@ -23,6 +23,12 @@ type DocumentProcessor struct {
 	provider         Provider
 }
 
+type DocumentProcessorConfig struct {
+	MaxSizeMB        int
+	MaxSummaryTokens int
+	SummaryModel     string
+}
+
 // supportedDocuments maps content types to format identifiers
 var supportedDocuments = map[string]string{
 	"application/pdf": "pdf",
@@ -34,12 +40,22 @@ var supportedDocuments = map[string]string{
 	"text/markdown": "md",
 }
 
-// NewDocumentProcessor creates a new DocumentProcessor with configuration from environment variables
-func NewDocumentProcessor(provider Provider) *DocumentProcessor {
+// NewDocumentProcessor creates a new DocumentProcessor with explicit runtime configuration.
+func NewDocumentProcessor(provider Provider, cfg DocumentProcessorConfig) *DocumentProcessor {
+	if cfg.MaxSizeMB <= 0 {
+		cfg.MaxSizeMB = 50
+	}
+	if cfg.MaxSummaryTokens <= 0 {
+		cfg.MaxSummaryTokens = 500
+	}
+	if cfg.SummaryModel == "" {
+		cfg.SummaryModel = "llama-3.1-8b-instant"
+	}
+
 	return &DocumentProcessor{
-		maxSizeMB:        getIntEnvWithDefault("DOCUMENT_MAX_SIZE_MB", 50),
-		maxSummaryTokens: getIntEnvWithDefault("DOCUMENT_SUMMARY_MAX_TOKENS", 500),
-		summaryModel:     getEnvWithDefault("DOCUMENT_SUMMARY_MODEL", "llama-3.1-8b-instant"),
+		maxSizeMB:        cfg.MaxSizeMB,
+		maxSummaryTokens: cfg.MaxSummaryTokens,
+		summaryModel:     cfg.SummaryModel,
 		provider:         provider,
 	}
 }

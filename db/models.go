@@ -54,3 +54,12 @@ type MessageBuffer struct {
 	Timestamp        int64
 	Processed        sql.NullBool
 }
+
+type VoiceSetting struct {
+	GuildID         string
+	AutoJoin        sql.NullBool
+	AutoJoinChannel sql.NullString
+	VoiceEnabled    sql.NullBool
+	CreatedAt       sql.NullInt64
+	UpdatedAt       sql.NullInt64
+}

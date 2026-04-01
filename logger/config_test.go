@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
 
 	cfg "polynux/disgoroq/config"
 )
@@ -62,6 +63,7 @@ func TestInitFromConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Reset global config
 			logConfig = nil
+			Log = nil
 
 			InitFromConfig(&tt.cfgVal)
 			result := GetConfig()
@@ -73,6 +75,7 @@ func TestInitFromConfig(t *testing.T) {
 			assert.Equal(t, tt.expected.Encoding, result.Encoding)
 			assert.Equal(t, tt.expected.RetentionDays, result.RetentionDays)
 			assert.Equal(t, tt.expected.DBLogLevel, result.DBLogLevel)
+			assert.NotNil(t, Log)
 		})
 	}
 }
@@ -80,6 +83,7 @@ func TestInitFromConfig(t *testing.T) {
 func TestGetConfig_WithoutInit(t *testing.T) {
 	// Reset global config to nil
 	logConfig = nil
+	Log = nil
 
 	// GetConfig should return defaults when not initialized
 	result := GetConfig()
@@ -96,6 +100,7 @@ func TestGetConfig_WithoutInit(t *testing.T) {
 func TestAccessors(t *testing.T) {
 	// Reset and initialize with custom config
 	logConfig = nil
+	Log = nil
 	testCfg := &cfg.LoggingConfig{
 		Enabled:             true,
 		LogToDB:             true,
@@ -131,6 +136,7 @@ func TestIsDebugMode(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logConfig = nil
+			Log = nil
 			testCfg := &cfg.LoggingConfig{
 				Enabled: true,
 				Level:   tt.level,
@@ -141,4 +147,21 @@ func TestIsDebugMode(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestInitFromConfig_RebuildsLogger(t *testing.T) {
+	logConfig = nil
+	Log = zap.NewNop()
+
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:       true,
+		Level:         "debug",
+		Encoding:      "console",
+		RetentionDays: 3,
+		DBLogLevel:    "warn",
+	})
+
+	assert.NotNil(t, Log)
+	assert.Equal(t, 3, GetRetentionDays())
+	assert.True(t, IsDebugMode())
 }

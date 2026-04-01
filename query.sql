@@ -76,6 +76,10 @@ WHERE id IN (
 DELETE FROM message_buffer 
 WHERE processed = 1 AND timestamp < ?;
 
+-- name: DeleteMessageBufferEntry :exec
+DELETE FROM message_buffer
+WHERE id = ?;
+
 -- Summary Queries
 
 -- name: InsertSummary :exec

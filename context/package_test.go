@@ -106,8 +106,8 @@ func TestTimeoutExpiry(t *testing.T) {
 	defer cancel()
 
 	select {
-	case <-time.After(DatabaseTimeout + 10*time.Millisecond):
-		// Expected: timeout should expire
+	case <-time.After(DatabaseTimeout - 100*time.Millisecond):
+		// Expected: context should still be alive slightly before the deadline.
 	case <-ctx.Done():
 		t.Error("Context done too early")
 	}
@@ -115,7 +115,7 @@ func TestTimeoutExpiry(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		// Expected: context should be done after timeout
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		t.Error("Context not done after timeout expired")
 	}
 }

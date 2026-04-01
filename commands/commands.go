@@ -15,6 +15,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/config"
 	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/horoscope"
@@ -29,12 +30,12 @@ var defaultPrompt string
 
 // RegisterAll registers all bot commands.
 // If voiceOrchestrator is nil, voice commands will not be registered.
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgDefaultPrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, reengageCfg config.ReengageConfig, cfgDefaultPrompt string, cfgDefaultVoicePrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
 	defaultPrompt = cfgDefaultPrompt
 
 	// Register voice commands if orchestrator is available
 	if voiceOrchestrator != nil {
-		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator, client)
+		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator, client, cfgDefaultVoicePrompt)
 		RegisterVoiceCommands(registry, voiceCmds)
 	}
 
@@ -72,6 +73,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					Required:    true,
 				},
 			},
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		horoscopeChannelHandler(repo),
 	)
@@ -87,6 +89,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					Required:    true,
 				},
 			},
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		fartingFridayChannelHandler(repo),
 	)
@@ -127,6 +130,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					Required:    true,
 				},
 			},
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		thresholdHandler(repo),
 	)
@@ -142,6 +146,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					Required:    true,
 				},
 			},
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		thresholdSexeHandler(repo),
 	)
@@ -215,6 +220,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 					},
 				},
 			},
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
 		},
 		promptHandler(repo),
 	)
@@ -288,7 +294,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 				},
 			},
 		},
-		reengageHandler(repo),
+		reengageHandler(repo, reengageCfg),
 	)
 }
 
@@ -613,7 +619,7 @@ func forceSummaryHandler(memoryService memory.Service) func(e *events.Applicatio
 	}
 }
 
-func reengageHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
+func reengageHandler(repo *database.Repository, cfg config.ReengageConfig) func(e *events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		subcommandName := ""
@@ -631,7 +637,7 @@ func reengageHandler(repo *database.Repository) func(e *events.ApplicationComman
 		case "message":
 			handleReengageMessage(e, repo)
 		case "status":
-			handleReengageStatus(e, repo)
+			handleReengageStatus(e, repo, cfg)
 		default:
 			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand!"})
 		}
@@ -701,18 +707,27 @@ func handleReengageMessage(e *events.ApplicationCommandInteractionCreate, repo *
 	_ = e.CreateMessage(discord.MessageCreate{Content: content})
 }
 
-func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
+func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, cfg config.ReengageConfig) {
 	ctx := stdcontext.Background()
 	channel := e.Channel()
 	channelID := channel.ID()
-	enabled, chance, threshold := repo.GetReengageConfig(ctx, getGuildID(e), channelID.String())
+	guildID := getGuildID(e)
+	enabled := repo.GetReengageEnabled(ctx, guildID, channelID.String())
+	chance, ok := repo.GetReengageChance(ctx, guildID, channelID.String())
+	if !ok {
+		chance = cfg.DefaultChance
+	}
+	threshold, ok := repo.GetReengageThreshold(ctx, guildID, channelID.String())
+	if !ok {
+		threshold = cfg.DefaultInactivityMinutes
+	}
 
 	status := "❌ Disabled"
 	if enabled {
 		status = "✅ Enabled"
 	}
 
-	message, hasMessage := repo.GetReengageMessage(ctx, getGuildID(e))
+	message, hasMessage := repo.GetReengageMessage(ctx, guildID)
 	messageDisplay := "(using default)"
 	if hasMessage {
 		if len(message) > 100 {

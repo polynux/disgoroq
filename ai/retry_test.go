@@ -45,19 +45,20 @@ func TestNewRetryWrapper(t *testing.T) {
 	mockProvider := new(MockProvider)
 	config := DefaultRetryConfig()
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 
 	assert.NotNil(t, wrapper)
 	assert.Equal(t, mockProvider, wrapper.provider)
 	assert.Equal(t, config, wrapper.config)
 	assert.NotNil(t, wrapper.validator)
+	assert.Equal(t, 1, wrapper.minResponseLength)
 }
 
 func TestRetryWrapperName(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockProvider.On("Name").Return("test-provider")
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
 	name := wrapper.Name()
 
 	assert.Equal(t, "test-provider", name)
@@ -72,7 +73,7 @@ func TestRetryWrapperAvailableModels(t *testing.T) {
 	}
 	mockProvider.On("AvailableModels").Return(expectedModels)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
 	models := wrapper.AvailableModels()
 
 	assert.Equal(t, expectedModels, models)
@@ -91,7 +92,7 @@ func TestRetryWrapperChatSuccessFirstAttempt(t *testing.T) {
 	mockProvider.On("Name").Return("test-provider")
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(expectedResponse, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -129,7 +130,7 @@ func TestRetryWrapperChatEmptyResponseRetry(t *testing.T) {
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -166,7 +167,7 @@ func TestRetryWrapperChatAPIErrorRetry(t *testing.T) {
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -204,7 +205,7 @@ func TestRetryWrapperChatMaxRetriesExhausted(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -244,7 +245,7 @@ func TestRetryWrapperChatDisableRetryOnEmpty(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -279,7 +280,7 @@ func TestRetryWrapperChatDisableRetryOnError(t *testing.T) {
 		RetryOnError:  false,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -319,7 +320,7 @@ func TestRetryWrapperChatZeroRetries(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -349,7 +350,7 @@ func TestRetryWrapperVisionSuccess(t *testing.T) {
 	mockProvider.On("Name").Return("test-provider")
 	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(expectedResponse, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -386,7 +387,7 @@ func TestRetryWrapperVisionEmptyResponse(t *testing.T) {
 	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -423,7 +424,7 @@ func TestRetryWrapperVisionMaxRetriesExhausted(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -437,5 +438,28 @@ func TestRetryWrapperVisionMaxRetriesExhausted(t *testing.T) {
 	assert.Nil(t, response)
 	assert.Contains(t, err.Error(), "empty response after 3 attempts")
 
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatHonorsMinResponseLength(t *testing.T) {
+	mockProvider := new(MockProvider)
+	config := DefaultRetryConfig()
+	config.MaxRetries = 0
+
+	shortResponse := &ChatResponse{
+		Content:      "hey",
+		Model:        "test-model",
+		TokensUsed:   3,
+		FinishReason: "stop",
+	}
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(shortResponse, nil)
+
+	wrapper := NewRetryWrapper(mockProvider, config, 5, "test-chat-model", "test-vision-model")
+	_, err := wrapper.Chat(context.Background(), &ChatRequest{Model: "test-model"})
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "empty response")
 	mockProvider.AssertExpectations(t)
 }

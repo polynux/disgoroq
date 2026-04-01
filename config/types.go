@@ -20,7 +20,8 @@ type Config struct {
 
 // DiscordConfig contains Discord-related configuration.
 type DiscordConfig struct {
-	Token string `yaml:"token"`
+	Token       string   `yaml:"token"`
+	DevGuildIDs []string `yaml:"dev_guild_ids"`
 }
 
 // BotConfig contains bot personality configuration.
@@ -125,7 +126,8 @@ type ReengageConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		Discord: DiscordConfig{
-			Token: "",
+			Token:       "",
+			DevGuildIDs: nil,
 		},
 		Database: DatabaseConfig{
 			URL:   "",

@@ -3,6 +3,9 @@ package logger
 import (
 	"strings"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
 	configpkg "polynux/disgoroq/config"
 )
 
@@ -31,6 +34,7 @@ func InitFromConfig(cfg *configpkg.LoggingConfig) {
 		RetentionDays:       cfg.RetentionDays,
 		DBLogLevel:          ParseDBLogLevel(cfg.DBLogLevel),
 	}
+	rebuildLogger(logConfig)
 }
 
 // GetConfig returns the current logging configuration.
@@ -71,4 +75,42 @@ func GetDBLogLevel() DBLogLevel {
 // IsDebugMode returns true if log level is set to debug
 func IsDebugMode() bool {
 	return strings.ToLower(GetConfig().Level) == "debug"
+}
+
+func rebuildLogger(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+
+	if Log != nil {
+		_ = Log.Sync()
+	}
+
+	if !cfg.Enabled {
+		Log = zap.NewNop()
+		retentionDays = cfg.RetentionDays
+		return
+	}
+
+	var zapConfig zap.Config
+	if strings.ToLower(cfg.Encoding) == "console" {
+		zapConfig = zap.NewDevelopmentConfig()
+		zapConfig.Encoding = "console"
+	} else {
+		zapConfig = zap.NewProductionConfig()
+	}
+
+	zapLevel, err := zapcore.ParseLevel(strings.ToLower(cfg.Level))
+	if err != nil {
+		zapLevel = zapcore.InfoLevel
+	}
+	zapConfig.Level = zap.NewAtomicLevelAt(zapLevel)
+
+	loggerInstance, err := zapConfig.Build()
+	if err != nil {
+		panic(err)
+	}
+
+	Log = loggerInstance
+	retentionDays = cfg.RetentionDays
 }

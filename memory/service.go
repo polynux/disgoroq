@@ -3,17 +3,13 @@ package memory
 import (
 	"context"
 	"fmt"
-	"log"
-	"os"
-	"strings"
 	"sync"
 	"time"
-)
 
-// isDebugMode checks if LOG_LEVEL is set to debug
-func isDebugMode() bool {
-	return strings.ToLower(os.Getenv("LOG_LEVEL")) == "debug"
-}
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/logger"
+)
 
 // MemoryService implements the main memory management logic
 type MemoryService struct {
@@ -83,16 +79,21 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 
 // BufferMessage stores a message in the buffer and triggers summarization if needed
 func (s *MemoryService) BufferMessage(ctx context.Context, userID, guildID, content string) error {
-	if isDebugMode() {
-		log.Printf("[Memory] Buffering message for user %s in guild %s", userID, guildID)
+	if logger.IsDebugMode() {
+		logger.Debug("Buffering memory message",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID))
 	}
 
 	// Create embedding for the message
 	embedding, err := s.embeddings.GenerateEmbedding(ctx, content)
 	if err != nil {
 		// Log error but continue without embedding
-		if isDebugMode() {
-			log.Printf("[Memory] Failed to generate embedding for message: %v", err)
+		if logger.IsDebugMode() {
+			logger.Debug("Failed to generate memory embedding for message",
+				zap.Error(err),
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID))
 		}
 		embedding = nil
 	}
@@ -114,8 +115,11 @@ func (s *MemoryService) BufferMessage(ctx context.Context, userID, guildID, cont
 		return fmt.Errorf("[Memory] failed to buffer message: %w", err)
 	}
 
-	if isDebugMode() {
-		log.Printf("[Memory] Message buffered successfully for user %s (ID: %s)", userID, messageID)
+	if logger.IsDebugMode() {
+		logger.Debug("Buffered memory message",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.String("message_id", messageID))
 	}
 
 	// Check if we should trigger summarization
@@ -130,8 +134,10 @@ func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 
 	// Check if summarization is already running for this user/guild
 	if _, loaded := s.activeSummaries.LoadOrStore(key, true); loaded {
-		if isDebugMode() {
-			log.Printf("[Memory] Summarization already running for user %s in guild %s, skipping", userID, guildID)
+		if logger.IsDebugMode() {
+			logger.Debug("Memory summarization already running",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID))
 		}
 		return
 	}
@@ -143,18 +149,25 @@ func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 	time.Sleep(100 * time.Millisecond)
 
 	ctx := context.Background()
-	if isDebugMode() {
-		log.Printf("[Memory] Checking if summarization needed for user %s in guild %s", userID, guildID)
+	if logger.IsDebugMode() {
+		logger.Debug("Checking memory summarization eligibility",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID))
 	}
 	if err := s.runSummarization(ctx, userID, guildID); err != nil {
-		log.Printf("[Memory] Summarization failed for user %s in guild %s: %v", userID, guildID, err)
+		logger.Warn("Memory summarization failed",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
 	}
 }
 
 // runSummarization performs the actual summarization
 func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID string) error {
-	if isDebugMode() {
-		log.Printf("[Memory] Running summarization check for user %s in guild %s", userID, guildID)
+	if logger.IsDebugMode() {
+		logger.Debug("Running memory summarization check",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID))
 	}
 
 	// Check if enough time has passed since last summary
@@ -162,8 +175,12 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 	if err == nil && lastSummary != nil {
 		timeSinceLast := time.Since(lastSummary.CreatedAt)
 		if timeSinceLast < s.summaryInterval {
-			if isDebugMode() {
-				log.Printf("[Memory] Too soon for another summary (last was %v ago, need %v)", timeSinceLast, s.summaryInterval)
+			if logger.IsDebugMode() {
+				logger.Debug("Skipping memory summarization due to interval",
+					zap.String("user_id", userID),
+					zap.String("guild_id", guildID),
+					zap.Duration("time_since_last", timeSinceLast),
+					zap.Duration("required_interval", s.summaryInterval))
 			}
 			return nil // Too soon for another summary
 		}
@@ -175,18 +192,29 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 		return fmt.Errorf("failed to get buffered messages: %w", err)
 	}
 
-	if isDebugMode() {
-		log.Printf("[Memory] Found %d buffered messages for user %s (threshold: %d)", len(messages), userID, s.bufferThreshold)
+	if logger.IsDebugMode() {
+		logger.Debug("Loaded buffered memory messages",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Int("message_count", len(messages)),
+			zap.Int("threshold", s.bufferThreshold))
 	}
 
 	if len(messages) < s.bufferThreshold {
-		if isDebugMode() {
-			log.Printf("[Memory] Not enough messages to summarize (%d/%d)", len(messages), s.bufferThreshold)
+		if logger.IsDebugMode() {
+			logger.Debug("Not enough memory messages to summarize",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID),
+				zap.Int("message_count", len(messages)),
+				zap.Int("threshold", s.bufferThreshold))
 		}
 		return nil // Not enough messages yet
 	}
 
-	log.Printf("[Memory] Triggering summarization for user %s with %d messages", userID, len(messages))
+	logger.Info("Triggering memory summarization",
+		zap.String("user_id", userID),
+		zap.String("guild_id", guildID),
+		zap.Int("message_count", len(messages)))
 
 	// Generate conversation text from messages
 
@@ -217,7 +245,10 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 	// Generate embedding for the summary
 	summaryEmbedding, err := s.embeddings.GenerateEmbedding(ctx, result.Summary.SummaryText)
 	if err != nil {
-		log.Printf("Failed to generate embedding for summary: %v", err)
+		logger.Warn("Failed to generate summary embedding",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
 		summaryEmbedding = nil
 	}
 
@@ -241,10 +272,16 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 		messageIDs[i] = msg.ID
 	}
 	if err := s.repo.DeleteMessageBufferEntries(ctx, messageIDs); err != nil {
-		log.Printf("Failed to clear processed messages: %v", err)
+		logger.Warn("Failed to clear processed memory messages",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
 	}
 
-	log.Printf("Created summary for user %s in guild %s (quality: %.2f)", userID, guildID, 0.8)
+	logger.Info("Created memory summary",
+		zap.String("user_id", userID),
+		zap.String("guild_id", guildID),
+		zap.Float64("quality", 0.8))
 	return nil
 }
 
@@ -289,8 +326,11 @@ func (s *MemoryService) messagesToConversation(messages []*MessageBufferEntry) s
 
 // GetMemoryContext builds context for AI responses
 func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, currentMessage string) (*MemoryContext, error) {
-	if isDebugMode() {
-		log.Printf("[Memory] Building context for user %s, message: %.30s...", userID, currentMessage)
+	if logger.IsDebugMode() {
+		logger.Debug("Building memory context",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.String("message_preview", truncateMemoryText(currentMessage, 30)))
 	}
 
 	context := &MemoryContext{
@@ -302,31 +342,48 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 	// First, get ALL summaries for this user (fallback if vector search fails)
 	allSummaries, err := s.repo.GetSummariesByUserGuild(ctx, userID, guildID)
 	if err != nil {
-		if isDebugMode() {
-			log.Printf("[Memory] Error getting user summaries: %v", err)
+		if logger.IsDebugMode() {
+			logger.Debug("Failed to load user memory summaries",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID),
+				zap.Error(err))
 		}
-	} else if isDebugMode() {
-		log.Printf("[Memory] Found %d total summaries for user %s", len(allSummaries), userID)
+	} else if logger.IsDebugMode() {
+		logger.Debug("Loaded user memory summaries",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Int("summary_count", len(allSummaries)))
 	}
 
 	// Get relevant summaries using vector similarity
 	if s.embeddings != nil {
 		queryEmbedding, err := s.embeddings.GenerateEmbedding(ctx, currentMessage)
 		if err != nil {
-			if isDebugMode() {
-				log.Printf("[Memory] Failed to generate query embedding: %v", err)
+			if logger.IsDebugMode() {
+				logger.Debug("Failed to generate memory query embedding",
+					zap.String("user_id", userID),
+					zap.String("guild_id", guildID),
+					zap.Error(err))
 			}
 		} else if queryEmbedding != nil {
-			if isDebugMode() {
-				log.Printf("[Memory] Generated embedding for query, searching for relevant summaries...")
+			if logger.IsDebugMode() {
+				logger.Debug("Searching relevant memory summaries",
+					zap.String("user_id", userID),
+					zap.String("guild_id", guildID))
 			}
 			summaries, err := s.repo.FindRelevantSummaries(ctx, userID, guildID, queryEmbedding, s.maxSummaryContext)
 			if err != nil {
-				if isDebugMode() {
-					log.Printf("[Memory] Vector search failed: %v", err)
+				if logger.IsDebugMode() {
+					logger.Debug("Memory vector search failed",
+						zap.String("user_id", userID),
+						zap.String("guild_id", guildID),
+						zap.Error(err))
 				}
-			} else if isDebugMode() {
-				log.Printf("[Memory] Vector search returned %d summaries", len(summaries))
+			} else if logger.IsDebugMode() {
+				logger.Debug("Memory vector search completed",
+					zap.String("user_id", userID),
+					zap.String("guild_id", guildID),
+					zap.Int("summary_count", len(summaries)))
 				for _, summary := range summaries {
 					context.Summaries = append(context.Summaries, SummaryContext{
 						Content:   summary.Content,
@@ -337,12 +394,14 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 			}
 		}
 	} else {
-		log.Printf("[Memory] No embedding provider available")
+		logger.Debug("Memory embedding provider unavailable")
 	}
 
 	// Fallback: if vector search returned nothing but we have summaries, use the most recent one
 	if len(context.Summaries) == 0 && len(allSummaries) > 0 {
-		log.Printf("[Memory] Vector search returned no results, using most recent summary as fallback")
+		logger.Debug("Using fallback memory summary",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID))
 		// Find most recent summary
 		var mostRecent *ConversationSummary
 		for _, s := range allSummaries {
@@ -433,7 +492,9 @@ func (s *MemoryService) VectorSearch(ctx context.Context, request *VectorSearchR
 
 // ForceSummarize immediately triggers summarization for a user regardless of threshold
 func (s *MemoryService) ForceSummarize(ctx context.Context, userID, guildID string) error {
-	log.Printf("[Memory] Force summarization requested for user %s in guild %s", userID, guildID)
+	logger.Info("Force memory summarization requested",
+		zap.String("user_id", userID),
+		zap.String("guild_id", guildID))
 
 	// Get ALL buffered messages (not just up to threshold)
 	messages, err := s.repo.GetMessageBufferByUserGuild(ctx, userID, guildID, 1000)
@@ -445,7 +506,10 @@ func (s *MemoryService) ForceSummarize(ctx context.Context, userID, guildID stri
 		return fmt.Errorf("no messages to summarize for user %s", userID)
 	}
 
-	log.Printf("[Memory] Force summarizing %d messages for user %s", len(messages), userID)
+	logger.Info("Force summarizing memory messages",
+		zap.String("user_id", userID),
+		zap.String("guild_id", guildID),
+		zap.Int("message_count", len(messages)))
 
 	// Create summarization request
 	summarizationRequest := &SummarizationRequest{
@@ -468,7 +532,10 @@ func (s *MemoryService) ForceSummarize(ctx context.Context, userID, guildID stri
 	// Generate embedding for the summary
 	summaryEmbedding, err := s.embeddings.GenerateEmbedding(ctx, result.Summary.SummaryText)
 	if err != nil {
-		log.Printf("[Memory] Failed to generate embedding for summary: %v", err)
+		logger.Warn("Failed to generate force summary embedding",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
 		summaryEmbedding = nil
 	}
 
@@ -492,9 +559,21 @@ func (s *MemoryService) ForceSummarize(ctx context.Context, userID, guildID stri
 		messageIDs[i] = msg.ID
 	}
 	if err := s.repo.DeleteMessageBufferEntries(ctx, messageIDs); err != nil {
-		log.Printf("[Memory] Failed to clear processed messages: %v", err)
+		logger.Warn("Failed to clear force-summarized memory messages",
+			zap.String("user_id", userID),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
 	}
 
-	log.Printf("[Memory] Force summary created for user %s in guild %s", userID, guildID)
+	logger.Info("Force memory summary created",
+		zap.String("user_id", userID),
+		zap.String("guild_id", guildID))
 	return nil
+}
+
+func truncateMemoryText(text string, limit int) string {
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+	return text[:limit]
 }

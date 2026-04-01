@@ -16,6 +16,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/logger"
 )
 
@@ -39,14 +40,35 @@ type Manager struct {
 	// Opus encoder for TTS
 	opusEncoder *OpusEncoder
 	encoderMu   sync.Mutex
+
+	streamBufferSizeMs int
+	audioFrameDuration time.Duration
+	audioFrameSize     int
 }
 
 // NewManager creates a new voice manager.
-func NewManager(client *bot.Client) *Manager {
+
+func NewManager(client *bot.Client, cfg config.VoiceConfig) *Manager {
+	frameDuration := cfg.Audio.FrameDuration()
+	if frameDuration <= 0 {
+		frameDuration = 20 * time.Millisecond
+	}
+	frameSize := cfg.Audio.FrameSize
+	if frameSize <= 0 {
+		frameSize = 960
+	}
+	streamBufferSizeMs := cfg.Audio.StreamBufferSize
+	if streamBufferSizeMs < 0 {
+		streamBufferSizeMs = 0
+	}
+
 	return &Manager{
-		client:       client,
-		sessions:     make(map[string]*VoiceSession),
-		opusDecoders: make(map[string]*OpusDecodeSession),
+		client:             client,
+		sessions:           make(map[string]*VoiceSession),
+		opusDecoders:       make(map[string]*OpusDecodeSession),
+		streamBufferSizeMs: streamBufferSizeMs,
+		audioFrameDuration: frameDuration,
+		audioFrameSize:     frameSize,
 	}
 }
 
@@ -343,9 +365,15 @@ func (m *Manager) listenForAudio(conn voice.Conn, guildID string) {
 				zap.Int16("max_amplitude", maxSample))
 		}
 
+		userID := conn.UserIDBySSRC(packet.SSRC)
+		userIDStr := ""
+		if userID != 0 {
+			userIDStr = userID.String()
+		}
+
 		// Handle the audio packet (now as PCM)
 		if m.onSpeak != nil {
-			m.onSpeak(guildID, "", pcmData)
+			m.onSpeak(guildID, userIDStr, pcmData)
 		}
 	}
 }
@@ -411,7 +439,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 	logger.Info("PlayAudio: getting Opus encoder", zap.String("guild_id", guildID))
 	m.encoderMu.Lock()
 	if m.opusEncoder == nil {
-		m.opusEncoder, err = NewOpusEncoder()
+		m.opusEncoder, err = NewOpusEncoder(m.audioFrameSize)
 		if err != nil {
 			m.encoderMu.Unlock()
 			return fmt.Errorf("failed to create Opus encoder: %w", err)
@@ -433,7 +461,7 @@ func (m *Manager) PlayAudio(ctx context.Context, guildID string, audio []byte, s
 
 	// Send Opus frames with proper timing (20ms per frame)
 	// Discord expects frames at 20ms intervals for smooth playback
-	frameDuration := 20 * time.Millisecond
+	frameDuration := m.audioFrameDuration
 	writer := conn.UDP()
 
 	for i, opusFrame := range opusFrames {
@@ -549,7 +577,7 @@ func (m *Manager) PlayAudioStream(ctx context.Context, guildID string, audioStre
 	// Get or create Opus encoder
 	m.encoderMu.Lock()
 	if m.opusEncoder == nil {
-		m.opusEncoder, err = NewOpusEncoder()
+		m.opusEncoder, err = NewOpusEncoder(m.audioFrameSize)
 		if err != nil {
 			m.encoderMu.Unlock()
 			return fmt.Errorf("failed to create Opus encoder: %w", err)
@@ -558,15 +586,19 @@ func (m *Manager) PlayAudioStream(ctx context.Context, guildID string, audioStre
 	encoder := m.opusEncoder
 	m.encoderMu.Unlock()
 
-	// Pre-buffer for smoother playback
-	// Buffer first 500ms (25 frames) before starting to play
-	// This prevents audio chopping at the start
-	preBufferFrames := 50 // 500ms / 20ms per frame = 25 frames
+	// Pre-buffer for smoother playback.
+	preBufferFrames := 0
+	if m.streamBufferSizeMs > 0 {
+		preBufferFrames = int((time.Duration(m.streamBufferSizeMs) * time.Millisecond) / m.audioFrameDuration)
+		if preBufferFrames < 1 {
+			preBufferFrames = 1
+		}
+	}
 	var preBuffer [][]byte
 
 	// Stream processing
 	writer := conn.UDP()
-	frameDuration := 20 * time.Millisecond
+	frameDuration := m.audioFrameDuration
 	totalFrames := 0
 	preBufferCount := 0
 

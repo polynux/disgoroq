@@ -20,6 +20,12 @@ func NewRepository() *Repository {
 	}
 }
 
+func NewRepositoryWithDB(database *sql.DB) *Repository {
+	return &Repository{
+		queries: db.New(database),
+	}
+}
+
 func (r *Repository) GetDB() *sql.DB {
 	return utils.GetDB()
 }
@@ -238,19 +244,19 @@ func (r *Repository) SetReengageChance(ctx context.Context, guildID, channelID s
 	})
 }
 
-func (r *Repository) GetReengageChance(ctx context.Context, guildID, channelID string) float64 {
+func (r *Repository) GetReengageChance(ctx context.Context, guildID, channelID string) (float64, bool) {
 	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
 		Name:    "reengage_chance:" + channelID,
 		GuildID: guildID,
 	})
 	if err != nil {
-		return DefaultReengageChance
+		return 0, false
 	}
 	chance, err := strconv.ParseFloat(value, 64)
 	if err != nil {
-		return DefaultReengageChance
+		return 0, false
 	}
-	return chance
+	return chance, true
 }
 
 func (r *Repository) SetReengageThreshold(ctx context.Context, guildID, channelID string, minutes int) error {
@@ -261,26 +267,19 @@ func (r *Repository) SetReengageThreshold(ctx context.Context, guildID, channelI
 	})
 }
 
-func (r *Repository) GetReengageThreshold(ctx context.Context, guildID, channelID string) int {
+func (r *Repository) GetReengageThreshold(ctx context.Context, guildID, channelID string) (int, bool) {
 	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
 		Name:    "reengage_threshold:" + channelID,
 		GuildID: guildID,
 	})
 	if err != nil {
-		return DefaultReengageThreshold
+		return 0, false
 	}
 	minutes, err := strconv.Atoi(value)
 	if err != nil {
-		return DefaultReengageThreshold
+		return 0, false
 	}
-	return minutes
-}
-
-func (r *Repository) GetReengageConfig(ctx context.Context, guildID, channelID string) (enabled bool, chance float64, threshold int) {
-	enabled = r.GetReengageEnabled(ctx, guildID, channelID)
-	chance = r.GetReengageChance(ctx, guildID, channelID)
-	threshold = r.GetReengageThreshold(ctx, guildID, channelID)
-	return
+	return minutes, true
 }
 
 func (r *Repository) DeleteReengageConfig(ctx context.Context, guildID, channelID string) error {

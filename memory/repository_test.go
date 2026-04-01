@@ -6,12 +6,14 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "github.com/tursodatabase/go-libsql"
 )
 
 // TestRepository provides an in-memory SQLite database for testing
@@ -26,9 +28,12 @@ type TestRepository struct {
 func NewTestRepository(t *testing.T) *TestRepository {
 	ctx := context.Background()
 
-	// Create in-memory SQLite database
-	db, err := sql.Open("sqlite3", ":memory:")
+	// Use a real temp file so schema creation and prepared statements share the same DB.
+	dbPath := filepath.Join(t.TempDir(), "memory-test.db")
+	db, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	// Enable foreign keys and other SQLite pragmas
 	_, err = db.Exec(`PRAGMA foreign_keys = ON`)
@@ -79,8 +84,10 @@ func NewTestRepository(t *testing.T) *TestRepository {
 	ON message_buffer(message_id);
 	`
 
-	_, err = db.Exec(schema)
-	require.NoError(t, err)
+	for _, stmt := range splitTestSQL(schema) {
+		_, err = db.Exec(stmt)
+		require.NoError(t, err)
+	}
 
 	repo := NewRepository(db)
 
@@ -94,6 +101,19 @@ func NewTestRepository(t *testing.T) *TestRepository {
 		ctx:     ctx,
 		cleanup: cleanup,
 	}
+}
+
+func splitTestSQL(schema string) []string {
+	parts := strings.Split(schema, ";")
+	statements := make([]string, 0, len(parts))
+	for _, part := range parts {
+		stmt := strings.TrimSpace(part)
+		if stmt == "" {
+			continue
+		}
+		statements = append(statements, stmt)
+	}
+	return statements
 }
 
 // Close cleans up the test repository
@@ -213,6 +233,11 @@ func TestMessageBufferOperations(t *testing.T) {
 		messages, err = tr.repo.GetMessageBufferByUserGuild(tr.ctx, userID, guildID, 100)
 		assert.NoError(t, err)
 		assert.Equal(t, 3, len(messages))
+	})
+
+	t.Run("DeleteMessageBufferEntries_EmptyIDs", func(t *testing.T) {
+		err := tr.repo.DeleteMessageBufferEntries(tr.ctx, nil)
+		assert.NoError(t, err)
 	})
 }
 
@@ -422,7 +447,7 @@ func TestStatisticsOperations(t *testing.T) {
 	t.Run("GetSummaryStatsByGuild_Empty", func(t *testing.T) {
 		summaries, err := tr.repo.GetSummariesByUserGuild(tr.ctx, "nonexistent_user", "empty_guild")
 		assert.NoError(t, err)
-		assert.NotNil(t, summaries)
+		assert.Nil(t, summaries)
 		assert.Equal(t, 0, len(summaries))
 	})
 }

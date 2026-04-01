@@ -3,7 +3,6 @@ package utils
 import (
 	"context"
 	"database/sql"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/tursodatabase/go-libsql"
 	_ "github.com/tursodatabase/go-libsql"
+	"go.uber.org/zap"
 
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/db"
@@ -18,6 +18,13 @@ import (
 
 var DB *sql.DB
 var Q *db.Queries
+var dbLogger = zap.NewNop()
+
+func SetLogger(l *zap.Logger) {
+	if l != nil {
+		dbLogger = l
+	}
+}
 
 func GetDB() *sql.DB {
 	return DB
@@ -30,17 +37,17 @@ func Connect(cfg *config.DatabaseConfig) *sql.DB {
 	dbToken := cfg.Token
 
 	if dbUrl == "" {
-		log.Fatal("Database URL is not set")
+		dbLogger.Fatal("Database URL is not set")
 		os.Exit(1)
 	}
 	if dbToken == "" {
-		log.Fatal("Database token is not set")
+		dbLogger.Fatal("Database token is not set")
 		os.Exit(1)
 	}
 
 	dir, err := os.MkdirTemp("", "libsql-*")
 	if err != nil {
-		log.Fatalf("Error creating temp directory: %v", err)
+		dbLogger.Fatal("Error creating temp directory", zap.Error(err))
 		os.Exit(1)
 	}
 
@@ -48,7 +55,7 @@ func Connect(cfg *config.DatabaseConfig) *sql.DB {
 
 	connector, err := libsql.NewEmbeddedReplicaConnector(dbPath, dbUrl, libsql.WithAuthToken(dbToken), libsql.WithSyncInterval(time.Minute))
 	if err != nil {
-		log.Fatalf("Error creating connector: %v", err)
+		dbLogger.Fatal("Error creating database connector", zap.Error(err))
 		os.Exit(1)
 	}
 
@@ -70,7 +77,7 @@ func ConnectLocal() *sql.DB {
 	// Open with WAL mode for better concurrency
 	db, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
-		log.Fatalf("Error opening local db: %v", err)
+		dbLogger.Fatal("Error opening local database", zap.Error(err))
 		os.Exit(1)
 	}
 
@@ -100,7 +107,7 @@ func InitializeDB(cfg *config.DatabaseConfig, localOverride bool) {
 func LoadSql() string {
 	sql, err := os.ReadFile("schema.sql")
 	if err != nil {
-		log.Fatalf("Error reading schema.sql: %v", err)
+		dbLogger.Fatal("Error reading schema.sql", zap.Error(err))
 		os.Exit(1)
 	}
 	return string(sql)
@@ -112,13 +119,16 @@ func CreateTables(ctx context.Context) {
 	// Split SQL by semicolon and execute each statement separately
 	// This is necessary because libsql's Exec only runs the first statement
 	statements := splitSQL(schema)
-	log.Printf("Found %d SQL statements to execute", len(statements))
+	dbLogger.Info("Preparing database schema statements",
+		zap.Int("statement_count", len(statements)))
 
 	executedCount := 0
 	for i, stmt := range statements {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
-			log.Printf("Skipping statement %d/%d (empty)", i+1, len(statements))
+			dbLogger.Debug("Skipping empty schema statement",
+				zap.Int("index", i+1),
+				zap.Int("total", len(statements)))
 			continue
 		}
 
@@ -134,25 +144,37 @@ func CreateTables(ctx context.Context) {
 
 		// If there are no non-comment lines, skip this statement
 		if len(nonCommentLines) == 0 {
-			log.Printf("Skipping statement %d/%d (comment only)", i+1, len(statements))
+			dbLogger.Debug("Skipping comment-only schema statement",
+				zap.Int("index", i+1),
+				zap.Int("total", len(statements)))
 			continue
 		}
 
 		// Skip vector index creation in local mode (requires Turso)
 		if strings.Contains(stmt, "libsql_vector_idx") {
-			log.Printf("Skipping statement %d/%d (vector index - requires Turso)", i+1, len(statements))
+			dbLogger.Debug("Skipping Turso-only vector index statement",
+				zap.Int("index", i+1),
+				zap.Int("total", len(statements)))
 			continue
 		}
 
 		executedCount++
-		log.Printf("Executing statement %d/%d (exec #%d): %s...", i+1, len(statements), executedCount, stmt[:min(50, len(stmt))])
+		dbLogger.Debug("Executing schema statement",
+			zap.Int("index", i+1),
+			zap.Int("total", len(statements)),
+			zap.Int("executed_count", executedCount),
+			zap.String("statement_preview", stmt[:min(50, len(stmt))]))
 		_, err := DB.ExecContext(ctx, stmt)
 		if err != nil {
-			log.Fatalf("Error creating tables (statement %d): %v\nStatement: %s", i+1, err, stmt[:min(len(stmt), 200)])
+			dbLogger.Fatal("Error creating database tables",
+				zap.Int("statement_index", i+1),
+				zap.Error(err),
+				zap.String("statement_preview", stmt[:min(len(stmt), 200)]))
 			os.Exit(1)
 		}
 	}
-	log.Printf("Successfully created all database tables")
+	dbLogger.Info("Database schema initialization complete",
+		zap.Int("executed_count", executedCount))
 }
 
 func splitSQL(sql string) []string {

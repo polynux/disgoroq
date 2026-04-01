@@ -10,15 +10,15 @@ test: test-all
 
 test-unit:
 	@echo "Running unit tests..."
-	@go test -v ./database/ ./horoscope/ ./ai/ ./commands/
+	@PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" CGO_CFLAGS="$(CGO_CFLAGS)" go test -v ./database/ ./horoscope/ ./ai/ ./commands/
 
 test-integration:
 	@echo "Running integration tests..."
-	@go test -v -tags=integration ./...
+	@PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" CGO_CFLAGS="$(CGO_CFLAGS)" go test -v -tags=integration ./...
 
 test-all:
 	@echo "Running all tests..."
-	@go test -v ./...
+	@PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" CGO_CFLAGS="$(CGO_CFLAGS)" go test -v ./...
 
 run:
 	@echo "Running bot..."

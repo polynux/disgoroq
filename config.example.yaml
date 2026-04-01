@@ -6,6 +6,9 @@ discord:
   # Required: Discord bot token (use environment variable for security)
   token: "${DISCORD_TOKEN}"
 
+  # Development guilds for fast slash-command registration when running in local mode
+  dev_guild_ids: []
+
 database:
   # Database URL (required for remote Turso database)
   # Use ${DB_URL} for security

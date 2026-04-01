@@ -98,10 +98,10 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 					zap.Error(err))
 			}
 		}
-	} else if e.VoiceState.ChannelID == nil {
-		// User left a voice channel - check if we should leave too
-		h.maybeLeaveEmptyChannel(e)
 	}
+
+	// Check whether the user left or moved out of our active channel.
+	h.maybeLeaveEmptyChannel(e)
 }
 
 // forwardToVoiceConnection forwards voice state updates to the voice manager.
@@ -163,13 +163,40 @@ func (h *VoiceHandler) maybeLeaveEmptyChannel(e *events.GuildVoiceStateUpdate) {
 		return
 	}
 
-	// Use the event's OldVoiceState to check if someone left our channel
-	if e.OldVoiceState.ChannelID != nil && e.OldVoiceState.ChannelID.String() == session.ChannelID {
-		// Someone left our channel - check remaining users via member count
-		// Simple heuristic: if we can't get accurate count, stay in channel
-		logger.Info("User left voice channel, staying for now (empty check not implemented)",
+	oldChannelID := channelIDStr(e.OldVoiceState.ChannelID)
+	newChannelID := channelIDStr(e.VoiceState.ChannelID)
+	if oldChannelID != session.ChannelID || newChannelID == session.ChannelID {
+		return
+	}
+
+	humansRemaining := 0
+	for state := range h.client.Caches.VoiceStates(guildID) {
+		if state.ChannelID == nil || state.ChannelID.String() != session.ChannelID {
+			continue
+		}
+		if state.UserID == h.client.ID() {
+			continue
+		}
+		humansRemaining++
+	}
+
+	if humansRemaining > 0 {
+		logger.Debug("Voice channel still has active users",
 			zap.String("guild_id", guildID.String()),
-			zap.String("channel_id", session.ChannelID))
+			zap.String("channel_id", session.ChannelID),
+			zap.Int("humans_remaining", humansRemaining))
+		return
+	}
+
+	logger.Info("Leaving empty voice channel",
+		zap.String("guild_id", guildID.String()),
+		zap.String("channel_id", session.ChannelID))
+
+	if err := h.orchestrator.LeaveVoice(guildID.String()); err != nil {
+		logger.Error("Failed to leave empty voice channel",
+			zap.String("guild_id", guildID.String()),
+			zap.String("channel_id", session.ChannelID),
+			zap.Error(err))
 	}
 }
 

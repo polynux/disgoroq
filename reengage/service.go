@@ -33,6 +33,34 @@ type Service struct {
 	defaultPrompt  string
 }
 
+func (s *Service) resolveReengageSettings(ctx context.Context, guildID, channelID string) (bool, int, float64) {
+	enabled := s.repo.GetReengageEnabled(ctx, guildID, channelID)
+	thresholdMinutes, ok := s.repo.GetReengageThreshold(ctx, guildID, channelID)
+	if !ok {
+		thresholdMinutes = s.config.DefaultInactivityMinutes
+	}
+
+	chance, ok := s.repo.GetReengageChance(ctx, guildID, channelID)
+	if !ok {
+		chance = s.config.DefaultChance
+	}
+
+	return enabled, thresholdMinutes, chance
+}
+
+func (s *Service) shouldReengage(lastMessageTimestamp int64, thresholdMinutes int, chance float64, roll float64, now time.Time) bool {
+	if lastMessageTimestamp == 0 {
+		return false
+	}
+
+	lastMessageTime := time.Unix(lastMessageTimestamp, 0)
+	if now.Sub(lastMessageTime) <= time.Duration(thresholdMinutes)*time.Minute {
+		return false
+	}
+
+	return roll < chance
+}
+
 func NewService(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig, defaultPrompt string) *Service {
 	return &Service{
 		client:         client,
@@ -77,30 +105,24 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 				continue
 			}
 
-			enabled := s.repo.GetReengageEnabled(ctx, guildID, channel.ID().String())
+			enabled, thresholdMinutes, chance := s.resolveReengageSettings(ctx, guildID, channel.ID().String())
 			if !enabled {
 				continue
 			}
 
 			lastMessageTimestamp := s.repo.GetChannelLastMessage(ctx, guildID, channel.ID().String())
-			thresholdMinutes := s.repo.GetReengageThreshold(ctx, guildID, channel.ID().String())
-			chance := s.repo.GetReengageChance(ctx, guildID, channel.ID().String())
 
 			if lastMessageTimestamp == 0 {
 				continue
 			}
 
+			now := time.Now()
+			if !s.shouldReengage(lastMessageTimestamp, thresholdMinutes, chance, rand.Float64(), now) {
+				continue
+			}
+
 			lastMessageTime := time.Unix(lastMessageTimestamp, 0)
-			timeSinceLastMessage := time.Since(lastMessageTime)
-			thresholdDuration := time.Duration(thresholdMinutes) * time.Minute
-
-			if timeSinceLastMessage <= thresholdDuration {
-				continue
-			}
-
-			if rand.Float64() >= chance {
-				continue
-			}
+			timeSinceLastMessage := now.Sub(lastMessageTime)
 
 			logger.Info("Reengage triggered",
 				zap.String("guild_id", guildID),

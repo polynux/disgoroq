@@ -67,6 +67,7 @@ func NewService(config ServiceConfig) *Service {
 		wrappedGroq := NewRetryWrapper(
 			groqProvider,
 			config.RetryConfig,
+			config.MinResponseLength,
 			config.GroqModel,
 			config.GroqVisionModel,
 		)
@@ -75,10 +76,11 @@ func NewService(config ServiceConfig) *Service {
 
 	// Add Ollama as fallback if enabled
 	if config.OllamaEnabled && config.FallbackEnabled {
-		if ollamaProvider, err := NewOllamaProvider(); err == nil {
+		if ollamaProvider, err := NewOllamaProvider(config.OllamaURL); err == nil {
 			wrappedOllama := NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,
+				config.MinResponseLength,
 				config.OllamaModel,
 				config.OllamaVisionModel,
 			)

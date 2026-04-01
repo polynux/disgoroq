@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -36,7 +35,7 @@ func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, e
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
 	if schedulerErr != nil {
-		log.Println("error creating scheduler,", schedulerErr)
+		logger.Error("Failed to create scheduler", zap.Error(schedulerErr))
 	}
 
 	reengageService := reengage.NewService(client, aiService, repo, memoryService, emojiManager, reengageCfg, defaultPrompt)
@@ -62,7 +61,7 @@ func (s *Scheduler) Start() {
 		),
 	)
 	if err != nil {
-		log.Println("error creating farting job,", err)
+		logger.Error("Failed to create farting friday job", zap.Error(err))
 	}
 
 	_, err = s.scheduler.NewJob(
@@ -72,7 +71,7 @@ func (s *Scheduler) Start() {
 		),
 	)
 	if err != nil {
-		log.Println("error creating cleanup job,", err)
+		logger.Error("Failed to create cleanup job", zap.Error(err))
 	}
 
 	if s.reengageCfg.CheckIntervalSeconds > 0 {
@@ -81,12 +80,12 @@ func (s *Scheduler) Start() {
 			gocron.NewTask(s.CheckReengage),
 		)
 		if err != nil {
-			log.Println("error creating reengage job,", err)
+			logger.Error("Failed to create reengage job", zap.Error(err))
 		}
 	}
 
 	s.scheduler.Start()
-	log.Println("Scheduler started")
+	logger.Info("Scheduler started")
 }
 
 func (s *Scheduler) Shutdown() error {

@@ -606,3 +606,12 @@ func SplitForStreaming(text string) []string {
 
 	return result
 }
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}

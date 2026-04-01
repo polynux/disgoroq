@@ -88,18 +88,22 @@ type OpusEncoder struct {
 
 // NewOpusEncoder creates a new Opus encoder for Discord voice.
 // Discord requires 48kHz stereo Opus audio.
-func NewOpusEncoder() (*OpusEncoder, error) {
+func NewOpusEncoder(frameSize int) (*OpusEncoder, error) {
 	// Discord uses 48kHz stereo
 	encoder, err := gopus.NewEncoder(48000, 2, gopus.Audio)
 	if err != nil {
 		return nil, err
 	}
 
+	if frameSize <= 0 {
+		frameSize = 960
+	}
+
 	return &OpusEncoder{
 		encoder:    encoder,
 		sampleRate: 48000,
 		channels:   2,
-		frameSize:  960, // 20ms at 48kHz
+		frameSize:  frameSize,
 	}, nil
 }
 

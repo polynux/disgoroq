@@ -24,6 +24,16 @@ func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSetting
 	return err
 }
 
+const deleteMessageBufferEntry = `-- name: DeleteMessageBufferEntry :exec
+DELETE FROM message_buffer
+WHERE id = ?
+`
+
+func (q *Queries) DeleteMessageBufferEntry(ctx context.Context, id int64) error {
+	_, err := q.db.ExecContext(ctx, deleteMessageBufferEntry, id)
+	return err
+}
+
 const deleteOldEvents = `-- name: DeleteOldEvents :exec
 DELETE FROM bot_events
 WHERE timestamp < datetime('now', '-' || ? || ' days')
@@ -45,7 +55,7 @@ func (q *Queries) DeleteProcessedMessages(ctx context.Context, timestamp int64) 
 }
 
 const deleteSummariesForUser = `-- name: DeleteSummariesForUser :exec
-DELETE FROM conversation_summaries 
+DELETE FROM conversation_summaries
 WHERE guild_id = ? AND user_id = ?
 `
 
@@ -303,6 +313,40 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 	return items, nil
 }
 
+const getGuildsWithAutoJoin = `-- name: GetGuildsWithAutoJoin :many
+SELECT guild_id, auto_join_channel
+FROM voice_settings
+WHERE auto_join = TRUE
+`
+
+type GetGuildsWithAutoJoinRow struct {
+	GuildID         string
+	AutoJoinChannel sql.NullString
+}
+
+func (q *Queries) GetGuildsWithAutoJoin(ctx context.Context) ([]GetGuildsWithAutoJoinRow, error) {
+	rows, err := q.db.QueryContext(ctx, getGuildsWithAutoJoin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetGuildsWithAutoJoinRow
+	for rows.Next() {
+		var i GetGuildsWithAutoJoinRow
+		if err := rows.Scan(&i.GuildID, &i.AutoJoinChannel); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getLatestSummariesForUsers = `-- name: GetLatestSummariesForUsers :many
 SELECT cs.id, cs.guild_id, cs.user_id, cs.summary_text, cs.message_count, 
        cs.start_message_id, cs.end_message_id, cs.created_at, cs.updated_at, cs.embedding
@@ -534,6 +578,27 @@ func (q *Queries) GetUnprocessedMessages(ctx context.Context, arg GetUnprocessed
 	return items, nil
 }
 
+const getVoiceSettings = `-- name: GetVoiceSettings :one
+
+SELECT auto_join, auto_join_channel, voice_enabled
+FROM voice_settings
+WHERE guild_id = ?
+`
+
+type GetVoiceSettingsRow struct {
+	AutoJoin        sql.NullBool
+	AutoJoinChannel sql.NullString
+	VoiceEnabled    sql.NullBool
+}
+
+// Voice Settings Queries
+func (q *Queries) GetVoiceSettings(ctx context.Context, guildID string) (GetVoiceSettingsRow, error) {
+	row := q.db.QueryRowContext(ctx, getVoiceSettings, guildID)
+	var i GetVoiceSettingsRow
+	err := row.Scan(&i.AutoJoin, &i.AutoJoinChannel, &i.VoiceEnabled)
+	return i, err
+}
+
 const insertEvent = `-- name: InsertEvent :exec
 INSERT INTO bot_events (timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -674,6 +739,33 @@ type SetGuildSettingParams struct {
 
 func (q *Queries) SetGuildSetting(ctx context.Context, arg SetGuildSettingParams) error {
 	_, err := q.db.ExecContext(ctx, setGuildSetting, arg.GuildID, arg.Name, arg.Value)
+	return err
+}
+
+const setVoiceSettings = `-- name: SetVoiceSettings :exec
+INSERT INTO voice_settings (guild_id, auto_join, auto_join_channel, voice_enabled, updated_at)
+VALUES (?, ?, ?, ?, strftime('%s', 'now'))
+ON CONFLICT(guild_id) DO UPDATE SET
+    auto_join = excluded.auto_join,
+    auto_join_channel = excluded.auto_join_channel,
+    voice_enabled = excluded.voice_enabled,
+    updated_at = strftime('%s', 'now')
+`
+
+type SetVoiceSettingsParams struct {
+	GuildID         string
+	AutoJoin        sql.NullBool
+	AutoJoinChannel sql.NullString
+	VoiceEnabled    sql.NullBool
+}
+
+func (q *Queries) SetVoiceSettings(ctx context.Context, arg SetVoiceSettingsParams) error {
+	_, err := q.db.ExecContext(ctx, setVoiceSettings,
+		arg.GuildID,
+		arg.AutoJoin,
+		arg.AutoJoinChannel,
+		arg.VoiceEnabled,
+	)
 	return err
 }
 

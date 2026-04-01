@@ -2,13 +2,13 @@ package ai
 
 import (
 	"context"
-	"slices"
-	"strings"
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
+	"slices"
+	"strings"
 
 	"polynux/disgoroq/logger"
 )
@@ -27,7 +27,7 @@ func NewContextBuilder(client *bot.Client, provider Provider) *ContextBuilder {
 		provider:          provider,
 		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
 		gifProcessor:      NewGIFProcessor(),
-		docProcessor:      NewDocumentProcessor(provider),
+		docProcessor:      NewDocumentProcessor(provider, DocumentProcessorConfig{}),
 	}
 }
 

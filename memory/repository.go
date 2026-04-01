@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"polynux/disgoroq/db"
+	"polynux/disgoroq/logger"
 )
 
 // repository implements the Repository interface using SQLC-generated code
@@ -103,8 +105,11 @@ func (r *repository) InsertSummary(ctx context.Context, summary *Summary) error 
 	if summary.Embedding != nil && len(summary.Embedding) > 0 {
 		embeddingBlob, err = float32SliceToF32Blob(summary.Embedding)
 		if err != nil {
-			if isDebugMode() {
-				log.Printf("[Memory] Warning: failed to convert embedding to blob: %v", err)
+			if logger.IsDebugMode() {
+				logger.Debug("Failed to convert memory embedding to blob",
+					zap.Error(err),
+					zap.String("user_id", summary.UserID),
+					zap.String("guild_id", summary.GuildID))
 			}
 			embeddingBlob = nil // Store as NULL instead of invalid data
 		}
@@ -278,15 +283,21 @@ func (r *repository) CreateMessageBufferEntry(ctx context.Context, entry *Messag
 	if err != nil {
 		// Check if it's a duplicate error - if so, just ignore it
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
-			if isDebugMode() {
-				log.Printf("[Memory] Duplicate message detected (ID: %s), skipping", messageID)
+			if logger.IsDebugMode() {
+				logger.Debug("Skipping duplicate memory message",
+					zap.String("message_id", messageID),
+					zap.String("user_id", entry.UserID),
+					zap.String("guild_id", entry.GuildID))
 			}
 			return nil // Message already exists, not an error
 		}
 		return err
 	}
-	if isDebugMode() {
-		log.Printf("[Memory] Successfully inserted message with ID: %s", messageID)
+	if logger.IsDebugMode() {
+		logger.Debug("Inserted memory message",
+			zap.String("message_id", messageID),
+			zap.String("user_id", entry.UserID),
+			zap.String("guild_id", entry.GuildID))
 	}
 	return nil
 }
@@ -311,7 +322,16 @@ func (r *repository) GetMessageBufferByUserGuild(ctx context.Context, userID, gu
 }
 
 func (r *repository) DeleteMessageBufferEntries(ctx context.Context, ids []int64) error {
-	// TODO: Add proper delete query to SQLC for message buffer entries
+	if len(ids) == 0 {
+		return nil
+	}
+
+	for _, id := range ids {
+		if err := r.queries.DeleteMessageBufferEntry(ctx, id); err != nil {
+			return fmt.Errorf("failed to delete message buffer entry %d: %w", id, err)
+		}
+	}
+
 	return nil
 }
 
@@ -386,8 +406,10 @@ func (r *repository) FindRelevantSummaries(ctx context.Context, userID, guildID 
 	}
 
 	if !hasValidEmbeddings {
-		if isDebugMode() {
-			log.Printf("[Memory] No summaries with valid embeddings found for user %s, skipping vector search", userID)
+		if logger.IsDebugMode() {
+			logger.Debug("No valid memory embeddings found for vector search",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID))
 		}
 		return []*RelevantSummary{}, nil
 	}
@@ -395,8 +417,11 @@ func (r *repository) FindRelevantSummaries(ctx context.Context, userID, guildID 
 	results, err := r.VectorSearchSummariesByUser(ctx, guildID, userID, queryEmbedding, int32(limit))
 	if err != nil {
 		// If vector search fails (e.g., invalid embeddings in DB), log and return empty
-		if isDebugMode() {
-			log.Printf("[Memory] Vector search failed (likely due to invalid embeddings): %v", err)
+		if logger.IsDebugMode() {
+			logger.Debug("Memory vector search failed due to invalid embeddings",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID),
+				zap.Error(err))
 		}
 		return []*RelevantSummary{}, nil
 	}

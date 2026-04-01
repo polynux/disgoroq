@@ -38,6 +38,18 @@ func (c *Config) Validate() error {
 		errors = append(errors, err.Error())
 	}
 
+	if err := c.Reengage.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
+	if err := c.Bot.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
+	if err := c.Voice.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
 	if len(errors) > 0 {
 		return fmt.Errorf("configuration errors:\n  - %s", strings.Join(errors, "\n  - "))
 	}
@@ -48,6 +60,11 @@ func (c *Config) Validate() error {
 func (c *DiscordConfig) validate() error {
 	if c.Token == "" {
 		return fmt.Errorf("discord.token is required")
+	}
+	for _, guildID := range c.DevGuildIDs {
+		if strings.TrimSpace(guildID) == "" {
+			return fmt.Errorf("discord.dev_guild_ids cannot contain empty values")
+		}
 	}
 	return nil
 }
@@ -152,8 +169,8 @@ func (c *LoggingConfig) validate() error {
 	}
 
 	validEncodings := map[string]bool{
-		"json":     true,
-		"console":  true,
+		"json":    true,
+		"console": true,
 	}
 
 	if !validEncodings[strings.ToLower(c.Encoding)] {
@@ -220,6 +237,54 @@ func (c *EmojiConfig) validate() error {
 
 func (c *HoroscopeConfig) validate() error {
 	// No validation needed for boolean
+	return nil
+}
+
+func (c *ReengageConfig) validate() error {
+	if c.CheckIntervalSeconds < 0 {
+		return fmt.Errorf("reengage.check_interval_seconds cannot be negative")
+	}
+	if c.DefaultInactivityMinutes < 1 {
+		return fmt.Errorf("reengage.default_inactivity_minutes must be at least 1")
+	}
+	if c.DefaultChance < 0 || c.DefaultChance > 1 {
+		return fmt.Errorf("reengage.default_chance must be between 0 and 1")
+	}
+	return nil
+}
+
+func (c *BotConfig) validate() error {
+	if strings.TrimSpace(c.DefaultPrompt) == "" {
+		return fmt.Errorf("bot.default_prompt is required")
+	}
+	return nil
+}
+
+func (c *VoiceConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(c.TTS.Endpoint) == "" {
+		return fmt.Errorf("voice.tts.endpoint is required when voice is enabled")
+	}
+	if c.TTS.TimeoutMs <= 0 {
+		return fmt.Errorf("voice.tts.timeout_ms must be positive")
+	}
+	if c.Audio.SampleRate <= 0 {
+		return fmt.Errorf("voice.audio.sample_rate must be positive")
+	}
+	if c.Audio.Channels <= 0 {
+		return fmt.Errorf("voice.audio.channels must be positive")
+	}
+	if c.Audio.VADSilenceMs < 0 || c.Audio.VADSpeechMinMs < 0 || c.Audio.VADMaxDurationMs < 0 {
+		return fmt.Errorf("voice audio VAD timings cannot be negative")
+	}
+	if c.Audio.VADAmplitudeThreshold < 0 || c.Audio.VADAmplitudeThreshold > 1 {
+		return fmt.Errorf("voice.audio.vad_amplitude_threshold must be between 0 and 1")
+	}
+	if strings.TrimSpace(c.STT.SocketPath) == "" {
+		return fmt.Errorf("voice.stt.socket_path is required when voice is enabled")
+	}
 	return nil
 }
 

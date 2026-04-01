@@ -12,7 +12,6 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
-	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/voice"
@@ -27,23 +26,15 @@ type VoiceCommands struct {
 }
 
 // NewVoiceCommands creates a new VoiceCommands instance.
-func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client) *VoiceCommands {
-	// Get default voice prompt from config
-	cfg, err := config.Load(config.DefaultConfigPath)
-	if err != nil {
-		logger.Warn("Failed to load config for voice prompt, using fallback", zap.Error(err))
-		return &VoiceCommands{
-			repo:         repo,
-			orchestrator: orchestrator,
-			client:       client,
-			voicePrompt:  "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues.",
-		}
+func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client, defaultVoicePrompt string) *VoiceCommands {
+	if defaultVoicePrompt == "" {
+		defaultVoicePrompt = "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues."
 	}
 	return &VoiceCommands{
 		repo:         repo,
 		orchestrator: orchestrator,
 		client:       client,
-		voicePrompt:  cfg.Voice.VoiceSystemPrompt,
+		voicePrompt:  defaultVoicePrompt,
 	}
 }
 
@@ -217,6 +208,11 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 	guildIDStr := guildID.String()
+	ctx := context.Background()
+	if !vc.repo.GetVoiceEnabled(ctx, guildIDStr) {
+		vc.respondError(e, "Voice chat is disabled for this server. Use `/voice enable` first.")
+		return
+	}
 
 	// Check if already connected
 	if vc.orchestrator.IsConnected(guildIDStr) {

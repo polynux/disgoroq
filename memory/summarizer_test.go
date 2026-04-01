@@ -246,10 +246,13 @@ func TestSummarizer_buildPrompt(t *testing.T) {
 
 		prompt := summarizer.buildPrompt(request)
 
-		assert.Contains(t, prompt, "Summarize the following conversation")
-		assert.Contains(t, prompt, "Main topics discussed")
+		assert.Contains(t, prompt, "Create a brief summary of this conversation")
+		assert.Contains(t, prompt, "IMPORTANT RULES:")
+		assert.Contains(t, prompt, "Focus on: topics, user interests, key info, communication style")
+		assert.Contains(t, prompt, "CONVERSATION:")
 		assert.Contains(t, prompt, "Alice: I love Go programming!")
 		assert.Contains(t, prompt, "Bob: Me too! It's so efficient.")
+		assert.Contains(t, prompt, "YOUR SUMMARY (direct output, no prefix):")
 	})
 
 	t.Run("PromptWithPreviousSummary", func(t *testing.T) {
@@ -671,15 +674,15 @@ func TestSummarizer_PromptConstruction(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, result.Success)
 
-	assert.Contains(t, capturedPrompt, "Summarize the following conversation")
-	assert.Contains(t, capturedPrompt, "Main topics discussed")
-	assert.Contains(t, capturedPrompt, "User's interests and preferences")
+	assert.Contains(t, capturedPrompt, "Create a brief summary of this conversation")
+	assert.Contains(t, capturedPrompt, "IMPORTANT RULES:")
+	assert.Contains(t, capturedPrompt, "Focus on: topics, user interests, key info, communication style")
 	assert.Contains(t, capturedPrompt, "PREVIOUS CONTEXT: User previously asked about Python basics")
 	assert.Contains(t, capturedPrompt, "NEW MESSAGES:")
 	assert.Contains(t, capturedPrompt, "User123: Now I'm curious about Go!")
 	assert.Contains(t, capturedPrompt, "GoExpert: Go excels at concurrency")
 	assert.Contains(t, capturedPrompt, "CONVERSATION:")
-	assert.Contains(t, capturedPrompt, "SUMMARY:")
+	assert.Contains(t, capturedPrompt, "YOUR SUMMARY (direct output, no prefix):")
 
 	mockAI.AssertExpectations(t)
 }

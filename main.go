@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -51,11 +50,13 @@ func init() {
 }
 
 func main() {
+	logger.InitFromConfig(&config.DefaultConfig().Logging)
+
 	// Load .env.local file if it exists
 	if err := godotenv.Load(".env.local"); err != nil {
 		// Try .env as fallback
 		if err := godotenv.Load(".env"); err != nil {
-			log.Println("No .env.local or .env file found, using environment variables")
+			logger.Info("No .env.local or .env file found, using environment variables")
 		}
 	}
 
@@ -63,13 +64,12 @@ func main() {
 	var configErr error
 	cfg, configErr = config.Load(config.DefaultConfigPath)
 	if configErr != nil {
-		log.Fatalf("Failed to load configuration: %v", configErr)
+		logger.Fatal("Failed to load configuration", zap.Error(configErr))
 	}
-
-	logger.Info("Starting DisgoroQ bot")
 
 	// Initialize logger with configuration
 	logger.InitFromConfig(&cfg.Logging)
+	logger.Info("Starting DisgoroQ bot")
 
 	// Create slog adapter for disgo
 	slogLogger := logger.NewSlogLogger()
@@ -98,6 +98,7 @@ func main() {
 	}
 
 	// Initialize database
+	utils.SetLogger(logger.Log)
 	utils.InitializeDB(&cfg.Database, local)
 	defer func() {
 		logger.Info("Closing database")
@@ -224,6 +225,8 @@ func main() {
 	if cfg.Voice.Enabled {
 		sttClient := voicepkg.NewWhisperClient(voicepkg.WhisperConfig{
 			SocketPath: cfg.Voice.STT.SocketPath,
+			Model:      cfg.Voice.STT.Model,
+			Language:   cfg.Voice.STT.Language,
 		})
 		ttsClient := voicepkg.NewTTSHTTPClient(voicepkg.TTSHTTPConfig{
 			Endpoint:     cfg.Voice.TTS.Endpoint,
@@ -260,8 +263,11 @@ func main() {
 		logger.Info("Voice chat disabled by configuration")
 	}
 
-	registry := commands.NewRegistry(client, local)
-	commands.RegisterAll(registry, repo, memoryService, cfg.Bot.DefaultPrompt, voiceOrchestrator, client)
+	registry, err := commands.NewRegistry(client, local, cfg.Discord.DevGuildIDs)
+	if err != nil {
+		logger.Fatal("Invalid command registry configuration", zap.Error(err))
+	}
+	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		registry.HandleCommand(e)
 	}))

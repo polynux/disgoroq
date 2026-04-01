@@ -47,6 +47,7 @@ type Orchestrator struct {
 
 // Repository defines the interface for voice-related database operations.
 type Repository interface {
+	GetVoiceEnabled(ctx context.Context, guildID string) bool
 	GetTemperature(ctx context.Context, guildID string) float32
 	GetPrompt(ctx context.Context, guildID string) (string, bool)
 	GetVoicePrompt(ctx context.Context, guildID string) (string, bool)
@@ -72,6 +73,9 @@ type VoiceConversation struct {
 
 	// SilenceCheckCancel cancels the silence checking goroutine
 	SilenceCheckCancel context.CancelFunc
+
+	mu         sync.Mutex
+	processing bool
 }
 
 // OrchestratorConfig contains configuration for the orchestrator.
@@ -96,7 +100,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	}
 
 	o := &Orchestrator{
-		manager:           NewManager(cfg.Client),
+		manager:           NewManager(cfg.Client, cfg.VoiceConfig),
 		sttClient:         cfg.STTClient,
 		ttsClient:         cfg.TTSClient,
 		aiService:         cfg.AIService,
@@ -120,6 +124,10 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 
 // JoinVoice connects to a voice channel and starts listening.
 func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textChannelID string) error {
+	if o.repo != nil && !o.repo.GetVoiceEnabled(ctx, guildID) {
+		return ErrVoiceDisabled
+	}
+
 	// Check if already connected
 	if o.manager.IsConnected(guildID) {
 		return ErrAlreadyConnected
@@ -150,7 +158,7 @@ func (o *Orchestrator) JoinVoice(ctx context.Context, guildID, channelID, textCh
 		AudioBuffer: NewAudioBufferManager(
 			o.config.Audio.SampleRate,
 			o.config.Audio.Channels,
-			20, // 20ms frames
+			max(1, int(o.config.Audio.FrameDuration()/time.Millisecond)),
 		),
 		LastActivity: time.Now(),
 		History:      NewVoiceHistoryManager(maxHistoryLength),
@@ -411,6 +419,11 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 		zap.Int("text_len", len(text)),
 		zap.Bool("static_mode", o.config.TTS.StaticMode))
 
+	ttsText := o.limitTTSText(text)
+	if ttsText == "" {
+		return nil
+	}
+
 	// Update state to speaking
 	o.transitionState(guildID, StateSpeaking)
 	defer func() {
@@ -458,20 +471,21 @@ func (o *Orchestrator) Speak(ctx context.Context, guildID, text string) error {
 
 	// Use streaming mode for lower latency, or fallback to static mode
 	if !o.config.TTS.StaticMode {
-		return o.speakStreaming(ctx, guildID, text)
+		return o.speakStreaming(ctx, guildID, text, ttsText)
 	}
-	return o.speakStatic(ctx, guildID, text)
+	return o.speakStatic(ctx, guildID, text, ttsText)
 }
 
 // speakStreaming generates audio with real-time streaming for lower latency.
 // First audio starts playing in ~400-800ms instead of waiting for complete generation.
-func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string) error {
+func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text, ttsText string) error {
 	logger.Info("Using streaming TTS mode",
 		zap.String("guild_id", guildID),
 		zap.Int("text_len", len(text)))
 
 	req := &TTSRequest{
-		Text: text,
+		Text:    ttsText,
+		VoiceID: o.config.TTS.DefaultVoice,
 	}
 
 	// Use a fresh context with timeout for TTS
@@ -486,7 +500,7 @@ func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string)
 			zap.String("guild_id", guildID))
 
 		// Fallback to static mode
-		return o.speakStatic(ctx, guildID, text)
+		return o.speakStatic(ctx, guildID, text, ttsText)
 	}
 
 	logger.Info("TTS streaming started, playing audio",
@@ -499,7 +513,7 @@ func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string)
 			zap.String("guild_id", guildID))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		o.sendTTSFallback(guildID, text)
 		return fmt.Errorf("audio playback failed: %w", err)
 	}
 
@@ -508,13 +522,14 @@ func (o *Orchestrator) speakStreaming(ctx context.Context, guildID, text string)
 }
 
 // speakStatic generates complete audio before playing (legacy mode).
-func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) error {
+func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text, ttsText string) error {
 	logger.Info("Using static TTS mode",
 		zap.String("guild_id", guildID),
 		zap.Int("text_len", len(text)))
 
 	req := &TTSRequest{
-		Text: text,
+		Text:    ttsText,
+		VoiceID: o.config.TTS.DefaultVoice,
 	}
 
 	// Use a fresh context with timeout for TTS
@@ -529,7 +544,7 @@ func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) er
 			zap.String("text", truncateText(text, 50)))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		o.sendTTSFallback(guildID, text)
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
 
@@ -545,7 +560,7 @@ func (o *Orchestrator) speakStatic(ctx context.Context, guildID, text string) er
 			zap.String("guild_id", guildID))
 
 		// Fallback to text
-		_ = o.manager.SendTextFallback(context.Background(), guildID, text)
+		o.sendTTSFallback(guildID, text)
 		return fmt.Errorf("audio playback failed: %w", err)
 	}
 
@@ -562,6 +577,9 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 	if !exists {
 		return
 	}
+
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
 
 	// Check if we're in idle timeout period
 	if conv.StateManager.IsInIdle() {
@@ -581,8 +599,10 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 		return
 	}
 
-	// Track last speaker
-	conv.LastSpeakerID = userID
+	// Track last speaker when Discord has resolved the SSRC mapping.
+	if userID != "" {
+		conv.LastSpeakerID = userID
+	}
 
 	// Add audio frame to buffer
 	conv.AudioBuffer.AddFrame(audio)
@@ -632,7 +652,7 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 			zap.String("guild_id", guildID),
 			zap.Int("buffer_ms", bufferMs),
 			zap.Int("speech_ms", speechMs))
-		go o.processBufferedAudio(guildID, userID, conv)
+		go o.processBufferedAudio(guildID, o.resolveSpeakerID(conv, userID), conv)
 		return
 	}
 
@@ -645,7 +665,7 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 				zap.Int("buffer_ms", bufferMs),
 				zap.Int("speech_ms", speechMs),
 				zap.Int("silence_ms", silenceMs))
-			go o.processBufferedAudio(guildID, userID, conv)
+			go o.processBufferedAudio(guildID, o.resolveSpeakerID(conv, userID), conv)
 		} else if hasSpeech && speechMs < speechMinMs {
 			// Very short speech - clear buffer, likely noise
 			logger.Debug("Discarding short speech segment (likely noise)",
@@ -659,8 +679,21 @@ func (o *Orchestrator) handleAudio(guildID, userID string, audio []byte) {
 
 // processBufferedAudio processes accumulated audio through STT and AI.
 func (o *Orchestrator) processBufferedAudio(guildID, userID string, conv *VoiceConversation) {
+	if !o.beginProcessing(conv) {
+		logger.Debug("Skipping duplicate buffered audio processing",
+			zap.String("guild_id", guildID))
+		return
+	}
+	defer o.endProcessing(conv)
+
+	conv.mu.Lock()
 	// Get audio from buffer with silence trimmed (prevents Whisper hallucinations)
 	audio := conv.AudioBuffer.GetTrimmedAudio()
+	if userID == "" {
+		userID = conv.LastSpeakerID
+	}
+	conv.mu.Unlock()
+
 	if len(audio) == 0 {
 		logger.Debug("No audio in buffer to process (after trimming silence)", zap.String("guild_id", guildID))
 		return
@@ -896,12 +929,13 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			conv.mu.Lock()
+
 			// Check if we're in listening state
-			o.sessionsMu.RLock()
 			state := conv.State
-			o.sessionsMu.RUnlock()
 
 			if state != StateListening {
+				conv.mu.Unlock()
 				continue
 			}
 
@@ -909,6 +943,7 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 			if conv.StateManager.IsInIdle() {
 				if !conv.StateManager.CanProcess() {
 					// Still in idle timeout, skip processing
+					conv.mu.Unlock()
 					continue
 				}
 				// Idle timeout passed - exit idle and check for buffered audio
@@ -917,15 +952,20 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 					// Check if idle buffer has speech
 					conv.AudioBuffer.PrependAudio(idleBuffer)
 					if conv.AudioBuffer.HasSpeech() && conv.AudioBuffer.SpeechDuration() >= speechMinMs {
+						speakerID := conv.LastSpeakerID
+						conv.mu.Unlock()
 						logger.Info("Processing idle-buffered audio after idle timeout",
 							zap.String("guild_id", guildID),
 							zap.Int("buffer_ms", conv.AudioBuffer.Duration()),
 							zap.Int("speech_ms", conv.AudioBuffer.SpeechDuration()))
-						go o.processBufferedAudio(guildID, "", conv)
+						go o.processBufferedAudio(guildID, speakerID, conv)
 					} else {
 						// No speech in idle buffer, clear it
 						conv.AudioBuffer.Clear()
+						conv.mu.Unlock()
 					}
+				} else {
+					conv.mu.Unlock()
 				}
 				continue
 			}
@@ -934,6 +974,7 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 			timeSinceLastAudio := conv.AudioBuffer.TimeSinceLastAudio()
 			if timeSinceLastAudio == 0 {
 				// No audio received yet
+				conv.mu.Unlock()
 				continue
 			}
 
@@ -944,6 +985,8 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 
 				if hasSpeech && speechMs >= speechMinMs {
 					bufferMs := conv.AudioBuffer.Duration()
+					speakerID := conv.LastSpeakerID
+					conv.mu.Unlock()
 
 					logger.Info("Silence detected (time-based), processing audio",
 						zap.String("guild_id", guildID),
@@ -951,7 +994,7 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 						zap.Int("speech_ms", speechMs),
 						zap.Duration("silence_duration", timeSinceLastAudio))
 
-					go o.processBufferedAudio(guildID, "", conv)
+					go o.processBufferedAudio(guildID, speakerID, conv)
 				} else if hasSpeech && speechMs < speechMinMs {
 					// Very short speech - clear buffer, likely noise
 					logger.Debug("Discarding short speech segment (likely noise)",
@@ -959,13 +1002,78 @@ func (o *Orchestrator) silenceChecker(ctx context.Context, guildID string, conv 
 						zap.Int("speech_ms", speechMs),
 						zap.Int("min_speech_ms", speechMinMs))
 					conv.AudioBuffer.Clear()
+					conv.mu.Unlock()
 				} else {
 					// No speech - just clear
 					conv.AudioBuffer.Clear()
+					conv.mu.Unlock()
 				}
+			} else {
+				conv.mu.Unlock()
 			}
 		}
 	}
+}
+
+func (o *Orchestrator) resolveSpeakerID(conv *VoiceConversation, userID string) string {
+	if userID != "" {
+		return userID
+	}
+	return conv.LastSpeakerID
+}
+
+func (o *Orchestrator) beginProcessing(conv *VoiceConversation) bool {
+	conv.mu.Lock()
+	defer conv.mu.Unlock()
+	if conv.processing {
+		return false
+	}
+	conv.processing = true
+	return true
+}
+
+func (o *Orchestrator) endProcessing(conv *VoiceConversation) {
+	conv.mu.Lock()
+	conv.processing = false
+	conv.mu.Unlock()
+}
+
+func (o *Orchestrator) sendTTSFallback(guildID, text string) {
+	if !o.config.TTS.FallbackToText {
+		return
+	}
+	if err := o.manager.SendTextFallback(context.Background(), guildID, text); err != nil {
+		logger.Warn("Failed to send TTS text fallback",
+			zap.String("guild_id", guildID),
+			zap.Error(err))
+	}
+}
+
+func (o *Orchestrator) limitTTSText(text string) string {
+	limit := o.config.TTS.MaxTextLength
+	if limit <= 0 || len(text) <= limit {
+		return text
+	}
+
+	trimmed := strings.TrimSpace(text[:limit])
+	lastSpace := strings.LastIndex(trimmed, " ")
+	if lastSpace >= limit/2 {
+		trimmed = strings.TrimSpace(trimmed[:lastSpace])
+	}
+
+	logger.Debug("Truncated text for TTS request",
+		zap.Int("original_len", len(text)),
+		zap.Int("truncated_len", len(trimmed)),
+		zap.Int("max_len", limit))
+
+	return trimmed
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // Close shuts down the orchestrator.

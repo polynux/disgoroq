@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/ollama/ollama/api"
 )
@@ -11,11 +12,12 @@ type OllamaProvider struct {
 	client *api.Client
 }
 
-func NewOllamaProvider() (*OllamaProvider, error) {
-	client, err := api.ClientFromEnvironment()
+func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
+	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Ollama client: %w", err)
 	}
+	client := api.NewClient(parsedURL, nil)
 	return &OllamaProvider{
 		client: client,
 	}, nil

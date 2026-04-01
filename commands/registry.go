@@ -2,30 +2,44 @@ package commands
 
 import (
 	stdcontext "context"
+	"fmt"
 
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
+	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
 
 type Registry struct {
-	client   *bot.Client
-	commands []discord.ApplicationCommandCreate
-	handlers map[string]func(e *events.ApplicationCommandInteractionCreate)
-	local    bool
+	client    *bot.Client
+	commands  []discord.ApplicationCommandCreate
+	handlers  map[string]func(e *events.ApplicationCommandInteractionCreate)
+	local     bool
+	devGuilds []snowflake.ID
 }
 
-func NewRegistry(client *bot.Client, local bool) *Registry {
-	return &Registry{
-		client:   client,
-		commands: make([]discord.ApplicationCommandCreate, 0),
-		handlers: make(map[string]func(e *events.ApplicationCommandInteractionCreate)),
-		local:    local,
+func NewRegistry(client *bot.Client, local bool, devGuildIDs []string) (*Registry, error) {
+	registry := &Registry{
+		client:    client,
+		commands:  make([]discord.ApplicationCommandCreate, 0),
+		handlers:  make(map[string]func(e *events.ApplicationCommandInteractionCreate)),
+		local:     local,
+		devGuilds: make([]snowflake.ID, 0, len(devGuildIDs)),
 	}
+
+	for _, guildID := range devGuildIDs {
+		parsed, err := snowflake.Parse(guildID)
+		if err != nil {
+			return nil, fmt.Errorf("invalid discord.dev_guild_ids entry %q: %w", guildID, err)
+		}
+		registry.devGuilds = append(registry.devGuilds, parsed)
+	}
+
+	return registry, nil
 }
 
 func (r *Registry) AddCommand(cmd discord.ApplicationCommandCreate, handler func(e *events.ApplicationCommandInteractionCreate)) {
@@ -43,6 +57,27 @@ func (r *Registry) AddCommand(cmd discord.ApplicationCommandCreate, handler func
 }
 
 func (r *Registry) Register(ctx stdcontext.Context) error {
+	if r.local {
+		if len(r.devGuilds) == 0 {
+			return fmt.Errorf("discord.dev_guild_ids must be configured when running in local mode")
+		}
+
+		for _, guildID := range r.devGuilds {
+			commands, err := r.client.Rest.SetGuildCommands(r.client.ID(), guildID, r.commands, rest.WithCtx(ctx))
+			if err != nil {
+				logger.Error("Error registering guild commands",
+					zap.Error(err),
+					zap.Int("count", len(r.commands)),
+					zap.String("guild_id", guildID.String()))
+				return err
+			}
+			logger.Info("Guild commands registered successfully",
+				zap.Int("count", len(commands)),
+				zap.String("guild_id", guildID.String()))
+		}
+		return nil
+	}
+
 	commands, err := r.client.Rest.SetGlobalCommands(r.client.ID(), r.commands, rest.WithCtx(ctx))
 	if err != nil {
 		logger.Error("Error registering commands", zap.Error(err), zap.Int("count", len(r.commands)))

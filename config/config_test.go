@@ -152,18 +152,18 @@ func TestValidation(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				Discord: DiscordConfig{Token: "test-token"},
+				Discord:  DiscordConfig{Token: "test-token", DevGuildIDs: []string{"123456789012345678"}},
 				Database: DatabaseConfig{URL: "http://localhost", Token: "test-token", Local: false},
 				AI: AIConfig{
-					Groq: GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
+					Groq:   GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
 					Ollama: OllamaConfig{Enabled: false},
 					Retry: RetryConfig{
-						MaxRetries:      2,
-						InitialDelay:    500 * time.Millisecond,
-						MaxDelay:        5 * time.Second,
-						BackoffFactor:   2.0,
-						InitialDelayMs:  500,
-						MaxDelayMs:      5000,
+						MaxRetries:     2,
+						InitialDelay:   500 * time.Millisecond,
+						MaxDelay:       5 * time.Second,
+						BackoffFactor:  2.0,
+						InitialDelayMs: 500,
+						MaxDelayMs:     5000,
 					},
 					MinResponseLength: 1,
 				},
@@ -176,10 +176,13 @@ func TestValidation(t *testing.T) {
 					SummaryInterval:        1 * time.Hour,
 					SummaryIntervalSeconds: 3600,
 					MaxContextMessages:     5,
-					MaxSummaryContext:       3,
+					MaxSummaryContext:      3,
 				},
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Voice:     VoiceConfig{},
 			},
 			wantErr: false,
 		},
@@ -194,7 +197,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "missing database URL when not local",
 			config: &Config{
-				Discord: DiscordConfig{Token: "test"},
+				Discord:  DiscordConfig{Token: "test"},
 				Database: DatabaseConfig{URL: "", Token: "", Local: false},
 			},
 			wantErr: true,
@@ -203,7 +206,7 @@ func TestValidation(t *testing.T) {
 		{
 			name: "missing groq api key",
 			config: &Config{
-				Discord: DiscordConfig{Token: "test"},
+				Discord:  DiscordConfig{Token: "test"},
 				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
 				AI: AIConfig{
 					Groq: GroqConfig{APIKey: ""},
@@ -215,16 +218,60 @@ func TestValidation(t *testing.T) {
 		{
 			name: "invalid log level",
 			config: &Config{
-				Discord: DiscordConfig{Token: "test"},
+				Discord:  DiscordConfig{Token: "test"},
 				Database: DatabaseConfig{Local: true},
 				AI: AIConfig{
-					Groq: GroqConfig{APIKey: "test", Model: "model", VisionModel: "vision"},
+					Groq:  GroqConfig{APIKey: "test", Model: "model", VisionModel: "vision"},
 					Retry: RetryConfig{InitialDelay: 1 * time.Millisecond, MaxDelay: 2 * time.Millisecond, BackoffFactor: 2.0},
 				},
 				Logging: LoggingConfig{Level: "invalid", Encoding: "json", DBLogLevel: "info"},
 			},
 			wantErr: true,
 			errMsg:  "logging.level must be one of",
+		},
+		{
+			name: "invalid dev guild ids",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test", DevGuildIDs: []string{""}},
+				Database: DatabaseConfig{Local: true},
+				AI: AIConfig{
+					Groq:  GroqConfig{APIKey: "test", Model: "model", VisionModel: "vision"},
+					Retry: RetryConfig{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, BackoffFactor: 2.0},
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello"},
+			},
+			wantErr: true,
+			errMsg:  "discord.dev_guild_ids cannot contain empty values",
+		},
+		{
+			name: "invalid voice amplitude threshold",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{Local: true},
+				AI: AIConfig{
+					Groq:  GroqConfig{APIKey: "test", Model: "model", VisionModel: "vision"},
+					Retry: RetryConfig{InitialDelay: time.Millisecond, MaxDelay: 2 * time.Millisecond, BackoffFactor: 2.0},
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Voice: VoiceConfig{
+					Enabled: true,
+					TTS:     TTSConfig{Endpoint: "http://localhost:8880", TimeoutMs: 1000},
+					STT:     STTConfig{SocketPath: "/tmp/whisper.sock"},
+					Audio:   AudioConfig{SampleRate: 48000, Channels: 2, VADAmplitudeThreshold: 1.5},
+				},
+			},
+			wantErr: true,
+			errMsg:  "voice.audio.vad_amplitude_threshold must be between 0 and 1",
 		},
 	}
 

@@ -12,21 +12,27 @@ import (
 
 // RetryWrapper wraps a Provider with retry logic including exponential backoff
 type RetryWrapper struct {
-	provider    Provider
-	config      RetryConfig
-	validator   *ResponseValidator
-	chatModel   string // Provider-specific chat model
-	visionModel string // Provider-specific vision model
+	provider          Provider
+	config            RetryConfig
+	validator         *ResponseValidator
+	minResponseLength int
+	chatModel         string // Provider-specific chat model
+	visionModel       string // Provider-specific vision model
 }
 
 // NewRetryWrapper creates a new retry wrapper around a provider
-func NewRetryWrapper(provider Provider, config RetryConfig, chatModel, visionModel string) *RetryWrapper {
+func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength int, chatModel, visionModel string) *RetryWrapper {
+	if minResponseLength < 1 {
+		minResponseLength = 1
+	}
+
 	return &RetryWrapper{
-		provider:    provider,
-		config:      config,
-		validator:   NewResponseValidator(WithMinLength(1)),
-		chatModel:   chatModel,
-		visionModel: visionModel,
+		provider:          provider,
+		config:            config,
+		validator:         NewResponseValidator(WithMinLength(minResponseLength)),
+		minResponseLength: minResponseLength,
+		chatModel:         chatModel,
+		visionModel:       visionModel,
 	}
 }
 

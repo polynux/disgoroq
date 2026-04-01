@@ -53,12 +53,19 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		return
 	}
 
+	if m.GuildID != nil {
+		_ = h.repo.SetChannelLastMessage(context.Background(), m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
+	}
+
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
 	if h.memoryService != nil && m.GuildID != nil {
 		go func() {
 			ctx := context.Background()
 			if err := h.memoryService.BufferMessage(ctx, m.Author.ID.String(), m.GuildID.String(), m.Content); err != nil {
-				fmt.Printf("[Memory] Failed to buffer message for user %s: %v\n", m.Author.ID, err)
+				logger.Warn("Failed to buffer message for memory",
+					zap.String("user_id", m.Author.ID.String()),
+					zap.String("guild_id", m.GuildID.String()),
+					zap.Error(err))
 			}
 		}()
 	}
@@ -68,7 +75,9 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
 	if err != nil {
-		fmt.Println("error getting bot member,", err)
+		logger.Error("Failed to get bot member",
+			zap.String("guild_id", m.GuildID.String()),
+			zap.Error(err))
 		return
 	}
 
@@ -105,8 +114,6 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	_ = h.repo.SetLastMessage(ctx, m.GuildID.String(), time.Now().Unix())
 
-	h.repo.SetChannelLastMessage(ctx, m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
-
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
 	messageCount := h.repo.GetMessagesCount(ctx, m.GuildID.String())
@@ -140,14 +147,16 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 			}
 			// Log to console only in debug mode
 			if logger.IsDebugMode() {
-				fmt.Printf("\n🧠 [MEMORY] Using %d summaries for user %s (confidence: %.2f)\n", len(memoryCtx.Summaries), m.Author.Username, memoryCtx.ConfidenceScore)
-				for i, summary := range memoryCtx.Summaries {
-					fmt.Printf("   Summary %d: %.60s...\n", i+1, summary.Content)
-				}
-				fmt.Println()
+				logger.Debug("Using memory summaries for response",
+					zap.String("user_id", m.Author.ID.String()),
+					zap.String("guild_id", m.GuildID.String()),
+					zap.Int("summary_count", len(memoryCtx.Summaries)),
+					zap.Float64("confidence", memoryCtx.ConfidenceScore))
 			}
 		} else if logger.IsDebugMode() {
-			fmt.Printf("📭 [MEMORY] No summaries available for user %s\n", m.Author.Username)
+			logger.Debug("No memory summaries available for response",
+				zap.String("user_id", m.Author.ID.String()),
+				zap.String("guild_id", m.GuildID.String()))
 		}
 	}
 

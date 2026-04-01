@@ -366,3 +366,39 @@ func TestRepository_GetFartingFridayChannel_Set(t *testing.T) {
 		t.Errorf("Expected channel ID 'channel-456', got '%s'", channelID)
 	}
 }
+
+func TestRepository_GetReengageEnabled_DefaultFalse(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	enabled := repo.GetReengageEnabled(ctx, "test-guild", "channel-123")
+	if enabled {
+		t.Errorf("Expected reengage to default to disabled")
+	}
+}
+
+func TestRepository_GetReengageChance_NotConfigured(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	chance, ok := repo.GetReengageChance(ctx, "test-guild", "channel-123")
+	if ok {
+		t.Errorf("Expected reengage chance to report not configured")
+	}
+	if chance != 0 {
+		t.Errorf("Expected zero chance when not configured, got %f", chance)
+	}
+}
+
+func TestRepository_GetReengageThreshold_NotConfigured(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	threshold, ok := repo.GetReengageThreshold(ctx, "test-guild", "channel-123")
+	if ok {
+		t.Errorf("Expected reengage threshold to report not configured")
+	}
+	if threshold != 0 {
+		t.Errorf("Expected zero threshold when not configured, got %d", threshold)
+	}
+}
