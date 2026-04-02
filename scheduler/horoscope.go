@@ -39,15 +39,7 @@ func (s *Scheduler) SendHoroscope() {
 
 	// Append custom emojis to system prompt if enabled
 	if includeEmojis && s.emojiManager != nil {
-		allEmojis := s.emojiManager.GetAllEmojis()
-		// Limit to 50 emojis to avoid prompt bloat
-		if len(allEmojis) > 50 {
-			allEmojis = allEmojis[:50]
-		}
-		if len(allEmojis) > 0 {
-			emojiList := s.emojiManager.FormatEmojiList(allEmojis)
-			instructions = instructions + "\n\nTu peux aussi utiliser ces emojis personnalisés: " + emojiList
-		}
+		instructions += s.emojiManager.AllGuildEmojiPrompt(50)
 	}
 
 	response, err := s.aiservice.Chat(stdcontext.Background(), &ai.ChatRequest{

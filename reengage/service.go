@@ -186,6 +186,9 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 	} else {
 		systemPrompt = s.getDefaultPrompt(botNick) + reengageMessage
 	}
+	if s.emojiManager != nil {
+		systemPrompt += s.emojiManager.AllGuildEmojiPrompt(50)
+	}
 
 	if s.memoryService != nil {
 		lastMessage := messages[len(messages)-1]

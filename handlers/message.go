@@ -174,6 +174,9 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	if prompt, ok := h.repo.GetPrompt(ctx, m.GuildID.String()); ok {
 		instructions = prompt
 	}
+	if h.emojiManager != nil {
+		instructions += h.emojiManager.AllGuildEmojiPrompt(50)
+	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 

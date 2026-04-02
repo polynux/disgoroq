@@ -145,6 +145,24 @@ func (m *Manager) FormatEmojiList(emojis []Emoji) string {
 	return sb.String()
 }
 
+// AllGuildEmojiPrompt returns a capped, prompt-ready description of custom emojis
+// available across all guilds the bot can access.
+func (m *Manager) AllGuildEmojiPrompt(limit int) string {
+	if m == nil {
+		return ""
+	}
+
+	emojis := m.GetAllEmojis()
+	if limit > 0 && len(emojis) > limit {
+		emojis = emojis[:limit]
+	}
+	if len(emojis) == 0 {
+		return ""
+	}
+
+	return "\n\nTu peux aussi utiliser ces emojis personnalisés: " + m.FormatEmojiList(emojis)
+}
+
 // GetAllEmojis returns emojis from all guilds the bot is in
 func (m *Manager) GetAllEmojis() []Emoji {
 	if m.client == nil {
