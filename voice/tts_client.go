@@ -45,7 +45,9 @@ type TTSHTTPConfig struct {
 
 // TTSGenerateRequest represents a TTS generation request.
 type TTSGenerateRequest struct {
+	Model          string                `json:"model,omitempty"`
 	Input          string                `json:"input"`
+	VoiceID        string                `json:"voice_id,omitempty"`
 	ResponseFormat string                `json:"response_format,omitempty"`
 	Speed          float64               `json:"speed,omitempty"`
 	Language       string                `json:"language,omitempty"`
@@ -131,7 +133,9 @@ func (c *TTSHTTPClient) Stream(ctx context.Context, req *TTSRequest) (io.ReadClo
 
 	// Build TTS request
 	ttsReq := TTSGenerateRequest{
+		Model:          c.model,
 		Input:          req.Text,
+		VoiceID:        firstNonEmpty(req.VoiceID, c.defaultVoice),
 		ResponseFormat: "wav",
 		Speed:          1.0,
 		Language:       "French",
@@ -196,7 +200,9 @@ func (c *TTSHTTPClient) StreamStreaming(ctx context.Context, req *TTSRequest) (<
 
 	// Build TTS request with streaming enabled
 	ttsReq := TTSGenerateRequest{
+		Model:          c.model,
 		Input:          req.Text,
+		VoiceID:        firstNonEmpty(req.VoiceID, c.defaultVoice),
 		ResponseFormat: "pcm", // PCM is best for streaming (no encoding overhead)
 		Speed:          1.0,
 		Language:       "French",

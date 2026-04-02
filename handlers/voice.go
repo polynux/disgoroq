@@ -57,6 +57,14 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 	dbCtx, dbCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer dbCancel()
 
+	// Check whether the user left or moved out of our active channel.
+	// This must run regardless of autojoin settings so manual sessions also auto-leave.
+	h.maybeLeaveEmptyChannel(e)
+
+	if e.Member.User.Bot {
+		return
+	}
+
 	// Check if auto-join is enabled for this guild
 	autoJoin := h.repo.GetVoiceAutoJoin(dbCtx, guildID)
 	if !autoJoin {
@@ -69,8 +77,11 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 		return
 	}
 
-	// Check if this is a join event to the auto-join channel
-	if e.VoiceState.ChannelID != nil && e.VoiceState.ChannelID.String() == autoJoinChannel {
+	oldChannelID := channelIDStr(e.OldVoiceState.ChannelID)
+	newChannelID := channelIDStr(e.VoiceState.ChannelID)
+
+	// Check if this is an actual join/move into the configured auto-join channel.
+	if e.VoiceState.ChannelID != nil && newChannelID == autoJoinChannel && oldChannelID != autoJoinChannel {
 		// Check if we're not already connected
 		if !h.orchestrator.IsConnected(guildID) {
 			// Check if voice is enabled
@@ -100,8 +111,6 @@ func (h *VoiceHandler) HandleVoiceStateUpdate(e *events.GuildVoiceStateUpdate) {
 		}
 	}
 
-	// Check whether the user left or moved out of our active channel.
-	h.maybeLeaveEmptyChannel(e)
 }
 
 // forwardToVoiceConnection forwards voice state updates to the voice manager.
@@ -175,6 +184,9 @@ func (h *VoiceHandler) maybeLeaveEmptyChannel(e *events.GuildVoiceStateUpdate) {
 			continue
 		}
 		if state.UserID == h.client.ID() {
+			continue
+		}
+		if member, ok := h.client.Caches.Member(guildID, state.UserID); ok && member.User.Bot {
 			continue
 		}
 		humansRemaining++
