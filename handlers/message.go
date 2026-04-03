@@ -123,7 +123,10 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		return
 	}
 
-	processedMessage, err := h.contextBuilder.BuildContext(ctx, messages, *m.GuildID, client.ID())
+	buildCtx, buildCancel := appcontext.AI()
+	defer buildCancel()
+
+	processedMessage, err := h.contextBuilder.BuildContext(buildCtx, messages, *m.GuildID, client.ID())
 	if err != nil {
 		logger.Error("Error building context", zap.Error(err))
 		return
@@ -188,7 +191,10 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		zap.Int("message_count", len(processedMessage.Messages)),
 		zap.Int("image_count", len(processedMessage.Images)))
 
-	response, err := h.aiservice.Chat(ctx, &ai.ChatRequest{
+	chatCtx, chatCancel := appcontext.AI()
+	defer chatCancel()
+
+	response, err := h.aiservice.Chat(chatCtx, &ai.ChatRequest{
 		SystemPrompt: instructions,
 		Messages:     processedMessage.Messages,
 		Images:       processedMessage.Images,
