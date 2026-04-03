@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 
 	"github.com/ollama/ollama/api"
@@ -17,7 +18,7 @@ func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Ollama client: %w", err)
 	}
-	client := api.NewClient(parsedURL, nil)
+	client := api.NewClient(parsedURL, &http.Client{})
 	return &OllamaProvider{
 		client: client,
 	}, nil
