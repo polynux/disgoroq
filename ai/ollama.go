@@ -1,7 +1,11 @@
 package ai
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,7 +16,9 @@ import (
 )
 
 type OllamaProvider struct {
-	client *api.Client
+	client     *api.Client
+	baseURL    *url.URL
+	httpClient *http.Client
 }
 
 func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
@@ -20,9 +26,12 @@ func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating Ollama client: %w", err)
 	}
-	client := api.NewClient(parsedURL, &http.Client{})
+	httpClient := &http.Client{}
+	client := api.NewClient(parsedURL, httpClient)
 	return &OllamaProvider{
-		client: client,
+		client:     client,
+		baseURL:    parsedURL,
+		httpClient: httpClient,
 	}, nil
 }
 
@@ -88,10 +97,17 @@ func (o *OllamaProvider) Vision(ctx context.Context, req *VisionRequest) (*Visio
 }
 
 func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []api.Message, maxTokens int, temperature float32) (*ChatResponse, error) {
-	chatReq := &api.ChatRequest{
+	chatReq := struct {
+		Model    string         `json:"model"`
+		Messages []api.Message  `json:"messages"`
+		Stream   *bool          `json:"stream,omitempty"`
+		Think    bool           `json:"think"`
+		Options  map[string]any `json:"options,omitempty"`
+	}{
 		Model:    model,
 		Messages: messages,
 		Stream:   new(bool),
+		Think:    false,
 		Options: map[string]any{
 			"temperature":   temperature,
 			"repeat_last_n": -1,
@@ -102,11 +118,53 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 		chatReq.Options["num_predict"] = maxTokens
 	}
 
+	body, err := json.Marshal(chatReq)
+	if err != nil {
+		return nil, err
+	}
+
+	requestURL := o.baseURL.JoinPath("/api/chat")
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/x-ndjson")
+
+	httpResp, err := o.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+
 	var responseBuilder strings.Builder
 	responseModel := model
 	finishReason := "stop"
 	var tokensUsed int
-	err := o.client.Chat(ctx, chatReq, func(resp api.ChatResponse) error {
+
+	scanner := bufio.NewScanner(httpResp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		var errorResponse struct {
+			Error string `json:"error,omitempty"`
+		}
+		if err := json.Unmarshal(line, &errorResponse); err != nil {
+			return nil, fmt.Errorf("unmarshal Ollama response: %w", err)
+		}
+		if errorResponse.Error != "" {
+			return nil, errors.New(errorResponse.Error)
+		}
+		if httpResp.StatusCode >= http.StatusBadRequest {
+			return nil, fmt.Errorf("ollama chat failed: %s", httpResp.Status)
+		}
+
+		var resp api.ChatResponse
+		if err := json.Unmarshal(line, &resp); err != nil {
+			return nil, fmt.Errorf("unmarshal Ollama chat response: %w", err)
+		}
+
 		if resp.Message.Content != "" {
 			responseBuilder.WriteString(resp.Message.Content)
 		}
@@ -117,9 +175,8 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 			finishReason = resp.DoneReason
 		}
 		tokensUsed = resp.EvalCount + resp.PromptEvalCount
-		return nil
-	})
-	if err != nil {
+	}
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 

@@ -33,6 +33,7 @@ func TestOllamaChatAggregatesChunkedResponses(t *testing.T) {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `"num_predict":0`)
+		assert.Contains(t, string(body), `"think":false`)
 
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, err = io.WriteString(w, "{\"model\":\"dolphin3\",\"message\":{\"role\":\"assistant\",\"content\":\"hello \"},\"done\":false}\n")
@@ -64,6 +65,7 @@ func TestOllamaChatIncludesNumPredictWhenRequested(t *testing.T) {
 		body, err := io.ReadAll(r.Body)
 		require.NoError(t, err)
 		assert.True(t, strings.Contains(string(body), `"num_predict":128`))
+		assert.Contains(t, string(body), `"think":false`)
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		_, err = io.WriteString(w, "{\"model\":\"dolphin3\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"done\":true,\"done_reason\":\"stop\"}\n")
 		require.NoError(t, err)
@@ -98,6 +100,7 @@ func TestOllamaVisionSendsImageData(t *testing.T) {
 	type chatRequest struct {
 		Model    string        `json:"model"`
 		Messages []chatMessage `json:"messages"`
+		Think    bool          `json:"think"`
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,6 +115,7 @@ func TestOllamaVisionSendsImageData(t *testing.T) {
 
 		require.Len(t, req.Messages, 1)
 		assert.Equal(t, "llava", req.Model)
+		assert.False(t, req.Think)
 		assert.Equal(t, "user", req.Messages[0].Role)
 		assert.Equal(t, "describe this image", req.Messages[0].Content)
 		require.Len(t, req.Messages[0].Images, 1)
