@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/ollama/ollama/api"
 )
@@ -57,16 +58,28 @@ func (o *OllamaProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		Stream:   new(bool),
 		Options: map[string]any{
 			"temperature":   req.Temperature,
-			"num_predict":   req.MaxTokens,
 			"repeat_last_n": -1,
 			"top_k":         60,
 		},
 	}
+	if req.MaxTokens > 0 {
+		chatReq.Options["num_predict"] = req.MaxTokens
+	}
 
-	var response string
+	var responseBuilder strings.Builder
+	responseModel := req.Model
+	finishReason := "stop"
 	var tokensUsed int
 	err := o.client.Chat(ctx, chatReq, func(resp api.ChatResponse) error {
-		response = resp.Message.Content
+		if resp.Message.Content != "" {
+			responseBuilder.WriteString(resp.Message.Content)
+		}
+		if resp.Model != "" {
+			responseModel = resp.Model
+		}
+		if resp.DoneReason != "" {
+			finishReason = resp.DoneReason
+		}
 		tokensUsed = resp.EvalCount + resp.PromptEvalCount
 		return nil
 	})
@@ -75,10 +88,10 @@ func (o *OllamaProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 	}
 
 	return &ChatResponse{
-		Content:      response,
-		Model:        req.Model,
+		Content:      responseBuilder.String(),
+		Model:        responseModel,
 		TokensUsed:   tokensUsed,
-		FinishReason: "stop",
+		FinishReason: finishReason,
 	}, nil
 }
 

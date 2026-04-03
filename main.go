@@ -335,8 +335,10 @@ func (a *aiServiceAdapter) Chat(ctx context.Context, messages []memory.Message, 
 	}
 
 	request := &ai.ChatRequest{
-		Model:    model,
-		Messages: aiMessages,
+		Model:       model,
+		Messages:    aiMessages,
+		Temperature: database.DefaultTemperature,
+		MaxTokens:   database.DefaultMaxTokens,
 	}
 
 	response, err := a.service.Chat(ctx, request)

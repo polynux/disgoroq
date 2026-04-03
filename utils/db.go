@@ -60,6 +60,9 @@ func Connect(cfg *config.DatabaseConfig) *sql.DB {
 	}
 
 	db := sql.OpenDB(connector)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(time.Hour)
 
 	return db
 }
@@ -81,9 +84,9 @@ func ConnectLocal() *sql.DB {
 		os.Exit(1)
 	}
 
-	// Set connection pool settings for better concurrency
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
+	// SQLite handles concurrent writes more reliably with a single shared connection.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(time.Hour)
 
 	return db

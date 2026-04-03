@@ -3,6 +3,7 @@ package logger
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +12,12 @@ import (
 	cfg "polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 )
+
+type failingEventRepository struct{}
+
+func (f *failingEventRepository) LogEvent(ctx context.Context, event *database.BotEvent) error {
+	return errors.New("database is locked")
+}
 
 func TestWrapperFunctions_Disabled(t *testing.T) {
 	// Initialize with disabled logging
@@ -146,4 +153,44 @@ func TestLogMessageEvent(t *testing.T) {
 	}
 
 	LogMessageEvent(ctx, database.EventContextBuilt, "guild123", "channel456", "msg789", "user999", details)
+}
+
+func TestLogEventFailureDoesNotRecurse(t *testing.T) {
+	logConfig = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:             true,
+		LogToDB:             true,
+		EventLoggingEnabled: true,
+		Level:               "info",
+		Encoding:            "json",
+		RetentionDays:       7,
+		DBLogLevel:          "all",
+	})
+
+	var buf bytes.Buffer
+	encoder := zapcore.NewJSONEncoder(zapcore.EncoderConfig{
+		MessageKey: "msg",
+		LevelKey:   "level",
+	})
+	core := zapcore.NewCore(encoder, zapcore.AddSync(&buf), zapcore.DebugLevel)
+	testLogger := zap.New(core)
+
+	originalLog := Log
+	originalRepo := eventRepo
+	Log = testLogger
+	defer func() {
+		Log = originalLog
+		eventRepo = originalRepo
+	}()
+
+	SetEventRepository(&failingEventRepository{})
+
+	LogEvent(context.Background(), &database.BotEvent{
+		EventType: database.EventAICallFailed,
+		GuildID:   "guild123",
+	})
+
+	output := buf.String()
+	assert.Contains(t, output, "Failed to log event to database")
+	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte("Failed to log event to database")))
 }

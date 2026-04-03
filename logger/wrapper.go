@@ -12,7 +12,11 @@ import (
 	"polynux/disgoroq/database"
 )
 
-var eventRepo *EventRepository
+type eventLogger interface {
+	LogEvent(ctx context.Context, event *database.BotEvent) error
+}
+
+var eventRepo eventLogger
 
 func extractContextFromFields(fields []zap.Field) (guildID, channelID, messageID, userID string) {
 	for _, field := range fields {
@@ -91,7 +95,7 @@ func mapLogLevelToEventType(level string, hasError bool) database.EventType {
 	}
 }
 
-func SetEventRepository(repo *EventRepository) {
+func SetEventRepository(repo eventLogger) {
 	eventRepo = repo
 }
 
@@ -187,7 +191,7 @@ func LogEvent(ctx context.Context, event *database.BotEvent) {
 	}
 
 	if err := eventRepo.LogEvent(ctx, event); err != nil {
-		Error("Failed to log event to database",
+		Log.Error("Failed to log event to database",
 			zap.Error(err),
 			zap.String("event_type", string(event.EventType)),
 			zap.String("guild_id", event.GuildID),
