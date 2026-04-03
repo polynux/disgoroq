@@ -401,6 +401,16 @@ func TestUnicodeValidation(t *testing.T) {
 			content:  "Test @#$%^&*()_+",
 			expected: true,
 		},
+		{
+			name:     "replacement char mixed with text",
+			content:  "hello � world",
+			expected: true,
+		},
+		{
+			name:     "replacement chars only",
+			content:  "���",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

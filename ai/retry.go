@@ -120,7 +120,10 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 			zap.String("reason", validation.Reason),
 			zap.Int("attempt", attempt),
 			zap.String("provider", r.provider.Name()),
+			zap.String("model", requestWithModel.Model),
 			zap.String("content", response.Content),
+			zap.String("finish_reason", response.FinishReason),
+			zap.Int("tokens_used", response.TokensUsed),
 			zap.Duration("duration", duration))
 
 		// Log the empty response event to database

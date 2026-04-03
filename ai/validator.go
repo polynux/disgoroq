@@ -157,17 +157,26 @@ func (v *ResponseValidator) validateContent(content string) *ValidationResult {
 
 // hasValidUnicode checks if the string contains valid, printable Unicode characters
 func (v *ResponseValidator) hasValidUnicode(s string) bool {
+	hasVisibleContent := false
+
 	for _, r := range s {
 		// Check if character is printable (not control character)
 		if !unicode.IsPrint(r) && !unicode.IsSpace(r) {
 			return false
 		}
-		// Check if character is a valid Unicode character
+
+		// Ignore replacement characters instead of rejecting the whole response.
+		// Some models occasionally emit them alongside otherwise valid text.
 		if r == unicode.ReplacementChar {
-			return false
+			continue
+		}
+
+		if unicode.IsPrint(r) && !unicode.IsSpace(r) {
+			hasVisibleContent = true
 		}
 	}
-	return len(s) > 0 // Ensure we have at least one character
+
+	return hasVisibleContent
 }
 
 // IsEmptyResponse is a convenience method specifically for empty response detection
