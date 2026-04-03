@@ -138,6 +138,7 @@ const (
 	EnvAIRetryOnError        = "AI_RETRY_ON_ERROR"
 
 	// AI - General
+	EnvAIPrimaryProvider   = "AI_PRIMARY_PROVIDER"
 	EnvAIFallbackEnabled   = "AI_FALLBACK_ENABLED"
 	EnvAIMinResponseLength = "AI_MIN_RESPONSE_LENGTH"
 

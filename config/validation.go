@@ -85,17 +85,32 @@ func (c *DatabaseConfig) validate() error {
 }
 
 func (c *AIConfig) validate() error {
-	// Groq API key is required
-	if c.Groq.APIKey == "" {
-		return fmt.Errorf("ai.groq.api_key is required")
+	switch c.PrimaryProvider {
+	case AIProviderGroq, AIProviderOllama:
+	default:
+		return fmt.Errorf("ai.primary_provider must be one of %q or %q", AIProviderGroq, AIProviderOllama)
 	}
 
-	if err := c.Groq.validate(); err != nil {
-		return err
+	if c.PrimaryProvider == AIProviderGroq {
+		if c.Groq.APIKey == "" {
+			return fmt.Errorf("ai.groq.api_key is required when ai.primary_provider is %q", AIProviderGroq)
+		}
 	}
 
-	if err := c.Ollama.validate(); err != nil {
-		return err
+	if c.shouldValidateGroq() {
+		if err := c.Groq.validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.PrimaryProvider == AIProviderOllama && !c.Ollama.Enabled {
+		return fmt.Errorf("ai.ollama.enabled must be true when ai.primary_provider is %q", AIProviderOllama)
+	}
+
+	if c.shouldValidateOllama() {
+		if err := c.Ollama.validate(); err != nil {
+			return err
+		}
 	}
 
 	if err := c.Retry.validate(); err != nil {
@@ -107,6 +122,14 @@ func (c *AIConfig) validate() error {
 	}
 
 	return nil
+}
+
+func (c *AIConfig) shouldValidateGroq() bool {
+	return c.PrimaryProvider == AIProviderGroq || c.Groq.APIKey != ""
+}
+
+func (c *AIConfig) shouldValidateOllama() bool {
+	return c.PrimaryProvider == AIProviderOllama || c.Ollama.Enabled
 }
 
 func (c *GroqConfig) validate() error {

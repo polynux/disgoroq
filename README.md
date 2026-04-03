@@ -6,7 +6,7 @@ DisgoroQ is a Go Discord bot with AI chat, image-aware context, guild-scoped mem
 
 - Go 1.24+
 - A Discord bot token
-- GROQ API access
+- GROQ API access, or a reachable Ollama instance if `ai.primary_provider` is set to `ollama`
 - A configured database
 - For voice: `libdave`, the STT sidecar, and the TTS service
 
@@ -25,6 +25,8 @@ Typical interpolated secrets:
 - `DB_TOKEN`
 
 Start from `config.example.yaml`, then review `config.yaml` for runtime defaults like AI, memory, reengage, and voice.
+
+For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`.
 
 ## Build And Run
 

@@ -17,7 +17,10 @@ func TestServiceConfigValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
 				GroqAPIKey:        "test-key",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 				MinResponseLength: 1,
 				RetryConfig:       DefaultRetryConfig(),
 			},
@@ -26,17 +29,50 @@ func TestServiceConfigValidate(t *testing.T) {
 		{
 			name: "missing groq api key",
 			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
 				GroqAPIKey:        "",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 				MinResponseLength: 1,
 				RetryConfig:       DefaultRetryConfig(),
 			},
 			shouldError: true,
-			errorMsg:    "GROQ_API_KEY is required",
+			errorMsg:    "GROQ_API_KEY is required when groq is the primary provider",
+		},
+		{
+			name: "valid ollama primary config",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderOllama,
+				OllamaEnabled:     true,
+				OllamaURL:         "http://localhost:11434",
+				OllamaModel:       "dolphin3",
+				OllamaVisionModel: "llava",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: false,
+		},
+		{
+			name: "ollama primary requires enabled provider",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderOllama,
+				OllamaEnabled:     false,
+				OllamaURL:         "http://localhost:11434",
+				OllamaModel:       "dolphin3",
+				OllamaVisionModel: "llava",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: true,
+			errorMsg:    "ollama must be enabled when ollama is the primary provider",
 		},
 		{
 			name: "invalid min response length",
 			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
 				GroqAPIKey:        "test-key",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 				MinResponseLength: 0,
 				RetryConfig:       DefaultRetryConfig(),
 			},
@@ -46,7 +82,10 @@ func TestServiceConfigValidate(t *testing.T) {
 		{
 			name: "invalid retry config",
 			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
 				GroqAPIKey:        "test-key",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 				MinResponseLength: 1,
 				RetryConfig: RetryConfig{
 					MaxRetries: -1, // Invalid
@@ -73,10 +112,14 @@ func TestServiceConfigValidate(t *testing.T) {
 func TestNewService(t *testing.T) {
 	// This test requires actual provider creation, so we'll test with mock config
 	config := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     false, // Disable Ollama to avoid connection issues
 		OllamaURL:         "http://localhost:11434",
 		OllamaModel:       "dolphin3",
+		OllamaVisionModel: "llava",
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
 		FallbackEnabled:   false,
@@ -96,8 +139,11 @@ func TestNewService(t *testing.T) {
 
 func TestNewServiceNoGroqKey(t *testing.T) {
 	config := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "", // No API key
 		OllamaEnabled:     false,
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
 		FallbackEnabled:   false,
@@ -110,7 +156,10 @@ func TestNewServiceNoGroqKey(t *testing.T) {
 
 func TestServiceName(t *testing.T) {
 	config := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     false,
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
@@ -126,7 +175,10 @@ func TestServiceName(t *testing.T) {
 
 func TestServiceAvailableModels(t *testing.T) {
 	config := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     false,
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
@@ -159,10 +211,14 @@ func TestServiceAvailableModels(t *testing.T) {
 
 func TestServiceGetProviderInfo(t *testing.T) {
 	config := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     true,
 		OllamaURL:         "http://ollama.local:11434",
 		OllamaModel:       "llama2",
+		OllamaVisionModel: "llava",
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 5,
 		FallbackEnabled:   true,
@@ -172,8 +228,9 @@ func TestServiceGetProviderInfo(t *testing.T) {
 	info := service.GetProviderInfo()
 
 	assert.NotNil(t, info)
-	assert.Equal(t, "groq", info["primary_provider"])
+	assert.Equal(t, ProviderGroq, info["primary_provider"])
 	assert.Equal(t, true, info["fallback_enabled"])
+	assert.Equal(t, true, info["groq_enabled"])
 	assert.Equal(t, true, info["ollama_enabled"])
 	assert.Equal(t, 5, info["min_response_length"])
 
@@ -193,7 +250,10 @@ func TestServiceGetProviderInfo(t *testing.T) {
 func TestServiceIsFallbackAvailable(t *testing.T) {
 	// Test with fallback disabled
 	config1 := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     false,
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
@@ -205,7 +265,10 @@ func TestServiceIsFallbackAvailable(t *testing.T) {
 
 	// Test with fallback enabled but Ollama disabled
 	config2 := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     false,
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
@@ -217,8 +280,14 @@ func TestServiceIsFallbackAvailable(t *testing.T) {
 
 	// Test with fallback enabled and Ollama enabled
 	config3 := ServiceConfig{
+		PrimaryProvider:   ProviderGroq,
 		GroqAPIKey:        "test-key-123",
+		GroqModel:         "openai/gpt-oss-20b",
+		GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
 		OllamaEnabled:     true,
+		OllamaURL:         "http://localhost:11434",
+		OllamaModel:       "dolphin3",
+		OllamaVisionModel: "llava",
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 1,
 		FallbackEnabled:   true,
@@ -230,4 +299,23 @@ func TestServiceIsFallbackAvailable(t *testing.T) {
 	} else {
 		t.Log("Ollama provider not available in test environment")
 	}
+}
+
+func TestNewServiceWithOllamaPrimary(t *testing.T) {
+	config := ServiceConfig{
+		PrimaryProvider:   ProviderOllama,
+		OllamaEnabled:     true,
+		OllamaURL:         "http://localhost:11434",
+		OllamaModel:       "dolphin3",
+		OllamaVisionModel: "llava",
+		RetryConfig:       DefaultRetryConfig(),
+		MinResponseLength: 1,
+		FallbackEnabled:   false,
+	}
+
+	service := NewService(config)
+
+	assert.NotNil(t, service)
+	assert.Equal(t, ProviderOllama, service.Name())
+	assert.Equal(t, ProviderOllama, service.GetProviderInfo()["primary_provider"])
 }

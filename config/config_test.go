@@ -51,6 +51,48 @@ ai:
 	}
 }
 
+func TestLoadWithOllamaPrimary(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("DB_URL", "http://localhost:8080")
+	t.Setenv("DB_TOKEN", "test-db-token")
+
+	configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  url: "${DB_URL}"
+  token: "${DB_TOKEN}"
+  local: false
+
+ai:
+  primary_provider: "ollama"
+  ollama:
+    enabled: true
+    url: "http://localhost:11434"
+    model: "dolphin3"
+    vision_model: "llava"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if config.AI.PrimaryProvider != AIProviderOllama {
+		t.Errorf("AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderOllama)
+	}
+	if config.AI.Groq.APIKey != "" {
+		t.Errorf("AI.Groq.APIKey = %v, want empty", config.AI.Groq.APIKey)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {
@@ -155,8 +197,9 @@ func TestValidation(t *testing.T) {
 				Discord:  DiscordConfig{Token: "test-token", DevGuildIDs: []string{"123456789012345678"}},
 				Database: DatabaseConfig{URL: "http://localhost", Token: "test-token", Local: false},
 				AI: AIConfig{
-					Groq:   GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
-					Ollama: OllamaConfig{Enabled: false},
+					PrimaryProvider: AIProviderGroq,
+					Groq:            GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
+					Ollama:          OllamaConfig{Enabled: false},
 					Retry: RetryConfig{
 						MaxRetries:     2,
 						InitialDelay:   500 * time.Millisecond,
@@ -209,11 +252,60 @@ func TestValidation(t *testing.T) {
 				Discord:  DiscordConfig{Token: "test"},
 				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
 				AI: AIConfig{
-					Groq: GroqConfig{APIKey: ""},
+					PrimaryProvider: AIProviderGroq,
+					Groq:            GroqConfig{APIKey: ""},
 				},
 			},
 			wantErr: true,
-			errMsg:  "ai.groq.api_key is required",
+			errMsg:  "ai.groq.api_key is required when ai.primary_provider is \"groq\"",
+		},
+		{
+			name: "ollama primary without groq api key",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: AIProviderOllama,
+					Ollama:          OllamaConfig{Enabled: true, URL: "http://localhost:11434", Model: "dolphin3", VisionModel: "llava"},
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid ai primary provider",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: "invalid",
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello"},
+			},
+			wantErr: true,
+			errMsg:  "ai.primary_provider must be one of",
 		},
 		{
 			name: "invalid log level",
@@ -379,6 +471,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if config.AI.Groq.Model != "openai/gpt-oss-20b" {
 		t.Errorf("Default Groq.Model = %v, want openai/gpt-oss-20b", config.AI.Groq.Model)
+	}
+	if config.AI.PrimaryProvider != AIProviderGroq {
+		t.Errorf("Default AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderGroq)
 	}
 	if config.AI.Retry.MaxRetries != 2 {
 		t.Errorf("Default Retry.MaxRetries = %v, want 2", config.AI.Retry.MaxRetries)

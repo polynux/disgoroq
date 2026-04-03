@@ -9,8 +9,15 @@ import (
 	"polynux/disgoroq/logger"
 )
 
+const (
+	ProviderGroq   = "groq"
+	ProviderOllama = "ollama"
+)
+
 // ServiceConfig contains configuration for the AI service
 type ServiceConfig struct {
+	PrimaryProvider string
+
 	// Primary provider configuration
 	GroqAPIKey      string
 	GroqModel       string
@@ -34,8 +41,32 @@ type ServiceConfig struct {
 
 // Validate checks if the service configuration is valid
 func (c *ServiceConfig) Validate() error {
-	if c.GroqAPIKey == "" {
-		return fmt.Errorf("GROQ_API_KEY is required")
+	switch c.primaryProvider() {
+	case ProviderGroq:
+		if c.GroqAPIKey == "" {
+			return fmt.Errorf("GROQ_API_KEY is required when groq is the primary provider")
+		}
+		if c.GroqModel == "" {
+			return fmt.Errorf("Groq model is required when groq is the primary provider")
+		}
+		if c.GroqVisionModel == "" {
+			return fmt.Errorf("Groq vision model is required when groq is the primary provider")
+		}
+	case ProviderOllama:
+		if !c.OllamaEnabled {
+			return fmt.Errorf("ollama must be enabled when ollama is the primary provider")
+		}
+		if c.OllamaURL == "" {
+			return fmt.Errorf("Ollama URL is required when ollama is the primary provider")
+		}
+		if c.OllamaModel == "" {
+			return fmt.Errorf("Ollama model is required when ollama is the primary provider")
+		}
+		if c.OllamaVisionModel == "" {
+			return fmt.Errorf("Ollama vision model is required when ollama is the primary provider")
+		}
+	default:
+		return fmt.Errorf("unsupported primary provider %q", c.PrimaryProvider)
 	}
 
 	if err := c.RetryConfig.Validate(); err != nil {
@@ -49,6 +80,13 @@ func (c *ServiceConfig) Validate() error {
 	return nil
 }
 
+func (c ServiceConfig) primaryProvider() string {
+	if c.PrimaryProvider == "" {
+		return ProviderGroq
+	}
+	return c.PrimaryProvider
+}
+
 // Service is the high-level AI service that orchestrates providers, retries, and fallback
 type Service struct {
 	config   ServiceConfig
@@ -60,33 +98,49 @@ type Service struct {
 func NewService(config ServiceConfig) *Service {
 	// Build wrapped providers (with retry logic for each)
 	var wrappedProviders []Provider
+	primaryProvider := config.primaryProvider()
 
-	// Always add Groq as primary provider (wrapped with retry)
-	if config.GroqAPIKey != "" {
-		groqProvider := NewGroqProvider(config.GroqAPIKey)
-		wrappedGroq := NewRetryWrapper(
-			groqProvider,
-			config.RetryConfig,
-			config.MinResponseLength,
-			config.GroqModel,
-			config.GroqVisionModel,
-		)
-		wrappedProviders = append(wrappedProviders, wrappedGroq)
-	}
-
-	// Add Ollama as fallback if enabled
-	if config.OllamaEnabled && config.FallbackEnabled {
-		if ollamaProvider, err := NewOllamaProvider(config.OllamaURL); err == nil {
-			wrappedOllama := NewRetryWrapper(
+	addProvider := func(providerName string) {
+		switch providerName {
+		case ProviderGroq:
+			if config.GroqAPIKey == "" {
+				return
+			}
+			groqProvider := NewGroqProvider(config.GroqAPIKey)
+			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+				groqProvider,
+				config.RetryConfig,
+				config.MinResponseLength,
+				config.GroqModel,
+				config.GroqVisionModel,
+			))
+		case ProviderOllama:
+			if !config.OllamaEnabled {
+				return
+			}
+			ollamaProvider, err := NewOllamaProvider(config.OllamaURL)
+			if err != nil {
+				logger.Warn("Failed to create Ollama provider", zap.Error(err))
+				return
+			}
+			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,
 				config.MinResponseLength,
 				config.OllamaModel,
 				config.OllamaVisionModel,
-			)
-			wrappedProviders = append(wrappedProviders, wrappedOllama)
-		} else {
-			logger.Warn("Failed to create Ollama provider", zap.Error(err))
+			))
+		}
+	}
+
+	addProvider(primaryProvider)
+
+	if config.FallbackEnabled {
+		switch primaryProvider {
+		case ProviderGroq:
+			addProvider(ProviderOllama)
+		case ProviderOllama:
+			addProvider(ProviderGroq)
 		}
 	}
 
@@ -190,8 +244,9 @@ func (s *Service) AvailableModels() []ModelInfo {
 // GetProviderInfo returns information about the current provider configuration
 func (s *Service) GetProviderInfo() map[string]interface{} {
 	info := map[string]interface{}{
-		"primary_provider": "groq",
+		"primary_provider": s.config.primaryProvider(),
 		"fallback_enabled": s.config.FallbackEnabled,
+		"groq_enabled":     s.config.GroqAPIKey != "",
 		"ollama_enabled":   s.config.OllamaEnabled,
 		"retry_config": map[string]interface{}{
 			"max_retries":    s.config.RetryConfig.MaxRetries,

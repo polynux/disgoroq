@@ -38,12 +38,18 @@ type DatabaseConfig struct {
 
 // AIConfig contains AI service configuration.
 type AIConfig struct {
+	PrimaryProvider   string       `yaml:"primary_provider"`
 	Groq              GroqConfig   `yaml:"groq"`
 	Ollama            OllamaConfig `yaml:"ollama"`
 	Retry             RetryConfig  `yaml:"retry"`
 	FallbackEnabled   bool         `yaml:"fallback_enabled"`
 	MinResponseLength int          `yaml:"min_response_length"`
 }
+
+const (
+	AIProviderGroq   = "groq"
+	AIProviderOllama = "ollama"
+)
 
 // GroqConfig contains configuration for the Groq AI provider.
 type GroqConfig struct {
@@ -135,6 +141,7 @@ func DefaultConfig() *Config {
 			Local: false,
 		},
 		AI: AIConfig{
+			PrimaryProvider: AIProviderGroq,
 			Groq: GroqConfig{
 				Model:       "openai/gpt-oss-20b",
 				VisionModel: "meta-llama/llama-4-scout-17b-16e-instruct",

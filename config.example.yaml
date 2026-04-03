@@ -23,9 +23,12 @@ database:
   local: false
 
 ai:
+  # Primary AI provider to use by default: "groq" or "ollama"
+  primary_provider: "${AI_PRIMARY_PROVIDER:-groq}"
+
   groq:
-    # Required: Groq API key (use environment variable for security)
-    api_key: "${GROQ_API_KEY}"
+    # Required when primary_provider is "groq" or when using Groq as fallback
+    api_key: "${GROQ_API_KEY:-}"
 
     # Model to use for chat completions
     model: "openai/gpt-oss-20b"
@@ -34,7 +37,7 @@ ai:
     vision_model: "meta-llama/llama-4-scout-17b-16e-instruct"
 
   ollama:
-    # Enable Ollama as fallback provider
+    # Enable Ollama as a configured provider (required when primary_provider is "ollama")
     enabled: false
 
     # Ollama server URL
@@ -65,7 +68,7 @@ ai:
     # Retry when API returns an error
     retry_on_error: true
 
-  # Enable fallback to Ollama when Groq fails
+  # Enable fallback to the other configured provider when the primary provider fails
   fallback_enabled: true
 
   # Minimum response length to accept
