@@ -20,6 +20,7 @@ import (
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/utils"
 )
 
 type Service struct {
@@ -222,7 +223,7 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		return fmt.Errorf("received empty response from AI service")
 	}
 
-	content := response.Content
+	content := utils.NormalizeBotText(response.Content)
 	if s.emojiManager != nil {
 		content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
 	}

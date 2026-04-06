@@ -18,6 +18,7 @@ import (
 
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/utils"
 )
 
 // Manager handles voice connections across multiple guilds.
@@ -712,6 +713,8 @@ func (m *Manager) PlayAudioStream(ctx context.Context, guildID string, audioStre
 
 // SendTextFallback sends a text message to the voice session's text channel.
 func (m *Manager) SendTextFallback(ctx context.Context, guildID, message string) error {
+	message = utils.NormalizeBotText(message)
+
 	m.mu.RLock()
 	session, exists := m.sessions[guildID]
 	m.mu.RUnlock()

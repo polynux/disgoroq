@@ -16,6 +16,7 @@ import (
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/utils"
 )
 
 // Orchestrator manages the voice conversation flow.
@@ -386,6 +387,8 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 	if response.Content == "" {
 		return o.manager.SendTextFallback(context.Background(), guildID, "Euh... je n'ai rien à dire...")
 	}
+
+	response.Content = utils.NormalizeBotText(response.Content)
 
 	// Add bot response to voice history
 	conv.History.AddMessage(botID, "Bot", response.Content, true)

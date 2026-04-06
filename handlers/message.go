@@ -21,6 +21,7 @@ import (
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/utils"
 )
 
 type MessageHandler struct {
@@ -251,9 +252,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
 
-	if strings.Contains(response.Content, "feur") {
-		response.Content = strings.ReplaceAll(response.Content, "feur", "fleur")
-	}
+	response.Content = utils.NormalizeBotText(response.Content)
 
 	// Convert emoji shortcodes to Discord format (if emoji manager is available)
 	if h.emojiManager != nil {
