@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 )
 
@@ -54,6 +55,8 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 	memberCache := make(map[snowflake.ID]*discord.Member)
 
 	for idx := len(messages) - 1; idx >= 0; idx-- {
+		normalizedContent := emoji.NormalizeDiscordEmojiShortcodes(messages[idx].Content)
+
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == botID {
 			idx--
 			if idx < 0 {
@@ -84,7 +87,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 				}
 			}
 		} else {
-			if messages[idx].Content == "" {
+			if normalizedContent == "" {
 				continue
 			}
 		}
@@ -150,7 +153,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 			content.WriteString("\n\n")
 		}
 
-		content.WriteString(messages[idx].Content)
+		content.WriteString(normalizedContent)
 		content.WriteString("\n\n")
 
 		imageRefs := []int{}
@@ -161,7 +164,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 		if messages[idx].Author.ID == botID {
 			formattedMessages = append(formattedMessages, Message{
 				Role:       "assistant",
-				Content:    messages[idx].Content,
+				Content:    normalizedContent,
 				AuthorID:   messages[idx].Author.ID.String(),
 				AuthorNick: nick,
 				MessageID:  messages[idx].ID.String(),

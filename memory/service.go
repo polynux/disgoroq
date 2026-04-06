@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 )
 
@@ -79,6 +80,8 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 
 // BufferMessage stores a message in the buffer and triggers summarization if needed
 func (s *MemoryService) BufferMessage(ctx context.Context, userID, guildID, content string) error {
+	content = emoji.NormalizeDiscordEmojiShortcodes(content)
+
 	if logger.IsDebugMode() {
 		logger.Debug("Buffering memory message",
 			zap.String("user_id", userID),
@@ -293,7 +296,7 @@ func messagesToBufferedMessages(messages []*MessageBufferEntry) []BufferedMessag
 			ID:        msg.ID,
 			GuildID:   msg.GuildID,
 			UserID:    msg.UserID,
-			Content:   msg.Content,
+			Content:   emoji.NormalizeDiscordEmojiShortcodes(msg.Content),
 			Timestamp: msg.CreatedAt,
 		}
 	}
@@ -319,13 +322,15 @@ func conversationSummaryToSummary(summary *ConversationSummary) *Summary {
 func (s *MemoryService) messagesToConversation(messages []*MessageBufferEntry) string {
 	var conversation string
 	for _, msg := range messages {
-		conversation += fmt.Sprintf("[%s] %s\n", msg.CreatedAt.Format("15:04"), msg.Content)
+		conversation += fmt.Sprintf("[%s] %s\n", msg.CreatedAt.Format("15:04"), emoji.NormalizeDiscordEmojiShortcodes(msg.Content))
 	}
 	return conversation
 }
 
 // GetMemoryContext builds context for AI responses
 func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, currentMessage string) (*MemoryContext, error) {
+	currentMessage = emoji.NormalizeDiscordEmojiShortcodes(currentMessage)
+
 	if logger.IsDebugMode() {
 		logger.Debug("Building memory context",
 			zap.String("user_id", userID),
@@ -422,14 +427,15 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 	recentMessages, err := s.repo.GetRecentMessages(ctx, userID, guildID, s.maxContextMessages)
 	if err == nil {
 		for _, msg := range recentMessages {
-			context.RecentMessages = append(context.RecentMessages, msg.Content)
+			context.RecentMessages = append(context.RecentMessages, emoji.NormalizeDiscordEmojiShortcodes(msg.Content))
 		}
 	}
 
 	// Calculate confidence score based on summary relevance
 	if len(context.Summaries) > 0 {
 		totalRelevance := 0.0
-		for _, summary := range context.Summaries {
+		for i, summary := range context.Summaries {
+			context.Summaries[i].Content = emoji.NormalizeDiscordEmojiShortcodes(summary.Content)
 			totalRelevance += summary.Relevance
 		}
 		context.ConfidenceScore = totalRelevance / float64(len(context.Summaries))

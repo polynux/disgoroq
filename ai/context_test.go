@@ -186,6 +186,41 @@ func TestGetImagesToProcess_ReversedOrder(t *testing.T) {
 	assert.Equal(t, "1", images[1].id, "Should process images in reverse order")
 }
 
+func TestBuildContext_NormalizesDiscordEmojiMarkup(t *testing.T) {
+	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	webhookID := snowflake.ID(9999)
+	botID := snowflake.ID(42)
+
+	messages := []discord.Message{
+		{
+			ID:        snowflake.ID(2),
+			Content:   "Réponse <:criminel:1238422591547637800>",
+			WebhookID: &webhookID,
+			Author: discord.User{
+				ID:       botID,
+				Username: "bot",
+			},
+		},
+		{
+			ID:        snowflake.ID(1),
+			Content:   "Salut <:criminel:1238422591547637800>",
+			WebhookID: &webhookID,
+			Author: discord.User{
+				ID:       snowflake.ID(1),
+				Username: "alice",
+			},
+		},
+	}
+
+	processed, err := cb.BuildContext(context.Background(), messages, snowflake.ID(100), botID)
+
+	require.NoError(t, err)
+	require.Len(t, processed.Messages, 2)
+	assert.Contains(t, processed.Messages[0].Content, ":criminel:")
+	assert.NotContains(t, processed.Messages[0].Content, "<:criminel:")
+	assert.Equal(t, "Réponse :criminel:", processed.Messages[1].Content)
+}
+
 func newMessageWithAttachments(id snowflake.ID, content string, attachments []discord.Attachment) discord.Message {
 	return discord.Message{
 		ID:          id,

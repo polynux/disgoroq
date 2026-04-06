@@ -1,6 +1,7 @@
 package emoji
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type Manager struct {
 	mutex  sync.RWMutex
 	ttl    time.Duration
 }
+
+var discordEmojiMarkupPattern = regexp.MustCompile(`<a?:([A-Za-z0-9_]+):\d+>`)
 
 // NewManager creates a new emoji manager.
 // If cfg is nil, default configuration is used.
@@ -184,6 +187,12 @@ func (m *Manager) GetAllEmojis() []Emoji {
 	}
 
 	return allEmojis
+}
+
+// NormalizeDiscordEmojiShortcodes replaces Discord custom emoji markup with shortcode form.
+// Example: <:wave:123> -> :wave: and <a:dance:456> -> :dance:
+func NormalizeDiscordEmojiShortcodes(text string) string {
+	return discordEmojiMarkupPattern.ReplaceAllString(text, ":$1:")
 }
 
 // FormatDiscordEmoji returns the Discord format for an emoji

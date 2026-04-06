@@ -337,6 +337,25 @@ func TestService_BufferMessage(t *testing.T) {
 	}
 }
 
+func TestService_BufferMessage_NormalizesDiscordEmojiMarkup(t *testing.T) {
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := newMockSummarizer()
+	service := NewService(repo, embeddings, summarizer, DefaultServiceConfig())
+
+	err := service.BufferMessage(context.Background(), "user123", "guild456", "Salut <:criminel:1238422591547637800>!")
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(repo.bufferEntries) != 1 {
+		t.Fatalf("Expected 1 buffered message, got %d", len(repo.bufferEntries))
+	}
+	if repo.bufferEntries[0].Content != "Salut :criminel:!" {
+		t.Fatalf("Expected normalized emoji shortcode, got %q", repo.bufferEntries[0].Content)
+	}
+}
+
 func TestService_SummarizationTrigger(t *testing.T) {
 	config := ServiceConfig{
 		BufferThreshold:    3, // Trigger after 3 messages
@@ -452,6 +471,41 @@ func TestService_GetMemoryContext(t *testing.T) {
 
 	if context.ConfidenceScore < 0 || context.ConfidenceScore > 1 {
 		t.Errorf("confidence score should be between 0 and 1, got %f", context.ConfidenceScore)
+	}
+}
+
+func TestService_GetMemoryContext_NormalizesLegacyEmojiMarkup(t *testing.T) {
+	repo := newMockRepository()
+	repo.summaries = append(repo.summaries, &ConversationSummary{
+		UserID:    "user123",
+		GuildID:   "guild456",
+		Content:   "Résumé avec <:criminel:1238422591547637800>",
+		CreatedAt: time.Now(),
+	})
+	repo.bufferEntries = append(repo.bufferEntries, &MessageBufferEntry{
+		UserID:    "user123",
+		GuildID:   "guild456",
+		Content:   "Ancien <a:dance:987654321> message",
+		CreatedAt: time.Now(),
+	})
+
+	service := NewService(repo, nil, newMockSummarizer(), DefaultServiceConfig())
+
+	memoryContext, err := service.GetMemoryContext(context.Background(), "user123", "guild456", "Question <:criminel:1238422591547637800>")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(memoryContext.Summaries) != 1 {
+		t.Fatalf("Expected 1 summary, got %d", len(memoryContext.Summaries))
+	}
+	if memoryContext.Summaries[0].Content != "Résumé avec :criminel:" {
+		t.Fatalf("Expected normalized summary content, got %q", memoryContext.Summaries[0].Content)
+	}
+	if len(memoryContext.RecentMessages) != 1 {
+		t.Fatalf("Expected 1 recent message, got %d", len(memoryContext.RecentMessages))
+	}
+	if memoryContext.RecentMessages[0] != "Ancien :dance: message" {
+		t.Fatalf("Expected normalized recent message, got %q", memoryContext.RecentMessages[0])
 	}
 }
 
