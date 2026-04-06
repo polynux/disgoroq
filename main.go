@@ -81,6 +81,7 @@ func main() {
 			gateway.WithIntents(
 				gateway.IntentGuilds,
 				gateway.IntentGuildMessages,
+				gateway.IntentGuildMessageReactions,
 				gateway.IntentMessageContent,
 				gateway.IntentGuildVoiceStates,
 			),

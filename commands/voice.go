@@ -552,18 +552,12 @@ func (vc *VoiceCommands) handlePromptSee(e *events.ApplicationCommandInteraction
 		prompt = vc.voicePrompt
 	}
 
-	// Truncate if too long for Discord message (max 2000, leave room for prefix)
-	content := prompt
-	if len(content) > 1900 {
-		content = content[:1900] + "\n... (truncated)"
-	}
-
-	prefix := "**Current voice prompt:**\n"
+	title := "Current voice prompt"
 	if !hasCustom {
-		prefix = "**Current voice prompt (default):**\n"
+		title = "Current voice prompt (default)"
 	}
 
-	vc.respond(e, prefix+"```\n"+content+"\n```")
+	sendPaginatedPrompt(e, title, prompt)
 }
 
 // handlePromptAppend appends text to the current voice prompt.

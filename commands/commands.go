@@ -511,18 +511,12 @@ func handlePromptSee(e *events.ApplicationCommandInteractionCreate, repo *databa
 		prompt = getDefaultPrompt(botNick)
 	}
 
-	// Truncate if too long for Discord message (max 2000, leave room for prefix)
-	content := prompt
-	if len(content) > 1900 {
-		content = content[:1900] + "\n... (truncated)"
-	}
-
-	prefix := "**Current prompt:**\n"
+	title := "Current prompt"
 	if !hasCustom {
-		prefix = "**Current prompt (default):**\n"
+		title = "Current prompt (default)"
 	}
 
-	_ = e.CreateMessage(discord.MessageCreate{Content: prefix + content})
+	sendPaginatedPrompt(e, title, prompt)
 }
 
 func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
