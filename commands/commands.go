@@ -193,7 +193,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 							Name:        "text",
 							Description: "Text to append to the prompt",
 							Required:    true,
-							MaxLength:   ptr(1000),
+							MaxLength:   ptr(promptInlineMaxLength),
 						},
 					},
 				},
@@ -209,7 +209,18 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 									Name:        "prompt",
 									Description: "The custom prompt for the bot",
 									Required:    true,
-									MaxLength:   ptr(1000),
+									MaxLength:   ptr(promptInlineMaxLength),
+								},
+							},
+						},
+						{
+							Name:        "file",
+							Description: "Upload a .txt or .md file as the custom prompt",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionAttachment{
+									Name:        "file",
+									Description: "A UTF-8 .txt or .md prompt file",
+									Required:    true,
 								},
 							},
 						},
@@ -491,24 +502,12 @@ func handlePromptSee(e *events.ApplicationCommandInteractionCreate, repo *databa
 	prompt, hasCustom := repo.GetPrompt(ctx, getGuildID(e))
 
 	if !hasCustom {
-		guildID := e.GuildID()
-		if guildID == nil {
-			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
-			return
-		}
-		botMember, err := e.Client().Rest.GetMember(*guildID, e.Client().ID(), rest.WithCtx(ctx))
+		defaultPrompt, err := getDefaultPromptForInteraction(ctx, e)
 		if err != nil {
-			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information: " + err.Error()})
 			return
 		}
-		botNick := ""
-		if botMember.Nick != nil {
-			botNick = *botMember.Nick
-		}
-		if botNick == "" {
-			botNick = botMember.User.Username
-		}
-		prompt = getDefaultPrompt(botNick)
+		prompt = defaultPrompt
 	}
 
 	title := "Current prompt"
@@ -526,32 +525,20 @@ func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *dat
 
 	currentPrompt, hasCustom := repo.GetPrompt(ctx, getGuildID(e))
 	if !hasCustom {
-		guildID := e.GuildID()
-		if guildID == nil {
-			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
-			return
-		}
-		botMember, err := e.Client().Rest.GetMember(*guildID, e.Client().ID(), rest.WithCtx(ctx))
+		defaultPrompt, err := getDefaultPromptForInteraction(ctx, e)
 		if err != nil {
-			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information"})
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting bot information: " + err.Error()})
 			return
 		}
-		botNick := ""
-		if botMember.Nick != nil {
-			botNick = *botMember.Nick
-		}
-		if botNick == "" {
-			botNick = botMember.User.Username
-		}
-		currentPrompt = getDefaultPrompt(botNick)
+		currentPrompt = defaultPrompt
 	}
 
 	newPrompt := currentPrompt + "\n" + textToAppend
 
 	err := repo.SetGuildSetting(ctx, getGuildID(e), "prompt", newPrompt)
-	content := "Prompt updated successfully"
+	content := buildPromptStoredMessage("Prompt", "updated", "/prompt see", newPrompt)
 	if err != nil {
-		content = "Error updating prompt"
+		content = "Error updating prompt: " + err.Error()
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{Content: content})
@@ -567,23 +554,67 @@ func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *databa
 	}
 
 	if subName == "default" {
-		content := "Prompt set to default"
+		content := buildPromptResetMessage("Prompt", "/prompt see")
 		err := repo.DeleteGuildSetting(ctx, getGuildID(e), "prompt")
 		if err != nil {
-			content = "Error setting prompt"
+			content = "Error setting prompt: " + err.Error()
 		}
 		_ = e.CreateMessage(discord.MessageCreate{Content: content})
 		return
 	}
 
-	// Must be "custom"
-	value := data.String("prompt")
-	err := repo.SetGuildSetting(ctx, getGuildID(e), "prompt", value)
-	content := "Prompt correctly set"
+	var (
+		value string
+		err   error
+	)
+
+	switch subName {
+	case "custom":
+		value = data.String("prompt")
+	case "file":
+		attachment, ok := data.OptAttachment("file")
+		if !ok {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error setting prompt: no file provided"})
+			return
+		}
+		value, err = readPromptAttachment(ctx, attachment)
+		if err != nil {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Error setting prompt: " + err.Error()})
+			return
+		}
+	default:
+		_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown prompt set subcommand!"})
+		return
+	}
+
+	err = repo.SetGuildSetting(ctx, getGuildID(e), "prompt", value)
+	content := buildPromptStoredMessage("Prompt", "set", "/prompt see", value)
 	if err != nil {
-		content = "Error setting prompt"
+		content = "Error setting prompt: " + err.Error()
 	}
 	_ = e.CreateMessage(discord.MessageCreate{Content: content})
+}
+
+func getDefaultPromptForInteraction(ctx stdcontext.Context, e *events.ApplicationCommandInteractionCreate) (string, error) {
+	guildID := e.GuildID()
+	if guildID == nil {
+		return "", fmt.Errorf("guild context is missing")
+	}
+
+	botMember, err := e.Client().Rest.GetMember(*guildID, e.Client().ID(), rest.WithCtx(ctx))
+	if err != nil {
+		return "", err
+	}
+
+	botNick := ""
+	if botMember.Nick != nil {
+		botNick = *botMember.Nick
+	}
+	if botNick == "" {
+		botNick = botMember.User.Username
+	}
+
+	return getDefaultPrompt(botNick), nil
 }
 
 func forceSummaryHandler(memoryService memory.Service) func(e *events.ApplicationCommandInteractionCreate) {

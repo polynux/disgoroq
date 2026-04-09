@@ -1,10 +1,13 @@
 package logger
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	cfg "polynux/disgoroq/config"
 )
@@ -164,4 +167,20 @@ func TestInitFromConfig_RebuildsLogger(t *testing.T) {
 	assert.NotNil(t, Log)
 	assert.Equal(t, 3, GetRetentionDays())
 	assert.True(t, IsDebugMode())
+}
+
+func TestRebuildLogger_UsesHumanReadableTimestamp(t *testing.T) {
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout(logTimeLayout)
+
+	encoder := zapcore.NewJSONEncoder(encoderConfig)
+	entryTime := time.Date(2026, time.April, 9, 8, 42, 13, 987000000, time.UTC)
+
+	buf, err := encoder.EncodeEntry(zapcore.Entry{
+		Level:   zapcore.InfoLevel,
+		Time:    entryTime,
+		Message: "test log",
+	}, nil)
+	assert.NoError(t, err)
+	assert.Contains(t, strings.TrimSpace(buf.String()), `"ts":"2026-04-09 08:42:13"`)
 }

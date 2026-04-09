@@ -9,6 +9,8 @@ import (
 	configpkg "polynux/disgoroq/config"
 )
 
+const logTimeLayout = "2006-01-02 15:04:05"
+
 // Config holds logging configuration (kept for backward compatibility)
 type Config struct {
 	Enabled             bool
@@ -105,6 +107,7 @@ func rebuildLogger(cfg *Config) {
 		zapLevel = zapcore.InfoLevel
 	}
 	zapConfig.Level = zap.NewAtomicLevelAt(zapLevel)
+	zapConfig.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout(logTimeLayout)
 
 	loggerInstance, err := zapConfig.Build()
 	if err != nil {

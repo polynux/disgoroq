@@ -117,7 +117,7 @@ func RegisterVoiceCommands(registry *Registry, voiceCmds *VoiceCommands) {
 									Name:        "text",
 									Description: "Text to append to the voice prompt",
 									Required:    true,
-									MaxLength:   ptr(1000),
+									MaxLength:   ptr(promptInlineMaxLength),
 								},
 							},
 						},
@@ -129,7 +129,18 @@ func RegisterVoiceCommands(registry *Registry, voiceCmds *VoiceCommands) {
 									Name:        "prompt",
 									Description: "The custom prompt for voice",
 									Required:    true,
-									MaxLength:   ptr(1000),
+									MaxLength:   ptr(promptInlineMaxLength),
+								},
+							},
+						},
+						{
+							Name:        "file",
+							Description: "Upload a .txt or .md file as the custom voice prompt",
+							Options: []discord.ApplicationCommandOption{
+								discord.ApplicationCommandOptionAttachment{
+									Name:        "file",
+									Description: "A UTF-8 .txt or .md prompt file",
+									Required:    true,
 								},
 							},
 						},
@@ -537,6 +548,8 @@ func (vc *VoiceCommands) handlePrompt(e *events.ApplicationCommandInteractionCre
 		vc.handlePromptAppend(e, ctx, guildIDStr)
 	case "set":
 		vc.handlePromptSet(e, ctx, guildIDStr)
+	case "file":
+		vc.handlePromptFile(e, ctx, guildIDStr)
 	case "reset":
 		vc.handlePromptReset(e, ctx, guildIDStr)
 	default:
@@ -574,17 +587,11 @@ func (vc *VoiceCommands) handlePromptAppend(e *events.ApplicationCommandInteract
 
 	err := vc.repo.SetGuildSetting(ctx, guildID, "voice_prompt", newPrompt)
 	if err != nil {
-		vc.respondError(e, "Failed to update voice prompt")
+		vc.respondError(e, "Failed to update voice prompt: "+err.Error())
 		return
 	}
 
-	// Show preview of new prompt
-	preview := newPrompt
-	if len(preview) > 200 {
-		preview = preview[:200] + "..."
-	}
-
-	vc.respond(e, fmt.Sprintf("✅ Voice prompt updated!\n\n**Preview:**\n```\n%s\n```", preview))
+	vc.respond(e, buildPromptStoredMessage("Voice prompt", "updated", "/voice prompt see", newPrompt))
 }
 
 // handlePromptSet sets a custom voice prompt.
@@ -594,20 +601,44 @@ func (vc *VoiceCommands) handlePromptSet(e *events.ApplicationCommandInteraction
 
 	err := vc.repo.SetGuildSetting(ctx, guildID, "voice_prompt", customPrompt)
 	if err != nil {
-		vc.respondError(e, "Failed to set voice prompt")
+		vc.respondError(e, "Failed to set voice prompt: "+err.Error())
 		return
 	}
 
-	vc.respond(e, "✅ Voice prompt set successfully!\n\n**New prompt:**\n```\n"+customPrompt+"\n```")
+	vc.respond(e, buildPromptStoredMessage("Voice prompt", "set", "/voice prompt see", customPrompt))
+}
+
+// handlePromptFile sets a custom voice prompt from an uploaded file.
+func (vc *VoiceCommands) handlePromptFile(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
+	data := e.SlashCommandInteractionData()
+	attachment, ok := data.OptAttachment("file")
+	if !ok {
+		vc.respondError(e, "Failed to set voice prompt: no file provided")
+		return
+	}
+
+	customPrompt, err := readPromptAttachment(ctx, attachment)
+	if err != nil {
+		vc.respondError(e, "Failed to set voice prompt: "+err.Error())
+		return
+	}
+
+	err = vc.repo.SetGuildSetting(ctx, guildID, "voice_prompt", customPrompt)
+	if err != nil {
+		vc.respondError(e, "Failed to set voice prompt: "+err.Error())
+		return
+	}
+
+	vc.respond(e, buildPromptStoredMessage("Voice prompt", "set", "/voice prompt see", customPrompt))
 }
 
 // handlePromptReset resets the voice prompt to default.
 func (vc *VoiceCommands) handlePromptReset(e *events.ApplicationCommandInteractionCreate, ctx context.Context, guildID string) {
 	err := vc.repo.DeleteGuildSetting(ctx, guildID, "voice_prompt")
 	if err != nil {
-		vc.respondError(e, "Failed to reset voice prompt")
+		vc.respondError(e, "Failed to reset voice prompt: "+err.Error())
 		return
 	}
 
-	vc.respond(e, fmt.Sprintf("✅ Voice prompt reset to default!\n\n**Default prompt:**\n```\n%s\n```", vc.voicePrompt))
+	vc.respond(e, buildPromptResetMessage("Voice prompt", "/voice prompt see"))
 }

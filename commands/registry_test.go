@@ -8,6 +8,8 @@ import (
 	"github.com/disgoorg/disgo/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"polynux/disgoroq/config"
 )
 
 func TestNewRegistry(t *testing.T) {
@@ -93,3 +95,102 @@ func TestRegistry_AddCommand_Multiple(t *testing.T) {
 
 // Note: HandleCommand would require mocking bot.Client and events
 // These would be integration tests that require a mock client implementation
+
+func TestRegisterAll_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {
+	var client *bot.Client
+	registry, err := NewRegistry(client, false, nil)
+	require.NoError(t, err)
+
+	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", "", nil, client)
+
+	command := findSlashCommand(t, registry.commands, "prompt")
+	appendOption := findSubCommandOption(t, command.Options, "append")
+	appendTextOption := appendOption.Options[0].(discord.ApplicationCommandOptionString)
+	require.NotNil(t, appendTextOption.MaxLength)
+	assert.Equal(t, promptInlineMaxLength, *appendTextOption.MaxLength)
+
+	setGroup := findSubCommandGroupOption(t, command.Options, "set")
+	require.Len(t, setGroup.Options, 3)
+
+	customOption := setGroup.Options[0]
+	require.Equal(t, "custom", customOption.Name)
+	customPromptOption := customOption.Options[0].(discord.ApplicationCommandOptionString)
+	require.NotNil(t, customPromptOption.MaxLength)
+	assert.Equal(t, promptInlineMaxLength, *customPromptOption.MaxLength)
+
+	fileOption := setGroup.Options[1]
+	require.Equal(t, "file", fileOption.Name)
+	_, ok := fileOption.Options[0].(discord.ApplicationCommandOptionAttachment)
+	assert.True(t, ok)
+}
+
+func TestRegisterVoiceCommands_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {
+	var client *bot.Client
+	registry, err := NewRegistry(client, false, nil)
+	require.NoError(t, err)
+
+	RegisterVoiceCommands(registry, NewVoiceCommands(nil, nil, client, "voice prompt"))
+
+	command := findSlashCommand(t, registry.commands, "voice")
+	promptGroup := findSubCommandGroupOption(t, command.Options, "prompt")
+	require.Len(t, promptGroup.Options, 5)
+
+	appendOption := promptGroup.Options[1]
+	require.Equal(t, "append", appendOption.Name)
+	appendTextOption := appendOption.Options[0].(discord.ApplicationCommandOptionString)
+	require.NotNil(t, appendTextOption.MaxLength)
+	assert.Equal(t, promptInlineMaxLength, *appendTextOption.MaxLength)
+
+	setOption := promptGroup.Options[2]
+	require.Equal(t, "set", setOption.Name)
+	setPromptOption := setOption.Options[0].(discord.ApplicationCommandOptionString)
+	require.NotNil(t, setPromptOption.MaxLength)
+	assert.Equal(t, promptInlineMaxLength, *setPromptOption.MaxLength)
+
+	fileOption := promptGroup.Options[3]
+	require.Equal(t, "file", fileOption.Name)
+	_, ok := fileOption.Options[0].(discord.ApplicationCommandOptionAttachment)
+	assert.True(t, ok)
+}
+
+func findSlashCommand(t *testing.T, commands []discord.ApplicationCommandCreate, name string) discord.SlashCommandCreate {
+	t.Helper()
+
+	for _, command := range commands {
+		slashCommand, ok := command.(discord.SlashCommandCreate)
+		if ok && slashCommand.Name == name {
+			return slashCommand
+		}
+	}
+
+	t.Fatalf("command %q not found", name)
+	return discord.SlashCommandCreate{}
+}
+
+func findSubCommandOption(t *testing.T, options []discord.ApplicationCommandOption, name string) discord.ApplicationCommandOptionSubCommand {
+	t.Helper()
+
+	for _, option := range options {
+		subCommand, ok := option.(discord.ApplicationCommandOptionSubCommand)
+		if ok && subCommand.Name == name {
+			return subCommand
+		}
+	}
+
+	t.Fatalf("subcommand %q not found", name)
+	return discord.ApplicationCommandOptionSubCommand{}
+}
+
+func findSubCommandGroupOption(t *testing.T, options []discord.ApplicationCommandOption, name string) discord.ApplicationCommandOptionSubCommandGroup {
+	t.Helper()
+
+	for _, option := range options {
+		subCommandGroup, ok := option.(discord.ApplicationCommandOptionSubCommandGroup)
+		if ok && subCommandGroup.Name == name {
+			return subCommandGroup
+		}
+	}
+
+	t.Fatalf("subcommand group %q not found", name)
+	return discord.ApplicationCommandOptionSubCommandGroup{}
+}
