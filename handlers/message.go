@@ -21,6 +21,7 @@ import (
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/triggerwords"
 	"polynux/disgoroq/utils"
 )
 
@@ -32,9 +33,10 @@ type MessageHandler struct {
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
 	defaultPrompt  string
+	triggerWords   []string
 }
 
-func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string) *MessageHandler {
+func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string) *MessageHandler {
 	return &MessageHandler{
 		client:         client,
 		aiservice:      aiService,
@@ -43,6 +45,7 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
 		defaultPrompt:  defaultPrompt,
+		triggerWords:   triggerwords.NormalizeAll(triggerWords),
 	}
 }
 
@@ -74,6 +77,8 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	ctx, cancel := appcontext.Message()
 	defer cancel()
 
+	explicitTrigger := h.isExplicitTrigger(ctx, &m, client.ID())
+
 	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
 	if err != nil {
 		logger.Error("Failed to get bot member",
@@ -86,7 +91,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	thresholdSexe := h.repo.GetThresholdSexe(ctx, m.GuildID.String())
 
 	randFloat := rand.Float32()
-	if randFloat < float32(thresholdSexe) && !h.botMentioned(&m, client.ID()) {
+	if randFloat < float32(thresholdSexe) && !explicitTrigger {
 		if rand.Float32() < 0.5 {
 			client.Rest.CreateMessage(m.ChannelID, discord.MessageCreate{Content: "(et je parle de sexe evidemment)"}, rest.WithCtx(ctx))
 			return
@@ -97,7 +102,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 
 	randFloat = rand.Float32()
-	if randFloat > float32(threshold) && !h.botMentioned(&m, client.ID()) {
+	if randFloat > float32(threshold) && !explicitTrigger {
 		return
 	}
 
@@ -107,7 +112,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 
 	lastMessageTime := h.repo.GetLastMessage(ctx, m.GuildID.String())
-	if lastMessageTime > 0 && !h.botMentioned(&m, client.ID()) {
+	if lastMessageTime > 0 && !explicitTrigger {
 		if time.Now().Unix()-lastMessageTime < database.DefaultRateLimit {
 			return
 		}
@@ -179,7 +184,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		instructions = prompt
 	}
 	if h.emojiManager != nil {
-		instructions += h.emojiManager.AllGuildEmojiPrompt(50)
+		instructions += h.emojiManager.GuildEmojiPrompt(m.GuildID.String(), 50)
 	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
@@ -274,6 +279,23 @@ func (h *MessageHandler) botMentioned(m *discord.Message, botID snowflake.ID) bo
 		}
 	}
 	return false
+}
+
+func (h *MessageHandler) isExplicitTrigger(ctx context.Context, m *discord.Message, botID snowflake.ID) bool {
+	if h.botMentioned(m, botID) {
+		return true
+	}
+
+	if m.GuildID == nil {
+		return false
+	}
+
+	triggerWords := h.triggerWords
+	if customTriggerWords, ok := h.repo.GetTriggerWords(ctx, m.GuildID.String()); ok {
+		triggerWords = customTriggerWords
+	}
+
+	return triggerwords.Contains(m.Content, triggerWords)
 }
 
 func (h *MessageHandler) getMessages(ctx context.Context, channelID snowflake.ID, num int) ([]discord.Message, error) {

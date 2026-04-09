@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"polynux/disgoroq/triggerwords"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,6 +43,8 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(interpolated, config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	config.Bot.TriggerWords = triggerwords.NormalizeAll(config.Bot.TriggerWords)
 
 	// Convert durations from parsed values (YAML stores them as ms/seconds)
 	convertDurations(config)

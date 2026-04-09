@@ -21,17 +21,20 @@ import (
 	"polynux/disgoroq/horoscope"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/memory"
+	"polynux/disgoroq/triggerwords"
 	"polynux/disgoroq/voice"
 )
 
 var defaultMemberPermissions = discord.PermissionManageMessages
 
 var defaultPrompt string
+var defaultTriggerWords []string
 
 // RegisterAll registers all bot commands.
 // If voiceOrchestrator is nil, voice commands will not be registered.
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, reengageCfg config.ReengageConfig, cfgDefaultPrompt string, cfgDefaultVoicePrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, reengageCfg config.ReengageConfig, cfgDefaultPrompt string, cfgDefaultTriggerWords []string, cfgDefaultVoicePrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
 	defaultPrompt = cfgDefaultPrompt
+	defaultTriggerWords = triggerwords.NormalizeAll(cfgDefaultTriggerWords)
 
 	// Register voice commands if orchestrator is available
 	if voiceOrchestrator != nil {
@@ -306,6 +309,61 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 			},
 		},
 		reengageHandler(repo, reengageCfg),
+	)
+
+	registry.AddCommand(
+		discord.SlashCommandCreate{
+			Name:                     "triggers",
+			Description:              "Manage bot trigger words",
+			DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
+			Options: []discord.ApplicationCommandOption{
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "list",
+					Description: "Show the trigger words for this server",
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "add",
+					Description: "Add one trigger word",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
+							Name:        "word",
+							Description: "Trigger word to add",
+							Required:    true,
+							MaxLength:   ptr(50),
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "remove",
+					Description: "Remove one trigger word",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
+							Name:        "word",
+							Description: "Trigger word to remove",
+							Required:    true,
+							MaxLength:   ptr(50),
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "set",
+					Description: "Replace trigger words with a comma-separated list",
+					Options: []discord.ApplicationCommandOption{
+						discord.ApplicationCommandOptionString{
+							Name:        "words",
+							Description: "Comma-separated trigger words",
+							Required:    true,
+							MaxLength:   ptr(500),
+						},
+					},
+				},
+				discord.ApplicationCommandOptionSubCommand{
+					Name:        "reset",
+					Description: "Reset trigger words to the config defaults",
+				},
+			},
+		},
+		triggerWordsHandler(repo),
 	)
 }
 

@@ -215,7 +215,7 @@ func main() {
 	emojiManager := emoji.NewManager(client, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt)
+	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
 		bot.NewListenerFunc(handlers.HandleGuildJoin),
@@ -269,7 +269,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Invalid command registry configuration", zap.Error(err))
 	}
-	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
+	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		registry.HandleCommand(e)
 	}))

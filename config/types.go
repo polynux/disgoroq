@@ -26,7 +26,8 @@ type DiscordConfig struct {
 
 // BotConfig contains bot personality configuration.
 type BotConfig struct {
-	DefaultPrompt string `yaml:"default_prompt"`
+	DefaultPrompt string   `yaml:"default_prompt"`
+	TriggerWords  []string `yaml:"trigger_words"`
 }
 
 // DatabaseConfig contains database-related configuration.
@@ -199,6 +200,7 @@ func DefaultConfig() *Config {
 		},
 		Bot: BotConfig{
 			DefaultPrompt: "yo, t'es {{.BotNick}}, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀",
+			TriggerWords:  []string{"feun", "feunboy"},
 		},
 		Voice: VoiceConfig{
 			Enabled: false,

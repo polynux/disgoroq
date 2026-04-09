@@ -3,10 +3,12 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strconv"
 	"strings"
 
 	"polynux/disgoroq/db"
+	"polynux/disgoroq/triggerwords"
 	"polynux/disgoroq/utils"
 )
 
@@ -155,6 +157,48 @@ func (r *Repository) GetVoicePrompt(ctx context.Context, guildID string) (string
 		return "", false
 	}
 	return prompt, true
+}
+
+func (r *Repository) GetTriggerWords(ctx context.Context, guildID string) ([]string, bool) {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "trigger_words",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return nil, false
+	}
+
+	var words []string
+	if err := json.Unmarshal([]byte(value), &words); err != nil {
+		return nil, false
+	}
+
+	return triggerwords.NormalizeAll(words), true
+}
+
+func (r *Repository) SetTriggerWords(ctx context.Context, guildID string, words []string) error {
+	normalized := triggerwords.NormalizeAll(words)
+	if err := triggerwords.Validate(normalized); err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "trigger_words",
+		Value:   string(payload),
+	})
+}
+
+func (r *Repository) DeleteTriggerWords(ctx context.Context, guildID string) error {
+	return r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+		GuildID: guildID,
+		Name:    "trigger_words",
+	})
 }
 
 func (r *Repository) SetGuildSetting(ctx context.Context, guildID, name, value string) error {

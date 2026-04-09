@@ -101,7 +101,7 @@ func TestRegisterAll_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {
 	registry, err := NewRegistry(client, false, nil)
 	require.NoError(t, err)
 
-	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", "", nil, client)
+	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", []string{"feun", "feunboy"}, "", nil, client)
 
 	command := findSlashCommand(t, registry.commands, "prompt")
 	appendOption := findSubCommandOption(t, command.Options, "append")
@@ -122,6 +122,22 @@ func TestRegisterAll_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {
 	require.Equal(t, "file", fileOption.Name)
 	_, ok := fileOption.Options[0].(discord.ApplicationCommandOptionAttachment)
 	assert.True(t, ok)
+}
+
+func TestRegisterAll_TriggerCommandRegistered(t *testing.T) {
+	var client *bot.Client
+	registry, err := NewRegistry(client, false, nil)
+	require.NoError(t, err)
+
+	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", []string{"feun", "feunboy"}, "", nil, client)
+
+	command := findSlashCommand(t, registry.commands, "triggers")
+	assert.Len(t, command.Options, 5)
+
+	setOption := findSubCommandOption(t, command.Options, "set")
+	setWordsOption := setOption.Options[0].(discord.ApplicationCommandOptionString)
+	require.NotNil(t, setWordsOption.MaxLength)
+	assert.Equal(t, 500, *setWordsOption.MaxLength)
 }
 
 func TestRegisterVoiceCommands_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "github.com/tursodatabase/go-libsql"
 
 	"polynux/disgoroq/db"
@@ -226,6 +228,29 @@ func TestRepository_GetPrompt_WithValue(t *testing.T) {
 	if prompt != "custom prompt" {
 		t.Errorf("Expected prompt 'custom prompt', got '%s'", prompt)
 	}
+}
+
+func TestRepository_TriggerWordsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	err := repo.SetTriggerWords(ctx, "test-guild", []string{"Feun", "feunboy", "feun"})
+	require.NoError(t, err)
+
+	triggerWords, ok := repo.GetTriggerWords(ctx, "test-guild")
+	require.True(t, ok)
+	assert.Equal(t, []string{"feun", "feunboy"}, triggerWords)
+}
+
+func TestRepository_DeleteTriggerWords(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	require.NoError(t, repo.SetTriggerWords(ctx, "test-guild", []string{"feun"}))
+	require.NoError(t, repo.DeleteTriggerWords(ctx, "test-guild"))
+
+	_, ok := repo.GetTriggerWords(ctx, "test-guild")
+	assert.False(t, ok)
 }
 
 func TestRepository_SetGuildSetting(t *testing.T) {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"polynux/disgoroq/triggerwords"
 )
 
 // Validate checks if the configuration is valid and returns an error describing any issues.
@@ -279,6 +281,9 @@ func (c *ReengageConfig) validate() error {
 func (c *BotConfig) validate() error {
 	if strings.TrimSpace(c.DefaultPrompt) == "" {
 		return fmt.Errorf("bot.default_prompt is required")
+	}
+	if err := triggerwords.Validate(c.TriggerWords); err != nil {
+		return fmt.Errorf("bot.trigger_words is invalid: %w", err)
 	}
 	return nil
 }

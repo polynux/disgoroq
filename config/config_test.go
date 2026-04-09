@@ -224,7 +224,7 @@ func TestValidation(t *testing.T) {
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
 				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
-				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
 				Voice:     VoiceConfig{},
 			},
 			wantErr: false,
@@ -279,7 +279,7 @@ func TestValidation(t *testing.T) {
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
 				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
-				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
 			},
 			wantErr: false,
 		},
@@ -302,7 +302,7 @@ func TestValidation(t *testing.T) {
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
 				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
-				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
 			},
 			wantErr: true,
 			errMsg:  "ai.primary_provider must be one of",
@@ -335,7 +335,7 @@ func TestValidation(t *testing.T) {
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
 				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
-				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
 			},
 			wantErr: true,
 			errMsg:  "discord.dev_guild_ids cannot contain empty values",
@@ -354,7 +354,7 @@ func TestValidation(t *testing.T) {
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
 				Horoscope: HoroscopeConfig{IncludeEmojis: true},
 				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
-				Bot:       BotConfig{DefaultPrompt: "hello"},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
 				Voice: VoiceConfig{
 					Enabled: true,
 					TTS:     TTSConfig{Endpoint: "http://localhost:8880", TimeoutMs: 1000},
@@ -480,6 +480,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if config.Memory.BufferThreshold != 10 {
 		t.Errorf("Default Memory.BufferThreshold = %v, want 10", config.Memory.BufferThreshold)
+	}
+	if len(config.Bot.TriggerWords) != 2 || config.Bot.TriggerWords[0] != "feun" || config.Bot.TriggerWords[1] != "feunboy" {
+		t.Errorf("Default Bot.TriggerWords = %v, want [feun feunboy]", config.Bot.TriggerWords)
 	}
 }
 
