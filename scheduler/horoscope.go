@@ -34,47 +34,6 @@ func (s *Scheduler) SendHoroscope() {
 
  Exemple: "**TAUREAU** Cette semaine, tes plantes d'intérieur complotent pour voler tes chaussettes! 🧦👽 Méfie-toi des carottes qui te font des clins d'œil au supermarché. 🥕👀 Recommandation cosmique: porte ton chapeau à l'envers pour augmenter ton magnétisme auprès des distributeurs automatiques! 🤪💰"`
 
-	// Check if emoji inclusion is enabled from config
-	includeEmojis := s.horoscopeCfg.IncludeEmojis
-
-	// Append custom emojis to system prompt if enabled
-	if includeEmojis && s.emojiManager != nil {
-		instructions += s.emojiManager.AllGuildEmojiPrompt(50)
-	}
-
-	response, err := s.aiservice.Chat(stdcontext.Background(), &ai.ChatRequest{
-		SystemPrompt: instructions,
-		Messages: []ai.Message{
-			{
-				Role:    "user",
-				Content: horoscopeMessage,
-			},
-		},
-		Temperature: 1,
-		MaxTokens:   3000,
-	})
-
-	if err != nil {
-		logger.Error("Error getting horoscope response", zap.Error(err))
-
-		// Enhanced error handling with fallback awareness
-		errorMsg := "Failed to generate horoscope"
-		if s.aiservice.IsFallbackAvailable() {
-			errorMsg = "Failed to generate horoscope (both primary and fallback providers failed)"
-		}
-		logger.Error(errorMsg, zap.Error(err))
-		return
-	}
-
-	responses := make([]string, 0)
-	if len(response.Content) > 2000 {
-		for i := 0; i < len(response.Content); i += 2000 {
-			responses = append(responses, response.Content[i:min(i+2000, len(response.Content))])
-		}
-	} else {
-		responses = append(responses, response.Content)
-	}
-
 	guilds, err := s.repo.GetAllGuilds(stdcontext.Background())
 	if err != nil {
 		logger.Error("Error getting guilds", zap.Error(err))
@@ -83,7 +42,6 @@ func (s *Scheduler) SendHoroscope() {
 
 	for _, guild := range guilds {
 		ctx := stdcontext.Background()
-
 		channelID, err := s.repo.GetHoroscopeChannel(ctx, guild)
 		if err != nil {
 			logger.Error("Error getting horoscope channel",
@@ -91,6 +49,48 @@ func (s *Scheduler) SendHoroscope() {
 				zap.String("guild_id", guild),
 			)
 			continue
+		}
+
+		guildInstructions := instructions
+		if s.horoscopeCfg.IncludeEmojis && s.emojiManager != nil {
+			guildInstructions += s.emojiManager.GuildEmojiPrompt(guild, 50)
+		}
+
+		response, err := s.aiservice.Chat(ctx, &ai.ChatRequest{
+			SystemPrompt: guildInstructions,
+			Messages: []ai.Message{
+				{
+					Role:    "user",
+					Content: horoscopeMessage,
+				},
+			},
+			Temperature: 1,
+			MaxTokens:   3000,
+		})
+		if err != nil {
+			logger.Error("Error getting horoscope response",
+				zap.Error(err),
+				zap.String("guild_id", guild),
+			)
+
+			errorMsg := "Failed to generate horoscope"
+			if s.aiservice.IsFallbackAvailable() {
+				errorMsg = "Failed to generate horoscope (both primary and fallback providers failed)"
+			}
+			logger.Error(errorMsg,
+				zap.Error(err),
+				zap.String("guild_id", guild),
+			)
+			continue
+		}
+
+		responses := make([]string, 0)
+		if len(response.Content) > 2000 {
+			for i := 0; i < len(response.Content); i += 2000 {
+				responses = append(responses, response.Content[i:min(i+2000, len(response.Content))])
+			}
+		} else {
+			responses = append(responses, response.Content)
 		}
 		_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{Content: "Horoscope du jour:"}, rest.WithCtx(ctx))
 		if err != nil {
