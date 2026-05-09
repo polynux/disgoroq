@@ -113,7 +113,30 @@ func TestRetryWrapperChatSuccessFirstAttempt(t *testing.T) {
 	response, err := wrapper.Chat(ctx, req)
 
 	assert.NoError(t, err)
-	assert.Equal(t, expectedResponse, response)
+	assert.Equal(t, expectedResponse.Content, response.Content)
+	assert.Equal(t, expectedResponse.Model, response.Model)
+	assert.Equal(t, "test-provider", response.Provider)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatAnnotatesModelWhenProviderLeavesItEmpty(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+		Content:      "Hello, world!",
+		Model:        "",
+		TokensUsed:   10,
+		FinishReason: "stop",
+	}, nil)
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "test-chat-model", response.Model)
+	assert.Equal(t, "test-provider", response.Provider)
 	mockProvider.AssertExpectations(t)
 }
 

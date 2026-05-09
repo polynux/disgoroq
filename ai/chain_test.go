@@ -101,6 +101,7 @@ func TestProviderChainChatSuccessFirstProvider(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResponse.Content, response.Content)
 	assert.Equal(t, expectedResponse.Model, response.Model)
+	assert.Equal(t, "groq", response.Provider)
 
 	// Second provider should not be called
 	mockProvider2.AssertNotCalled(t, "Chat")
@@ -142,6 +143,7 @@ func TestProviderChainChatFallbackOnError(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResponse.Content, response.Content)
 	assert.Equal(t, expectedResponse.Model, response.Model)
+	assert.Equal(t, "ollama", response.Provider)
 
 	mockProvider1.AssertExpectations(t)
 	mockProvider2.AssertExpectations(t)
@@ -187,6 +189,7 @@ func TestProviderChainChatFallbackOnEmptyResponse(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, validResponse.Content, response.Content)
 	assert.Equal(t, validResponse.Model, response.Model)
+	assert.Equal(t, "ollama", response.Provider)
 
 	mockProvider1.AssertExpectations(t)
 	mockProvider2.AssertExpectations(t)
@@ -225,6 +228,28 @@ func TestProviderChainChatAllProvidersFail(t *testing.T) {
 
 	mockProvider1.AssertExpectations(t)
 	mockProvider2.AssertExpectations(t)
+}
+
+func TestProviderChainChatFillsProviderAndModelMetadata(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("groq")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+		Content:      "hello",
+		Model:        "",
+		TokensUsed:   7,
+		FinishReason: "stop",
+	}, nil)
+
+	chain := NewProviderChain(mockProvider)
+	response, err := chain.Chat(context.Background(), &ChatRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "groq", response.Provider)
+	assert.Equal(t, "test-model", response.Model)
+	mockProvider.AssertExpectations(t)
 }
 
 func TestProviderChainChatAllProvidersEmptyResponse(t *testing.T) {

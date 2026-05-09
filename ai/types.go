@@ -62,6 +62,7 @@ type VisionRequest struct {
 // ChatResponse contains the AI-generated text response
 type ChatResponse struct {
 	Content      string // Generated text
+	Provider     string // Provider that generated the response
 	Model        string // Model that generated the response
 	TokensUsed   int    // Total tokens consumed
 	FinishReason string // "stop", "length", etc.
@@ -70,6 +71,7 @@ type ChatResponse struct {
 // VisionResponse contains the image description
 type VisionResponse struct {
 	Description  string // Generated description
+	Provider     string // Provider that generated the response
 	Model        string // Model used
 	TokensUsed   int    // Tokens consumed
 	FinishReason string // "stop", "length", etc.

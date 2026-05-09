@@ -20,6 +20,11 @@ type RetryWrapper struct {
 	visionModel       string // Provider-specific vision model
 }
 
+type modelAwareProvider interface {
+	ChatModelName() string
+	VisionModelName() string
+}
+
 // NewRetryWrapper creates a new retry wrapper around a provider
 func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength int, chatModel, visionModel string) *RetryWrapper {
 	if minResponseLength < 1 {
@@ -39,6 +44,14 @@ func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength in
 // Name returns the name of the wrapped provider
 func (r *RetryWrapper) Name() string {
 	return r.provider.Name()
+}
+
+func (r *RetryWrapper) ChatModelName() string {
+	return r.chatModel
+}
+
+func (r *RetryWrapper) VisionModelName() string {
+	return r.visionModel
 }
 
 // AvailableModels returns the available models from the wrapped provider
@@ -103,6 +116,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 		validation := r.validator.ValidateChatResponse(response)
 
 		if validation.IsValid {
+			if response.Model == "" {
+				response.Model = preparedRequest.Model
+			}
+			response.Provider = r.provider.Name()
+
 			// Success! Return the response
 			if attempt > 1 {
 				logger.Info("AI chat succeeded after retries",
@@ -218,6 +236,11 @@ func (r *RetryWrapper) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 		validation := r.validator.ValidateVisionResponse(response)
 
 		if validation.IsValid {
+			if response.Model == "" {
+				response.Model = requestWithModel.Model
+			}
+			response.Provider = r.provider.Name()
+
 			if attempt > 1 {
 				logger.Info("AI vision succeeded after retries",
 					zap.Int("attempts", attempt),

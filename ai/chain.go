@@ -15,6 +15,24 @@ type ProviderChain struct {
 	validator *ResponseValidator
 }
 
+func selectedChatModel(provider Provider, fallback string) string {
+	modelProvider, ok := provider.(modelAwareProvider)
+	if !ok || modelProvider.ChatModelName() == "" {
+		return fallback
+	}
+
+	return modelProvider.ChatModelName()
+}
+
+func selectedVisionModel(provider Provider, fallback string) string {
+	modelProvider, ok := provider.(modelAwareProvider)
+	if !ok || modelProvider.VisionModelName() == "" {
+		return fallback
+	}
+
+	return modelProvider.VisionModelName()
+}
+
 // NewProviderChain creates a new provider chain with the given providers in priority order
 func NewProviderChain(providers ...Provider) *ProviderChain {
 	return &ProviderChain{
@@ -60,7 +78,7 @@ func (c *ProviderChain) Chat(ctx context.Context, req *ChatRequest) (*ChatRespon
 			zap.String("provider", provider.Name()),
 			zap.Int("attempt", i+1),
 			zap.Int("total_providers", len(c.providers)),
-			zap.String("model", req.Model))
+			zap.String("model", selectedChatModel(provider, req.Model)))
 
 		// Attempt to get response from this provider
 		response, err := provider.Chat(ctx, req)
@@ -93,13 +111,14 @@ func (c *ProviderChain) Chat(ctx context.Context, req *ChatRequest) (*ChatRespon
 					zap.String("original_provider", c.providers[0].Name()))
 			}
 
-			// Add provider information to the response
-			return &ChatResponse{
-				Content:      response.Content,
-				Model:        response.Model,
-				TokensUsed:   response.TokensUsed,
-				FinishReason: response.FinishReason,
-			}, nil
+			if response.Provider == "" {
+				response.Provider = provider.Name()
+			}
+			if response.Model == "" {
+				response.Model = selectedChatModel(provider, req.Model)
+			}
+
+			return response, nil
 		}
 
 		// Empty/invalid response - log and try next provider
@@ -131,7 +150,7 @@ func (c *ProviderChain) Vision(ctx context.Context, req *VisionRequest) (*Vision
 			zap.String("provider", provider.Name()),
 			zap.Int("attempt", i+1),
 			zap.Int("total_providers", len(c.providers)),
-			zap.String("model", req.Model))
+			zap.String("model", selectedVisionModel(provider, req.Model)))
 
 		// Attempt to get response from this provider
 		response, err := provider.Vision(ctx, req)
@@ -164,12 +183,14 @@ func (c *ProviderChain) Vision(ctx context.Context, req *VisionRequest) (*Vision
 					zap.String("original_provider", c.providers[0].Name()))
 			}
 
-			return &VisionResponse{
-				Description:  response.Description,
-				Model:        response.Model,
-				TokensUsed:   response.TokensUsed,
-				FinishReason: response.FinishReason,
-			}, nil
+			if response.Provider == "" {
+				response.Provider = provider.Name()
+			}
+			if response.Model == "" {
+				response.Model = selectedVisionModel(provider, req.Model)
+			}
+
+			return response, nil
 		}
 
 		// Empty response - log and try next provider

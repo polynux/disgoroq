@@ -231,9 +231,17 @@ func (s *Service) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, er
 	}
 
 	// Log success
+	modelName := response.Model
+	if modelName == "" {
+		modelName = req.Model
+	}
+	providerName := response.Provider
+	if providerName == "" {
+		providerName = s.provider.Name()
+	}
 	logger.Info("AI service chat succeeded",
-		zap.String("model", req.Model),
-		zap.String("provider", s.provider.Name()),
+		zap.String("model", modelName),
+		zap.String("provider", providerName),
 		zap.Duration("duration", duration),
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
@@ -263,9 +271,17 @@ func (s *Service) Vision(ctx context.Context, req *VisionRequest) (*VisionRespon
 	}
 
 	// Log success
+	modelName := response.Model
+	if modelName == "" {
+		modelName = req.Model
+	}
+	providerName := response.Provider
+	if providerName == "" {
+		providerName = s.provider.Name()
+	}
 	logger.Info("AI service vision succeeded",
-		zap.String("model", req.Model),
-		zap.String("provider", s.provider.Name()),
+		zap.String("model", modelName),
+		zap.String("provider", providerName),
 		zap.Duration("duration", duration),
 		zap.Int("description_length", len(response.Description)),
 		zap.Int("tokens_used", response.TokensUsed))
