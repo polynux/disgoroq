@@ -12,7 +12,11 @@ import (
 	"net/url"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"github.com/ollama/ollama/api"
+
+	"polynux/disgoroq/logger"
 )
 
 type OllamaProvider struct {
@@ -20,6 +24,20 @@ type OllamaProvider struct {
 	baseURL         *url.URL
 	httpClient      *http.Client
 	thinkingEnabled bool
+}
+
+type ollamaChatChunk struct {
+	Model string `json:"model"`
+	Error string `json:"error,omitempty"`
+	Message struct {
+		Role     string `json:"role"`
+		Content  string `json:"content"`
+		Thinking string `json:"thinking,omitempty"`
+	} `json:"message"`
+	DoneReason      string `json:"done_reason,omitempty"`
+	Done            bool   `json:"done"`
+	EvalCount       int    `json:"eval_count,omitempty"`
+	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
 }
 
 func NewOllamaProvider(baseURL string, thinkingEnabled bool) (*OllamaProvider, error) {
@@ -154,7 +172,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/x-ndjson")
+	httpReq.Header.Set("Accept", "application/json")
 
 	httpResp, err := o.httpClient.Do(httpReq)
 	if err != nil {
@@ -162,55 +180,108 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	}
 	defer httpResp.Body.Close()
 
+	responseBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	chunks, err := parseOllamaChatResponse(responseBody)
+	if err != nil {
+		return nil, err
+	}
+
 	var responseBuilder strings.Builder
+	var thinkingBuilder strings.Builder
 	responseModel := model
 	finishReason := "stop"
 	var tokensUsed int
 
-	scanner := bufio.NewScanner(httpResp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		var errorResponse struct {
-			Error string `json:"error,omitempty"`
+	for _, chunk := range chunks {
+		if chunk.Error != "" {
+			return nil, errors.New(chunk.Error)
 		}
-		if err := json.Unmarshal(line, &errorResponse); err != nil {
-			return nil, fmt.Errorf("unmarshal Ollama response: %w", err)
+		if chunk.Message.Content != "" {
+			responseBuilder.WriteString(chunk.Message.Content)
 		}
-		if errorResponse.Error != "" {
-			return nil, errors.New(errorResponse.Error)
+		if chunk.Message.Thinking != "" {
+			thinkingBuilder.WriteString(chunk.Message.Thinking)
 		}
-		if httpResp.StatusCode >= http.StatusBadRequest {
-			return nil, fmt.Errorf("ollama chat failed: %s", httpResp.Status)
+		if chunk.Model != "" {
+			responseModel = chunk.Model
 		}
-
-		var resp api.ChatResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			return nil, fmt.Errorf("unmarshal Ollama chat response: %w", err)
+		if chunk.DoneReason != "" {
+			finishReason = chunk.DoneReason
 		}
-
-		if resp.Message.Content != "" {
-			responseBuilder.WriteString(resp.Message.Content)
-		}
-		if resp.Model != "" {
-			responseModel = resp.Model
-		}
-		if resp.DoneReason != "" {
-			finishReason = resp.DoneReason
-		}
-		tokensUsed = resp.EvalCount + resp.PromptEvalCount
+		tokensUsed = chunk.EvalCount + chunk.PromptEvalCount
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+
+	if httpResp.StatusCode >= http.StatusBadRequest {
+		return nil, fmt.Errorf("ollama chat failed: %s", httpResp.Status)
+	}
+
+	content := responseBuilder.String()
+	thinking := thinkingBuilder.String()
+	if content == "" && thinking != "" {
+		logger.Warn("Ollama response used thinking field without final content",
+			zap.String("model", responseModel),
+			zap.Bool("thinking_enabled", o.thinkingEnabled),
+			zap.Int("thinking_length", len(thinking)),
+			zap.Int("response_chunks", len(chunks)))
+		content = thinking
+	}
+
+	if content == "" {
+		logger.Warn("Ollama response body had no content",
+			zap.String("model", responseModel),
+			zap.Bool("thinking_enabled", o.thinkingEnabled),
+			zap.Int("thinking_length", len(thinking)),
+			zap.Int("body_bytes", len(responseBody)),
+			zap.Int("response_chunks", len(chunks)))
 	}
 
 	return &ChatResponse{
-		Content:      responseBuilder.String(),
+		Content:      content,
 		Model:        responseModel,
 		TokensUsed:   tokensUsed,
 		FinishReason: finishReason,
 	}, nil
+}
+
+func parseOllamaChatResponse(body []byte) ([]ollamaChatChunk, error) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("ollama chat returned empty body")
+	}
+
+	var single ollamaChatChunk
+	if err := json.Unmarshal(trimmed, &single); err == nil {
+		return []ollamaChatChunk{single}, nil
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(trimmed))
+	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+
+	chunks := make([]ollamaChatChunk, 0, 8)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+
+		var chunk ollamaChatChunk
+		if err := json.Unmarshal(line, &chunk); err != nil {
+			return nil, fmt.Errorf("unmarshal Ollama chat response: %w", err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(chunks) == 0 {
+		return nil, fmt.Errorf("ollama chat response contained no JSON chunks")
+	}
+
+	return chunks, nil
 }
 
 func (o *OllamaProvider) downloadImage(ctx context.Context, imageURL string) (api.ImageData, error) {

@@ -238,3 +238,45 @@ func TestOllamaChatCanEnableThinking(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ok", resp.Content)
 }
+
+func TestOllamaChatFallsBackToThinkingWhenContentIsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "application/json", r.Header.Get("Accept"))
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"model":"kimi-k2.6:cloud","message":{"role":"assistant","content":"","thinking":"thinking output"},"done":true,"done_reason":"stop","eval_count":11,"prompt_eval_count":7}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model:    "kimi-k2.6:cloud",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "thinking output", resp.Content)
+	assert.Equal(t, "kimi-k2.6:cloud", resp.Model)
+	assert.Equal(t, 18, resp.TokensUsed)
+	assert.Equal(t, "stop", resp.FinishReason)
+}
+
+func TestOllamaChatPrefersContentOverThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"model":"kimi-k2.6:cloud","message":{"role":"assistant","content":"final answer","thinking":"internal reasoning"},"done":true,"done_reason":"stop"}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, true)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model:    "kimi-k2.6:cloud",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "final answer", resp.Content)
+}
