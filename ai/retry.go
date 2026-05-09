@@ -53,6 +53,7 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	// Use provider-specific model
 	requestWithModel := *req
 	requestWithModel.Model = r.chatModel
+	preparedRequest := r.prepareChatRequest(ctx, &requestWithModel)
 
 	// Attempt up to MaxRetries + 1 times (initial attempt + retries)
 	maxAttempts := r.config.MaxRetries + 1
@@ -67,11 +68,11 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 			zap.Int("attempt", attempt),
 			zap.Int("max_attempts", maxAttempts),
 			zap.String("provider", r.provider.Name()),
-			zap.String("model", requestWithModel.Model))
+			zap.String("model", preparedRequest.Model))
 
 		// Make the API call
 		start := time.Now()
-		response, err := r.provider.Chat(ctx, &requestWithModel)
+		response, err := r.provider.Chat(ctx, preparedRequest)
 		duration := time.Since(start)
 
 		// Handle API error
@@ -120,7 +121,7 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 			zap.String("reason", validation.Reason),
 			zap.Int("attempt", attempt),
 			zap.String("provider", r.provider.Name()),
-			zap.String("model", requestWithModel.Model),
+			zap.String("model", preparedRequest.Model),
 			zap.String("content", response.Content),
 			zap.String("finish_reason", response.FinishReason),
 			zap.Int("tokens_used", response.TokensUsed),
@@ -136,7 +137,7 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				Timestamp: time.Now(),
 				EventType: database.EventEmptyResponse,
 				Details: &database.EventDetails{
-					Model:   requestWithModel.Model,
+					Model:   preparedRequest.Model,
 					Context: validation.Reason,
 				},
 				DurationMS: duration.Milliseconds(),

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 // MockProvider is a mock implementation of the Provider interface for testing
 type MockProvider struct {
 	mock.Mock
+	supportsInlineImages func(chatModel, visionModel string) bool
 }
 
 func (m *MockProvider) Name() string {
@@ -39,6 +41,13 @@ func (m *MockProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*VisionResponse), args.Error(1)
+}
+
+func (m *MockProvider) SupportsInlineImages(chatModel, visionModel string) bool {
+	if m.supportsInlineImages == nil {
+		return false
+	}
+	return m.supportsInlineImages(chatModel, visionModel)
 }
 
 func TestNewRetryWrapper(t *testing.T) {
@@ -105,6 +114,92 @@ func TestRetryWrapperChatSuccessFirstAttempt(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedResponse, response)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatFallsBackToImageDescriptions(t *testing.T) {
+	mockProvider := new(MockProvider)
+	expectedResponse := &ChatResponse{
+		Content:      "described",
+		Model:        "test-chat-model",
+		TokensUsed:   10,
+		FinishReason: "stop",
+	}
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.Model == "test-vision-model" &&
+			req.ImageURL == "https://example.com/cat.png" &&
+			req.Instruction == defaultVisionInstruction
+	})).Return(&VisionResponse{
+		Description: "a cat",
+		Model:       "test-vision-model",
+	}, nil).Once()
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return req.Model == "test-chat-model" &&
+			len(req.Images) == 0 &&
+			len(req.Messages) == 1 &&
+			len(req.Messages[0].ImageRefs) == 0 &&
+			strings.Contains(req.Messages[0].Content, "<IMAGE_DESC>") &&
+			strings.Contains(req.Messages[0].Content, "a cat")
+	})).Return(expectedResponse, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:  "https://example.com/cat.png",
+			Type: "image/png",
+		}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse, response)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatPreservesInlineImagesWhenProviderSupportsThem(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.supportsInlineImages = func(chatModel, visionModel string) bool {
+		return chatModel == visionModel
+	}
+
+	expectedResponse := &ChatResponse{
+		Content:      "inline",
+		Model:        "shared-model",
+		TokensUsed:   10,
+		FinishReason: "stop",
+	}
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return req.Model == "shared-model" &&
+			len(req.Images) == 1 &&
+			len(req.Messages) == 1 &&
+			len(req.Messages[0].ImageRefs) == 1 &&
+			!strings.Contains(req.Messages[0].Content, "<IMAGE_DESC>")
+	})).Return(expectedResponse, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "shared-model", "shared-model")
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:  "https://example.com/cat.png",
+			Type: "image/png",
+		}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse, response)
+	mockProvider.AssertNotCalled(t, "Vision", mock.Anything, mock.Anything)
 	mockProvider.AssertExpectations(t)
 }
 
