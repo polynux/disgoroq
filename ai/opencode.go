@@ -11,21 +11,23 @@ import (
 )
 
 type OpencodeProvider struct {
-	apiKey     string
-	baseURL    *url.URL
-	httpClient *http.Client
+	apiKey          string
+	baseURL         *url.URL
+	httpClient      *http.Client
+	thinkingEnabled bool
 }
 
-func NewOpencodeProvider(baseURL, apiKey string) (*OpencodeProvider, error) {
+func NewOpencodeProvider(baseURL, apiKey string, thinkingEnabled bool) (*OpencodeProvider, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("error creating OpenCode client: %w", err)
 	}
 
 	return &OpencodeProvider{
-		apiKey:     apiKey,
-		baseURL:    parsedURL,
-		httpClient: &http.Client{},
+		apiKey:          apiKey,
+		baseURL:         parsedURL,
+		httpClient:      &http.Client{},
+		thinkingEnabled: thinkingEnabled,
 	}, nil
 }
 
@@ -54,11 +56,12 @@ func (o *OpencodeProvider) SupportsInlineImages(chatModel, visionModel string) b
 
 func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	body, err := json.Marshal(opencodeChatRequest{
-		Model:       req.Model,
-		Messages:    buildOpencodeMessages(req),
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      false,
+		Model:           req.Model,
+		Messages:        buildOpencodeMessages(req),
+		MaxTokens:       req.MaxTokens,
+		Temperature:     req.Temperature,
+		ReasoningEffort: opencodeReasoningEffort(o.thinkingEnabled),
+		Stream:          false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling OpenCode chat request: %w", err)
@@ -105,9 +108,10 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 				},
 			},
 		},
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		Stream:      false,
+		MaxTokens:       req.MaxTokens,
+		Temperature:     req.Temperature,
+		ReasoningEffort: opencodeReasoningEffort(o.thinkingEnabled),
+		Stream:          false,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling OpenCode vision request: %w", err)
@@ -207,11 +211,12 @@ func buildOpencodeMessages(req *ChatRequest) []opencodeChatMessage {
 }
 
 type opencodeChatRequest struct {
-	Model       string                `json:"model"`
-	Messages    []opencodeChatMessage `json:"messages"`
-	MaxTokens   int                   `json:"max_tokens,omitempty"`
-	Temperature float32               `json:"temperature,omitempty"`
-	Stream      bool                  `json:"stream"`
+	Model           string                `json:"model"`
+	Messages        []opencodeChatMessage `json:"messages"`
+	MaxTokens       int                   `json:"max_tokens,omitempty"`
+	Temperature     float32               `json:"temperature,omitempty"`
+	ReasoningEffort string                `json:"reasoning_effort,omitempty"`
+	Stream          bool                  `json:"stream"`
 }
 
 type opencodeChatMessage struct {
@@ -240,4 +245,11 @@ type opencodeChatResponse struct {
 	Usage struct {
 		TotalTokens int `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+func opencodeReasoningEffort(thinkingEnabled bool) string {
+	if thinkingEnabled {
+		return ""
+	}
+	return "none"
 }

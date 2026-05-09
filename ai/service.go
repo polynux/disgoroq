@@ -20,21 +20,24 @@ type ServiceConfig struct {
 	PrimaryProvider string
 
 	// Primary provider configuration
-	GroqAPIKey      string
-	GroqModel       string
-	GroqVisionModel string
+	GroqAPIKey          string
+	GroqModel           string
+	GroqVisionModel     string
+	GroqThinkingEnabled bool
 
 	// Additional provider configuration
-	OllamaEnabled     bool
-	OllamaURL         string
-	OllamaModel       string
-	OllamaVisionModel string
+	OllamaEnabled         bool
+	OllamaURL             string
+	OllamaModel           string
+	OllamaVisionModel     string
+	OllamaThinkingEnabled bool
 
-	OpencodeEnabled     bool
-	OpencodeBaseURL     string
-	OpencodeAPIKey      string
-	OpencodeModel       string
-	OpencodeVisionModel string
+	OpencodeEnabled         bool
+	OpencodeBaseURL         string
+	OpencodeAPIKey          string
+	OpencodeModel           string
+	OpencodeVisionModel     string
+	OpencodeThinkingEnabled bool
 
 	// Retry configuration
 	RetryConfig RetryConfig
@@ -129,7 +132,7 @@ func NewService(config ServiceConfig) *Service {
 			if config.GroqAPIKey == "" {
 				return
 			}
-			groqProvider := NewGroqProvider(config.GroqAPIKey)
+			groqProvider := NewGroqProvider(config.GroqAPIKey, config.GroqThinkingEnabled)
 			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
 				groqProvider,
 				config.RetryConfig,
@@ -141,7 +144,7 @@ func NewService(config ServiceConfig) *Service {
 			if !config.OllamaEnabled {
 				return
 			}
-			ollamaProvider, err := NewOllamaProvider(config.OllamaURL)
+			ollamaProvider, err := NewOllamaProvider(config.OllamaURL, config.OllamaThinkingEnabled)
 			if err != nil {
 				logger.Warn("Failed to create Ollama provider", zap.Error(err))
 				return
@@ -157,7 +160,7 @@ func NewService(config ServiceConfig) *Service {
 			if !config.OpencodeEnabled || config.OpencodeAPIKey == "" {
 				return
 			}
-			opencodeProvider, err := NewOpencodeProvider(config.OpencodeBaseURL, config.OpencodeAPIKey)
+			opencodeProvider, err := NewOpencodeProvider(config.OpencodeBaseURL, config.OpencodeAPIKey, config.OpencodeThinkingEnabled)
 			if err != nil {
 				logger.Warn("Failed to create OpenCode provider", zap.Error(err))
 				return

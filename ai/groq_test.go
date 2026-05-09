@@ -48,7 +48,7 @@ func TestGroqBuildMessagesInlinesReferencedImages(t *testing.T) {
 }
 
 func TestGroqSupportsInlineImagesOnlyForSharedScoutModel(t *testing.T) {
-	provider := NewGroqProvider("test-key")
+	provider := NewGroqProvider("test-key", true)
 
 	assert.True(t, provider.SupportsInlineImages(
 		"meta-llama/llama-4-scout-17b-16e-instruct",
@@ -62,4 +62,11 @@ func TestGroqSupportsInlineImagesOnlyForSharedScoutModel(t *testing.T) {
 		"meta-llama/llama-4-scout-17b-16e-instruct",
 		"openai/gpt-oss-20b",
 	))
+}
+
+func TestGroqReasoningEffortDisablesSupportedModels(t *testing.T) {
+	assert.Equal(t, "low", groqReasoningEffort("openai/gpt-oss-20b", false))
+	assert.Equal(t, "none", groqReasoningEffort("qwen/qwen3-32b", false))
+	assert.Equal(t, "", groqReasoningEffort("meta-llama/llama-4-scout-17b-16e-instruct", false))
+	assert.Equal(t, "", groqReasoningEffort("openai/gpt-oss-20b", true))
 }

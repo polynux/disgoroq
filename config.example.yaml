@@ -36,6 +36,10 @@ ai:
     # Model to use for vision requests
     vision_model: "meta-llama/llama-4-scout-17b-16e-instruct"
 
+    # Use the model's default reasoning/thinking behavior
+    # Set to false to ask Groq for a lower/no reasoning effort when supported by the selected model
+    thinking_enabled: true
+
   ollama:
     # Enable Ollama as a configured provider (required when primary_provider is "ollama")
     enabled: false
@@ -48,6 +52,9 @@ ai:
 
     # Model to use for vision requests
     vision_model: "llava"
+
+    # Enable/disable Ollama's "think" request flag
+    thinking_enabled: false
 
   opencode:
     # Enable OpenCode Go as a configured provider (required when primary_provider is "opencode")
@@ -65,6 +72,10 @@ ai:
     # Model to use for attachment description requests
     # Use a model that accepts OpenAI-compatible image_url content if you want image attachments processed
     vision_model: "deepseek-v4-flash"
+
+    # Use the model's default reasoning/thinking behavior
+    # Set to false to send reasoning_effort: none on OpenCode chat requests
+    thinking_enabled: true
 
   retry:
     # Maximum number of retry attempts

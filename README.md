@@ -31,6 +31,12 @@ For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable 
 
 When image attachments are present, DisgoroQ now keeps raw attachment refs in chat context. If the selected provider is using the same supported multimodal model for chat and vision, attachments are sent inline to chat; otherwise the bot falls back to a separate vision-to-text description step before chat.
 
+Each AI provider section also exposes `thinking_enabled`:
+
+- `ai.ollama.thinking_enabled` maps directly to Ollama's `think` request flag.
+- `ai.groq.thinking_enabled` keeps Groq's default reasoning behavior when true and sends a lower/no reasoning effort hint when false for supported models.
+- `ai.opencode.thinking_enabled` keeps the provider default when true and sends `reasoning_effort: none` when false on OpenCode chat-completions requests.
+
 ## Build And Run
 
 - Build: `make build`

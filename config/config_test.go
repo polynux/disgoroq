@@ -549,6 +549,15 @@ func TestDefaultConfig(t *testing.T) {
 	if config.AI.PrimaryProvider != AIProviderGroq {
 		t.Errorf("Default AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderGroq)
 	}
+	if !config.AI.Groq.ThinkingEnabled {
+		t.Error("Default AI.Groq.ThinkingEnabled should be true")
+	}
+	if config.AI.Ollama.ThinkingEnabled {
+		t.Error("Default AI.Ollama.ThinkingEnabled should be false")
+	}
+	if !config.AI.Opencode.ThinkingEnabled {
+		t.Error("Default AI.Opencode.ThinkingEnabled should be true")
+	}
 	if config.AI.Retry.MaxRetries != 2 {
 		t.Errorf("Default Retry.MaxRetries = %v, want 2", config.AI.Retry.MaxRetries)
 	}

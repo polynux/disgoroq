@@ -14,14 +14,14 @@ import (
 )
 
 func TestNewOllamaProvider(t *testing.T) {
-	provider, err := NewOllamaProvider("http://localhost:11434")
+	provider, err := NewOllamaProvider("http://localhost:11434", false)
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 	assert.NotNil(t, provider.client)
 }
 
 func TestNewOllamaProvider_InvalidURL(t *testing.T) {
-	provider, err := NewOllamaProvider("://bad-url")
+	provider, err := NewOllamaProvider("://bad-url", false)
 	require.Error(t, err)
 	assert.Nil(t, provider)
 }
@@ -45,7 +45,7 @@ func TestOllamaChatAggregatesChunkedResponses(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOllamaProvider(server.URL)
+	provider, err := NewOllamaProvider(server.URL, false)
 	require.NoError(t, err)
 
 	resp, err := provider.Chat(context.Background(), &ChatRequest{
@@ -72,7 +72,7 @@ func TestOllamaChatIncludesNumPredictWhenRequested(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOllamaProvider(server.URL)
+	provider, err := NewOllamaProvider(server.URL, false)
 	require.NoError(t, err)
 
 	resp, err := provider.Chat(context.Background(), &ChatRequest{
@@ -127,7 +127,7 @@ func TestOllamaVisionSendsImageData(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOllamaProvider(server.URL)
+	provider, err := NewOllamaProvider(server.URL, false)
 	require.NoError(t, err)
 
 	resp, err := provider.Vision(context.Background(), &VisionRequest{
@@ -185,7 +185,7 @@ func TestOllamaChatSendsReferencedImages(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOllamaProvider(server.URL)
+	provider, err := NewOllamaProvider(server.URL, false)
 	require.NoError(t, err)
 
 	resp, err := provider.Chat(context.Background(), &ChatRequest{
@@ -205,7 +205,7 @@ func TestOllamaChatSendsReferencedImages(t *testing.T) {
 }
 
 func TestOllamaVisionErrorsOnImageDownloadFailure(t *testing.T) {
-	provider, err := NewOllamaProvider("http://localhost:11434")
+	provider, err := NewOllamaProvider("http://localhost:11434", false)
 	require.NoError(t, err)
 
 	_, err = provider.Vision(context.Background(), &VisionRequest{
@@ -215,4 +215,26 @@ func TestOllamaVisionErrorsOnImageDownloadFailure(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error downloading image")
+}
+
+func TestOllamaChatCanEnableThinking(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"think":true`)
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, err = io.WriteString(w, "{\"model\":\"dolphin3\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"done\":true,\"done_reason\":\"stop\"}\n")
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, true)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model:    "dolphin3",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Content)
 }

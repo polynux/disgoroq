@@ -24,6 +24,7 @@ func TestOpencodeChatSendsBearerRequest(t *testing.T) {
 		err = json.Unmarshal(body, &req)
 		require.NoError(t, err)
 		assert.Equal(t, "deepseek-v4-flash", req.Model)
+		assert.Equal(t, "none", req.ReasoningEffort)
 		require.Len(t, req.Messages, 1)
 		assert.Equal(t, "user", req.Messages[0].Role)
 		assert.Equal(t, "hello", req.Messages[0].Content)
@@ -34,7 +35,7 @@ func TestOpencodeChatSendsBearerRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOpencodeProvider(server.URL, "test-key")
+	provider, err := NewOpencodeProvider(server.URL, "test-key", false)
 	require.NoError(t, err)
 
 	resp, err := provider.Chat(context.Background(), &ChatRequest{
@@ -81,7 +82,7 @@ func TestOpencodeVisionSendsMultipartContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider, err := NewOpencodeProvider(server.URL, "test-key")
+	provider, err := NewOpencodeProvider(server.URL, "test-key", true)
 	require.NoError(t, err)
 
 	resp, err := provider.Vision(context.Background(), &VisionRequest{

@@ -56,26 +56,29 @@ const (
 
 // GroqConfig contains configuration for the Groq AI provider.
 type GroqConfig struct {
-	APIKey      string `yaml:"api_key"`
-	Model       string `yaml:"model"`
-	VisionModel string `yaml:"vision_model"`
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	VisionModel     string `yaml:"vision_model"`
+	ThinkingEnabled bool   `yaml:"thinking_enabled"`
 }
 
 // OllamaConfig contains configuration for the Ollama AI provider.
 type OllamaConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	URL         string `yaml:"url"`
-	Model       string `yaml:"model"`
-	VisionModel string `yaml:"vision_model"`
+	Enabled         bool   `yaml:"enabled"`
+	URL             string `yaml:"url"`
+	Model           string `yaml:"model"`
+	VisionModel     string `yaml:"vision_model"`
+	ThinkingEnabled bool   `yaml:"thinking_enabled"`
 }
 
 // OpencodeConfig contains configuration for the OpenCode Go AI provider.
 type OpencodeConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	BaseURL     string `yaml:"base_url"`
-	APIKey      string `yaml:"api_key"`
-	Model       string `yaml:"model"`
-	VisionModel string `yaml:"vision_model"`
+	Enabled         bool   `yaml:"enabled"`
+	BaseURL         string `yaml:"base_url"`
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	VisionModel     string `yaml:"vision_model"`
+	ThinkingEnabled bool   `yaml:"thinking_enabled"`
 }
 
 // RetryConfig contains retry logic configuration.
@@ -155,20 +158,23 @@ func DefaultConfig() *Config {
 		AI: AIConfig{
 			PrimaryProvider: AIProviderGroq,
 			Groq: GroqConfig{
-				Model:       "openai/gpt-oss-20b",
-				VisionModel: "meta-llama/llama-4-scout-17b-16e-instruct",
+				Model:           "openai/gpt-oss-20b",
+				VisionModel:     "meta-llama/llama-4-scout-17b-16e-instruct",
+				ThinkingEnabled: true,
 			},
 			Ollama: OllamaConfig{
-				Enabled:     false,
-				URL:         "http://localhost:11434",
-				Model:       "dolphin3",
-				VisionModel: "llava",
+				Enabled:         false,
+				URL:             "http://localhost:11434",
+				Model:           "dolphin3",
+				VisionModel:     "llava",
+				ThinkingEnabled: false,
 			},
 			Opencode: OpencodeConfig{
-				Enabled:     false,
-				BaseURL:     "https://opencode.ai/zen/go/v1",
-				Model:       "deepseek-v4-flash",
-				VisionModel: "deepseek-v4-flash",
+				Enabled:         false,
+				BaseURL:         "https://opencode.ai/zen/go/v1",
+				Model:           "deepseek-v4-flash",
+				VisionModel:     "deepseek-v4-flash",
+				ThinkingEnabled: true,
 			},
 			Retry: RetryConfig{
 				MaxRetries:     2,

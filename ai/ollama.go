@@ -16,12 +16,13 @@ import (
 )
 
 type OllamaProvider struct {
-	client     *api.Client
-	baseURL    *url.URL
-	httpClient *http.Client
+	client          *api.Client
+	baseURL         *url.URL
+	httpClient      *http.Client
+	thinkingEnabled bool
 }
 
-func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
+func NewOllamaProvider(baseURL string, thinkingEnabled bool) (*OllamaProvider, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("error creating Ollama client: %w", err)
@@ -29,9 +30,10 @@ func NewOllamaProvider(baseURL string) (*OllamaProvider, error) {
 	httpClient := &http.Client{}
 	client := api.NewClient(parsedURL, httpClient)
 	return &OllamaProvider{
-		client:     client,
-		baseURL:    parsedURL,
-		httpClient: httpClient,
+		client:          client,
+		baseURL:         parsedURL,
+		httpClient:      httpClient,
+		thinkingEnabled: thinkingEnabled,
 	}, nil
 }
 
@@ -130,7 +132,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 		Model:    model,
 		Messages: messages,
 		Stream:   new(bool),
-		Think:    false,
+		Think:    o.thinkingEnabled,
 		Options: map[string]any{
 			"temperature":   temperature,
 			"repeat_last_n": -1,
