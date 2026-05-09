@@ -25,8 +25,12 @@ func (g *GroqProvider) AvailableModels() []ModelInfo {
 	return []ModelInfo{
 		{Name: "openai/gpt-oss-20b", Provider: "groq", Capabilities: []string{CapabilityChat}},
 		{Name: "llama-3-70b-versatile", Provider: "groq", Capabilities: []string{CapabilityChat}},
-		{Name: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", Capabilities: []string{CapabilityVision}},
+		{Name: "meta-llama/llama-4-scout-17b-16e-instruct", Provider: "groq", Capabilities: []string{CapabilityChat, CapabilityVision}},
 	}
+}
+
+func (g *GroqProvider) SupportsInlineImages(chatModel, visionModel string) bool {
+	return chatModel == visionModel && chatModel == "meta-llama/llama-4-scout-17b-16e-instruct"
 }
 
 func (g *GroqProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
@@ -35,25 +39,9 @@ func (g *GroqProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 		return nil, fmt.Errorf("error creating Groq client: %w", err)
 	}
 
-	groqMessages := make([]groq.ChatCompletionMessage, 0, len(req.Messages)+1)
-
-	if req.SystemPrompt != "" {
-		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
-			Role:    "system",
-			Content: req.SystemPrompt,
-		})
-	}
-
-	for _, msg := range req.Messages {
-		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
-			Role:    groq.Role(msg.Role),
-			Content: msg.Content,
-		})
-	}
-
 	resp, err := client.ChatCompletion(ctx, groq.ChatCompletionRequest{
 		Model:       groq.ChatModel(req.Model),
-		Messages:    groqMessages,
+		Messages:    buildGroqMessages(req),
 		MaxTokens:   req.MaxTokens,
 		Temperature: req.Temperature,
 	})
@@ -108,4 +96,49 @@ func (g *GroqProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 		TokensUsed:   resp.Usage.TotalTokens,
 		FinishReason: string(resp.Choices[0].FinishReason),
 	}, nil
+}
+
+func buildGroqMessages(req *ChatRequest) []groq.ChatCompletionMessage {
+	groqMessages := make([]groq.ChatCompletionMessage, 0, len(req.Messages)+1)
+
+	if req.SystemPrompt != "" {
+		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
+			Role:    groq.RoleSystem,
+			Content: req.SystemPrompt,
+		})
+	}
+
+	for _, msg := range req.Messages {
+		images := resolveImageRefs(req.Images, msg.ImageRefs)
+		if msg.Role == "user" && len(images) > 0 {
+			parts := make([]groq.ChatMessagePart, 0, len(images)+1)
+			if msg.Content != "" {
+				parts = append(parts, groq.ChatMessagePart{
+					Type: groq.ChatMessagePartTypeText,
+					Text: msg.Content,
+				})
+			}
+			for _, image := range images {
+				parts = append(parts, groq.ChatMessagePart{
+					Type: groq.ChatMessagePartTypeImageURL,
+					ImageURL: &groq.ChatMessageImageURL{
+						URL:    image.URL,
+						Detail: "auto",
+					},
+				})
+			}
+			groqMessages = append(groqMessages, groq.ChatCompletionMessage{
+				Role:         groq.Role(msg.Role),
+				MultiContent: parts,
+			})
+			continue
+		}
+
+		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
+			Role:    groq.Role(msg.Role),
+			Content: msg.Content,
+		})
+	}
+
+	return groqMessages
 }

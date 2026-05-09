@@ -42,25 +42,18 @@ func (o *OllamaProvider) Name() string {
 func (o *OllamaProvider) AvailableModels() []ModelInfo {
 	return []ModelInfo{
 		{Name: "dolphin3", Provider: "ollama", Capabilities: []string{CapabilityChat}},
-		{Name: "llava", Provider: "ollama", Capabilities: []string{CapabilityVision}},
+		{Name: "llava", Provider: "ollama", Capabilities: []string{CapabilityChat, CapabilityVision}},
 	}
 }
 
+func (o *OllamaProvider) SupportsInlineImages(chatModel, visionModel string) bool {
+	return chatModel == visionModel && chatModel == "llava"
+}
+
 func (o *OllamaProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	messages := make([]api.Message, 0, len(req.Messages)+1)
-
-	if req.SystemPrompt != "" {
-		messages = append(messages, api.Message{
-			Role:    "system",
-			Content: req.SystemPrompt,
-		})
-	}
-
-	for _, msg := range req.Messages {
-		messages = append(messages, api.Message{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
+	messages, err := o.buildChatMessages(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("error preparing Ollama chat: %w", err)
 	}
 
 	response, err := o.runChat(ctx, req.Model, messages, req.MaxTokens, req.Temperature)
@@ -94,6 +87,36 @@ func (o *OllamaProvider) Vision(ctx context.Context, req *VisionRequest) (*Visio
 		TokensUsed:   response.TokensUsed,
 		FinishReason: response.FinishReason,
 	}, nil
+}
+
+func (o *OllamaProvider) buildChatMessages(ctx context.Context, req *ChatRequest) ([]api.Message, error) {
+	messages := make([]api.Message, 0, len(req.Messages)+1)
+
+	if req.SystemPrompt != "" {
+		messages = append(messages, api.Message{
+			Role:    "system",
+			Content: req.SystemPrompt,
+		})
+	}
+
+	for _, msg := range req.Messages {
+		ollamaMessage := api.Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+
+		for _, image := range resolveImageRefs(req.Images, msg.ImageRefs) {
+			imageData, err := o.downloadImage(ctx, image.URL)
+			if err != nil {
+				return nil, fmt.Errorf("error downloading image for Ollama chat: %w", err)
+			}
+			ollamaMessage.Images = append(ollamaMessage.Images, imageData)
+		}
+
+		messages = append(messages, ollamaMessage)
+	}
+
+	return messages, nil
 }
 
 func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []api.Message, maxTokens int, temperature float32) (*ChatResponse, error) {
