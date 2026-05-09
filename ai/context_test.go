@@ -37,10 +37,8 @@ func TestNewContextBuilder(t *testing.T) {
 
 	require.NotNil(t, cb)
 	assert.Equal(t, client, cb.client)
-	assert.Equal(t, mockProvider, cb.provider)
 	assert.NotNil(t, cb.gifProcessor)
 	assert.NotNil(t, cb.docProcessor)
-	assert.Contains(t, cb.visionInstruction, "Décris cette image")
 }
 
 func TestGetImagesToProcess_NoImages(t *testing.T) {
@@ -219,6 +217,67 @@ func TestBuildContext_NormalizesDiscordEmojiMarkup(t *testing.T) {
 	assert.Contains(t, processed.Messages[0].Content, ":criminel:")
 	assert.NotContains(t, processed.Messages[0].Content, "<:criminel:")
 	assert.Equal(t, "Réponse :criminel:", processed.Messages[1].Content)
+}
+
+func TestBuildContext_PreservesImageRefsWithoutDescriptions(t *testing.T) {
+	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	webhookID := snowflake.ID(9999)
+	botID := snowflake.ID(42)
+
+	messages := []discord.Message{
+		{
+			ID:        snowflake.ID(1),
+			Content:   "regarde",
+			WebhookID: &webhookID,
+			Attachments: []discord.Attachment{
+				newAttachment(1, "https://example.com/image1.jpg", "image/jpeg", 800, 600, 1000000),
+				newAttachment(2, "https://example.com/image2.png", "image/png", 1024, 768, 1500000),
+			},
+			Author: discord.User{
+				ID:       snowflake.ID(1),
+				Username: "alice",
+			},
+		},
+	}
+
+	processed, err := cb.BuildContext(context.Background(), messages, snowflake.ID(100), botID)
+
+	require.NoError(t, err)
+	require.Len(t, processed.Messages, 1)
+	require.Len(t, processed.Images, 2)
+	assert.Equal(t, []int{0, 1}, processed.Messages[0].ImageRefs)
+	assert.Contains(t, processed.Messages[0].Content, "regarde")
+	assert.NotContains(t, processed.Messages[0].Content, "<IMAGE_DESC>")
+	assert.Equal(t, "1", processed.Images[0].MessageID)
+	assert.Equal(t, "1", processed.Images[1].MessageID)
+}
+
+func TestBuildContext_KeepsImageOnlyMessages(t *testing.T) {
+	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	webhookID := snowflake.ID(9999)
+	botID := snowflake.ID(42)
+
+	messages := []discord.Message{
+		{
+			ID:        snowflake.ID(1),
+			WebhookID: &webhookID,
+			Attachments: []discord.Attachment{
+				newAttachment(1, "https://example.com/image.jpg", "image/jpeg", 800, 600, 1000000),
+			},
+			Author: discord.User{
+				ID:       snowflake.ID(1),
+				Username: "alice",
+			},
+		},
+	}
+
+	processed, err := cb.BuildContext(context.Background(), messages, snowflake.ID(100), botID)
+
+	require.NoError(t, err)
+	require.Len(t, processed.Messages, 1)
+	require.Len(t, processed.Images, 1)
+	assert.Equal(t, []int{0}, processed.Messages[0].ImageRefs)
+	assert.NotContains(t, processed.Messages[0].Content, "<IMAGE_DESC>")
 }
 
 func newMessageWithAttachments(id snowflake.ID, content string, attachments []discord.Attachment) discord.Message {

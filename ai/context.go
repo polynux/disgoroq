@@ -15,20 +15,16 @@ import (
 )
 
 type ContextBuilder struct {
-	client            *bot.Client
-	provider          Provider
-	visionInstruction string
-	gifProcessor      *GIFProcessor
-	docProcessor      *DocumentProcessor
+	client       *bot.Client
+	gifProcessor *GIFProcessor
+	docProcessor *DocumentProcessor
 }
 
 func NewContextBuilder(client *bot.Client, provider Provider) *ContextBuilder {
 	return &ContextBuilder{
-		client:            client,
-		provider:          provider,
-		visionInstruction: "Décris cette image en 3-4 phrases ultra-courtes (max 5 mots chacune) qui capturent l'essentiel de la scène. UNIQUEMENT LES PHRASES. UNE PAR LIGNE.",
-		gifProcessor:      NewGIFProcessor(),
-		docProcessor:      NewDocumentProcessor(provider, DocumentProcessorConfig{}),
+		client:       client,
+		gifProcessor: NewGIFProcessor(),
+		docProcessor: NewDocumentProcessor(provider, DocumentProcessorConfig{}),
 	}
 }
 
@@ -47,11 +43,10 @@ var supportedImageTypes = []string{
 
 func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.Message, guildID snowflake.ID, botID snowflake.ID) (*ProcessedMessage, error) {
 	imagesToProcess := cb.getImagesToProcess(ctx, messages)
-	describedImages := cb.processImages(ctx, imagesToProcess)
 	documentSummaries := cb.getDocumentSummaries(ctx, messages)
+	imageContexts, imageRefsByMessage := buildImageContexts(imagesToProcess)
 
 	formattedMessages := make([]Message, 0, len(messages))
-	imageContexts := make([]ImageContext, 0)
 	memberCache := make(map[snowflake.ID]*discord.Member)
 
 	for idx := len(messages) - 1; idx >= 0; idx-- {
@@ -68,28 +63,10 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 			continue
 		}
 
-		imageDescription := ""
-		imageRef := -1
-		if desc, found := describedImages[messages[idx].ID.String()]; found {
-			imageDescription = desc
-			for _, img := range imagesToProcess {
-				if img.id == messages[idx].ID.String() {
-					imageRef = len(imageContexts)
-					imageContexts = append(imageContexts, ImageContext{
-						MessageID: img.id,
-						URL:       img.url,
-						Type:      img.contentType,
-						Width:     img.width,
-						Height:    img.height,
-						Size:      img.size,
-					})
-					break
-				}
-			}
-		} else {
-			if normalizedContent == "" {
-				continue
-			}
+		imageRefs := imageRefsByMessage[messages[idx].ID.String()]
+		docSummary, hasDocSummary := documentSummaries[messages[idx].ID.String()]
+		if normalizedContent == "" && !hasDocSummary && len(imageRefs) == 0 {
+			continue
 		}
 
 		var nick string
@@ -141,13 +118,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 		content.WriteString(nick)
 		content.WriteString(": ")
 
-		if imageDescription != "" {
-			content.WriteString("<IMAGE_DESC>\n")
-			content.WriteString(strings.ReplaceAll(imageDescription, "\n", ""))
-			content.WriteString("</IMAGE_DESC>\n")
-		}
-
-		if docSummary, exists := documentSummaries[messages[idx].ID.String()]; exists {
+		if hasDocSummary {
 			content.WriteString("[Document Summary]\n")
 			content.WriteString(docSummary)
 			content.WriteString("\n\n")
@@ -155,11 +126,6 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 
 		content.WriteString(normalizedContent)
 		content.WriteString("\n\n")
-
-		imageRefs := []int{}
-		if imageRef != -1 {
-			imageRefs = append(imageRefs, imageRef)
-		}
 
 		if messages[idx].Author.ID == botID {
 			formattedMessages = append(formattedMessages, Message{
@@ -186,6 +152,26 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 		Messages: formattedMessages,
 		Images:   imageContexts,
 	}, nil
+}
+
+func buildImageContexts(imagesToProcess []imageToProcess) ([]ImageContext, map[string][]int) {
+	imageContexts := make([]ImageContext, 0, len(imagesToProcess))
+	imageRefsByMessage := make(map[string][]int, len(imagesToProcess))
+
+	for _, img := range imagesToProcess {
+		ref := len(imageContexts)
+		imageContexts = append(imageContexts, ImageContext{
+			MessageID: img.id,
+			URL:       img.url,
+			Type:      img.contentType,
+			Width:     img.width,
+			Height:    img.height,
+			Size:      img.size,
+		})
+		imageRefsByMessage[img.id] = append(imageRefsByMessage[img.id], ref)
+	}
+
+	return imageContexts, imageRefsByMessage
 }
 
 type imageToProcess struct {
@@ -279,54 +265,4 @@ func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []d
 	}
 
 	return summaries
-}
-
-type processedImage struct {
-	id          string
-	description string
-}
-
-func (cb *ContextBuilder) processImages(ctx context.Context, imagesToProcess []imageToProcess) map[string]string {
-	describedImages := make(map[string]string)
-
-	ch := make(chan processedImage, len(imagesToProcess))
-
-	for _, img := range imagesToProcess {
-		go func(img imageToProcess) {
-			response, err := cb.provider.Vision(ctx, &VisionRequest{
-				Instruction: cb.visionInstruction,
-				ImageURL:    img.url,
-				ImageType:   img.contentType,
-				Width:       img.width,
-				Height:      img.height,
-				MaxTokens:   100,
-				Temperature: 0.2,
-			})
-			if err != nil {
-				logger.Error("Error getting image description",
-					zap.Error(err),
-					zap.String("image_url", img.url),
-				)
-				ch <- processedImage{
-					id:          img.id,
-					description: "",
-				}
-				return
-			}
-			ch <- processedImage{
-				id:          img.id,
-				description: response.Description,
-			}
-		}(img)
-	}
-
-	for range imagesToProcess {
-		img := <-ch
-		if img.description == "" {
-			continue
-		}
-		describedImages[img.id] = img.description
-	}
-
-	return describedImages
 }
