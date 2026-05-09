@@ -93,6 +93,50 @@ ai:
 	}
 }
 
+func TestLoadWithOpencodePrimary(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("DB_URL", "http://localhost:8080")
+	t.Setenv("DB_TOKEN", "test-db-token")
+	t.Setenv("OPENCODE_API_KEY", "test-opencode-key")
+
+	configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  url: "${DB_URL}"
+  token: "${DB_TOKEN}"
+  local: false
+
+ai:
+  primary_provider: "opencode"
+  opencode:
+    enabled: true
+    base_url: "https://opencode.ai/zen/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model: "deepseek-v4-flash"
+    vision_model: "deepseek-v4-flash"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if config.AI.PrimaryProvider != AIProviderOpencode {
+		t.Errorf("AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderOpencode)
+	}
+	if config.AI.Opencode.APIKey != "test-opencode-key" {
+		t.Errorf("AI.Opencode.APIKey = %v, want test-opencode-key", config.AI.Opencode.APIKey)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {
@@ -267,6 +311,36 @@ func TestValidation(t *testing.T) {
 				AI: AIConfig{
 					PrimaryProvider: AIProviderOllama,
 					Ollama:          OllamaConfig{Enabled: true, URL: "http://localhost:11434", Model: "dolphin3", VisionModel: "llava"},
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "opencode primary config",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: AIProviderOpencode,
+					Opencode: OpencodeConfig{
+						Enabled:     true,
+						BaseURL:     "https://opencode.ai/zen/go/v1",
+						APIKey:      "test-key",
+						Model:       "deepseek-v4-flash",
+						VisionModel: "deepseek-v4-flash",
+					},
 					Retry: RetryConfig{
 						InitialDelay:  time.Millisecond,
 						MaxDelay:      2 * time.Millisecond,

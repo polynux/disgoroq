@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	ProviderGroq   = "groq"
-	ProviderOllama = "ollama"
+	ProviderGroq     = "groq"
+	ProviderOllama   = "ollama"
+	ProviderOpencode = "opencode"
 )
 
 // ServiceConfig contains configuration for the AI service
@@ -23,11 +24,17 @@ type ServiceConfig struct {
 	GroqModel       string
 	GroqVisionModel string
 
-	// Fallback provider configuration
+	// Additional provider configuration
 	OllamaEnabled     bool
 	OllamaURL         string
 	OllamaModel       string
 	OllamaVisionModel string
+
+	OpencodeEnabled     bool
+	OpencodeBaseURL     string
+	OpencodeAPIKey      string
+	OpencodeModel       string
+	OpencodeVisionModel string
 
 	// Retry configuration
 	RetryConfig RetryConfig
@@ -64,6 +71,22 @@ func (c *ServiceConfig) Validate() error {
 		}
 		if c.OllamaVisionModel == "" {
 			return fmt.Errorf("Ollama vision model is required when ollama is the primary provider")
+		}
+	case ProviderOpencode:
+		if !c.OpencodeEnabled {
+			return fmt.Errorf("opencode must be enabled when opencode is the primary provider")
+		}
+		if c.OpencodeBaseURL == "" {
+			return fmt.Errorf("OpenCode base URL is required when opencode is the primary provider")
+		}
+		if c.OpencodeAPIKey == "" {
+			return fmt.Errorf("OpenCode API key is required when opencode is the primary provider")
+		}
+		if c.OpencodeModel == "" {
+			return fmt.Errorf("OpenCode model is required when opencode is the primary provider")
+		}
+		if c.OpencodeVisionModel == "" {
+			return fmt.Errorf("OpenCode vision model is required when opencode is the primary provider")
 		}
 	default:
 		return fmt.Errorf("unsupported primary provider %q", c.PrimaryProvider)
@@ -130,17 +153,33 @@ func NewService(config ServiceConfig) *Service {
 				config.OllamaModel,
 				config.OllamaVisionModel,
 			))
+		case ProviderOpencode:
+			if !config.OpencodeEnabled || config.OpencodeAPIKey == "" {
+				return
+			}
+			opencodeProvider, err := NewOpencodeProvider(config.OpencodeBaseURL, config.OpencodeAPIKey)
+			if err != nil {
+				logger.Warn("Failed to create OpenCode provider", zap.Error(err))
+				return
+			}
+			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+				opencodeProvider,
+				config.RetryConfig,
+				config.MinResponseLength,
+				config.OpencodeModel,
+				config.OpencodeVisionModel,
+			))
 		}
 	}
 
 	addProvider(primaryProvider)
 
 	if config.FallbackEnabled {
-		switch primaryProvider {
-		case ProviderGroq:
-			addProvider(ProviderOllama)
-		case ProviderOllama:
-			addProvider(ProviderGroq)
+		for _, providerName := range []string{ProviderGroq, ProviderOllama, ProviderOpencode} {
+			if providerName == primaryProvider {
+				continue
+			}
+			addProvider(providerName)
 		}
 	}
 
@@ -248,6 +287,7 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 		"fallback_enabled": s.config.FallbackEnabled,
 		"groq_enabled":     s.config.GroqAPIKey != "",
 		"ollama_enabled":   s.config.OllamaEnabled,
+		"opencode_enabled": s.config.OpencodeEnabled,
 		"retry_config": map[string]interface{}{
 			"max_retries":    s.config.RetryConfig.MaxRetries,
 			"initial_delay":  s.config.RetryConfig.InitialDelay.String(),
@@ -262,6 +302,10 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 	if s.config.OllamaEnabled {
 		info["ollama_url"] = s.config.OllamaURL
 		info["ollama_model"] = s.config.OllamaModel
+	}
+	if s.config.OpencodeEnabled {
+		info["opencode_base_url"] = s.config.OpencodeBaseURL
+		info["opencode_model"] = s.config.OpencodeModel
 	}
 
 	return info

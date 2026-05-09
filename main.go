@@ -114,14 +114,19 @@ func main() {
 
 	// Create AI service configuration from central config
 	aiServiceConfig := ai.ServiceConfig{
-		PrimaryProvider:   cfg.AI.PrimaryProvider,
-		GroqAPIKey:        cfg.AI.Groq.APIKey,
-		GroqModel:         cfg.AI.Groq.Model,
-		GroqVisionModel:   cfg.AI.Groq.VisionModel,
-		OllamaEnabled:     cfg.AI.Ollama.Enabled,
-		OllamaURL:         cfg.AI.Ollama.URL,
-		OllamaModel:       cfg.AI.Ollama.Model,
-		OllamaVisionModel: cfg.AI.Ollama.VisionModel,
+		PrimaryProvider:     cfg.AI.PrimaryProvider,
+		GroqAPIKey:          cfg.AI.Groq.APIKey,
+		GroqModel:           cfg.AI.Groq.Model,
+		GroqVisionModel:     cfg.AI.Groq.VisionModel,
+		OllamaEnabled:       cfg.AI.Ollama.Enabled,
+		OllamaURL:           cfg.AI.Ollama.URL,
+		OllamaModel:         cfg.AI.Ollama.Model,
+		OllamaVisionModel:   cfg.AI.Ollama.VisionModel,
+		OpencodeEnabled:     cfg.AI.Opencode.Enabled,
+		OpencodeBaseURL:     cfg.AI.Opencode.BaseURL,
+		OpencodeAPIKey:      cfg.AI.Opencode.APIKey,
+		OpencodeModel:       cfg.AI.Opencode.Model,
+		OpencodeVisionModel: cfg.AI.Opencode.VisionModel,
 		RetryConfig: ai.RetryConfig{
 			MaxRetries:    cfg.AI.Retry.MaxRetries,
 			InitialDelay:  cfg.AI.Retry.InitialDelay,

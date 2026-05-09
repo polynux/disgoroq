@@ -53,6 +53,20 @@ func TestServiceConfigValidate(t *testing.T) {
 			shouldError: false,
 		},
 		{
+			name: "valid opencode primary config",
+			config: ServiceConfig{
+				PrimaryProvider:     ProviderOpencode,
+				OpencodeEnabled:     true,
+				OpencodeBaseURL:     "https://opencode.ai/zen/go/v1",
+				OpencodeAPIKey:      "test-key",
+				OpencodeModel:       "deepseek-v4-flash",
+				OpencodeVisionModel: "deepseek-v4-flash",
+				MinResponseLength:   1,
+				RetryConfig:         DefaultRetryConfig(),
+			},
+			shouldError: false,
+		},
+		{
 			name: "ollama primary requires enabled provider",
 			config: ServiceConfig{
 				PrimaryProvider:   ProviderOllama,
@@ -318,4 +332,24 @@ func TestNewServiceWithOllamaPrimary(t *testing.T) {
 	assert.NotNil(t, service)
 	assert.Equal(t, ProviderOllama, service.Name())
 	assert.Equal(t, ProviderOllama, service.GetProviderInfo()["primary_provider"])
+}
+
+func TestNewServiceWithOpencodePrimary(t *testing.T) {
+	config := ServiceConfig{
+		PrimaryProvider:     ProviderOpencode,
+		OpencodeEnabled:     true,
+		OpencodeBaseURL:     "https://opencode.ai/zen/go/v1",
+		OpencodeAPIKey:      "test-key",
+		OpencodeModel:       "deepseek-v4-flash",
+		OpencodeVisionModel: "deepseek-v4-flash",
+		RetryConfig:         DefaultRetryConfig(),
+		MinResponseLength:   1,
+		FallbackEnabled:     false,
+	}
+
+	service := NewService(config)
+
+	assert.NotNil(t, service)
+	assert.Equal(t, ProviderOpencode, service.Name())
+	assert.Equal(t, ProviderOpencode, service.GetProviderInfo()["primary_provider"])
 }

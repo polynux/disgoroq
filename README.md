@@ -6,7 +6,7 @@ DisgoroQ is a Go Discord bot with AI chat, image-aware context, guild-scoped mem
 
 - Go 1.24+
 - A Discord bot token
-- GROQ API access, or a reachable Ollama instance if `ai.primary_provider` is set to `ollama`
+- GROQ API access, a reachable Ollama instance, or an OpenCode Go API key depending on `ai.primary_provider`
 - A configured database
 - For voice: `libdave`, the STT sidecar, and the TTS service
 
@@ -21,12 +21,15 @@ Typical interpolated secrets:
 
 - `DISCORD_TOKEN`
 - `GROQ_API_KEY`
+- `OPENCODE_API_KEY`
 - `DB_URL`
 - `DB_TOKEN`
 
 Start from `config.example.yaml`, then review `config.yaml` for runtime defaults like AI, memory, reengage, and voice.
 
-For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`.
+For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`, or set it to `opencode` and enable `ai.opencode.enabled` with `OPENCODE_API_KEY` to use OpenCode Go's OpenAI-compatible `chat/completions` endpoint.
+
+When image attachments are present, DisgoroQ now keeps raw attachment refs in chat context. If the selected provider is using the same supported multimodal model for chat and vision, attachments are sent inline to chat; otherwise the bot falls back to a separate vision-to-text description step before chat.
 
 ## Build And Run
 

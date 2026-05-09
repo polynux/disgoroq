@@ -23,7 +23,7 @@ database:
   local: false
 
 ai:
-  # Primary AI provider to use by default: "groq" or "ollama"
+  # Primary AI provider to use by default: "groq", "ollama", or "opencode"
   primary_provider: "${AI_PRIMARY_PROVIDER:-groq}"
 
   groq:
@@ -49,6 +49,23 @@ ai:
     # Model to use for vision requests
     vision_model: "llava"
 
+  opencode:
+    # Enable OpenCode Go as a configured provider (required when primary_provider is "opencode")
+    enabled: false
+
+    # OpenCode Go OpenAI-compatible base URL
+    base_url: "https://opencode.ai/zen/go/v1"
+
+    # Required when primary_provider is "opencode" or when using OpenCode as fallback
+    api_key: "${OPENCODE_API_KEY:-}"
+
+    # Model to use for chat completions
+    model: "deepseek-v4-flash"
+
+    # Model to use for attachment description requests
+    # Use a model that accepts OpenAI-compatible image_url content if you want image attachments processed
+    vision_model: "deepseek-v4-flash"
+
   retry:
     # Maximum number of retry attempts
     max_retries: 2
@@ -68,7 +85,7 @@ ai:
     # Retry when API returns an error
     retry_on_error: true
 
-  # Enable fallback to the other configured provider when the primary provider fails
+  # Enable fallback to the other configured providers when the primary provider fails
   fallback_enabled: true
 
   # Minimum response length to accept

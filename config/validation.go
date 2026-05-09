@@ -88,9 +88,9 @@ func (c *DatabaseConfig) validate() error {
 
 func (c *AIConfig) validate() error {
 	switch c.PrimaryProvider {
-	case AIProviderGroq, AIProviderOllama:
+	case AIProviderGroq, AIProviderOllama, AIProviderOpencode:
 	default:
-		return fmt.Errorf("ai.primary_provider must be one of %q or %q", AIProviderGroq, AIProviderOllama)
+		return fmt.Errorf("ai.primary_provider must be one of %q, %q, or %q", AIProviderGroq, AIProviderOllama, AIProviderOpencode)
 	}
 
 	if c.PrimaryProvider == AIProviderGroq {
@@ -115,6 +115,16 @@ func (c *AIConfig) validate() error {
 		}
 	}
 
+	if c.PrimaryProvider == AIProviderOpencode && !c.Opencode.Enabled {
+		return fmt.Errorf("ai.opencode.enabled must be true when ai.primary_provider is %q", AIProviderOpencode)
+	}
+
+	if c.shouldValidateOpencode() {
+		if err := c.Opencode.validate(); err != nil {
+			return err
+		}
+	}
+
 	if err := c.Retry.validate(); err != nil {
 		return err
 	}
@@ -132,6 +142,10 @@ func (c *AIConfig) shouldValidateGroq() bool {
 
 func (c *AIConfig) shouldValidateOllama() bool {
 	return c.PrimaryProvider == AIProviderOllama || c.Ollama.Enabled
+}
+
+func (c *AIConfig) shouldValidateOpencode() bool {
+	return c.PrimaryProvider == AIProviderOpencode || c.Opencode.Enabled
 }
 
 func (c *GroqConfig) validate() error {
@@ -158,6 +172,26 @@ func (c *OllamaConfig) validate() error {
 	}
 	if c.VisionModel == "" {
 		return fmt.Errorf("ai.ollama.vision_model cannot be empty when ollama is enabled")
+	}
+	return nil
+}
+
+func (c *OpencodeConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.BaseURL == "" {
+		return fmt.Errorf("ai.opencode.base_url is required when opencode is enabled")
+	}
+	if c.APIKey == "" {
+		return fmt.Errorf("ai.opencode.api_key is required when opencode is enabled")
+	}
+	if c.Model == "" {
+		return fmt.Errorf("ai.opencode.model cannot be empty when opencode is enabled")
+	}
+	if c.VisionModel == "" {
+		return fmt.Errorf("ai.opencode.vision_model cannot be empty when opencode is enabled")
 	}
 	return nil
 }
