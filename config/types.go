@@ -39,19 +39,21 @@ type DatabaseConfig struct {
 
 // AIConfig contains AI service configuration.
 type AIConfig struct {
-	PrimaryProvider   string         `yaml:"primary_provider"`
-	Groq              GroqConfig     `yaml:"groq"`
-	Ollama            OllamaConfig   `yaml:"ollama"`
-	Opencode          OpencodeConfig `yaml:"opencode"`
-	Retry             RetryConfig    `yaml:"retry"`
-	FallbackEnabled   bool           `yaml:"fallback_enabled"`
-	MinResponseLength int            `yaml:"min_response_length"`
+	PrimaryProvider   string           `yaml:"primary_provider"`
+	Groq              GroqConfig       `yaml:"groq"`
+	Ollama            OllamaConfig     `yaml:"ollama"`
+	Opencode          OpencodeConfig   `yaml:"opencode"`
+	Openrouter        OpenrouterConfig `yaml:"openrouter"`
+	Retry             RetryConfig      `yaml:"retry"`
+	FallbackEnabled   bool             `yaml:"fallback_enabled"`
+	MinResponseLength int              `yaml:"min_response_length"`
 }
 
 const (
-	AIProviderGroq     = "groq"
-	AIProviderOllama   = "ollama"
-	AIProviderOpencode = "opencode"
+	AIProviderGroq       = "groq"
+	AIProviderOllama     = "ollama"
+	AIProviderOpencode   = "opencode"
+	AIProviderOpenrouter = "openrouter"
 )
 
 // GroqConfig contains configuration for the Groq AI provider.
@@ -73,6 +75,16 @@ type OllamaConfig struct {
 
 // OpencodeConfig contains configuration for the OpenCode Go AI provider.
 type OpencodeConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	BaseURL         string `yaml:"base_url"`
+	APIKey          string `yaml:"api_key"`
+	Model           string `yaml:"model"`
+	VisionModel     string `yaml:"vision_model"`
+	ThinkingEnabled bool   `yaml:"thinking_enabled"`
+}
+
+// OpenrouterConfig contains configuration for the OpenRouter AI provider.
+type OpenrouterConfig struct {
 	Enabled         bool   `yaml:"enabled"`
 	BaseURL         string `yaml:"base_url"`
 	APIKey          string `yaml:"api_key"`
@@ -174,6 +186,13 @@ func DefaultConfig() *Config {
 				BaseURL:         "https://opencode.ai/zen/go/v1",
 				Model:           "deepseek-v4-flash",
 				VisionModel:     "deepseek-v4-flash",
+				ThinkingEnabled: true,
+			},
+			Openrouter: OpenrouterConfig{
+				Enabled:         false,
+				BaseURL:         "https://openrouter.ai/api/v1",
+				Model:           "google/gemini-2.5-flash",
+				VisionModel:     "google/gemini-2.5-flash",
 				ThinkingEnabled: true,
 			},
 			Retry: RetryConfig{

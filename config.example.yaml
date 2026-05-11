@@ -23,7 +23,7 @@ database:
   local: false
 
 ai:
-  # Primary AI provider to use by default: "groq", "ollama", or "opencode"
+  # Primary AI provider to use by default: "groq", "ollama", "opencode", or "openrouter"
   primary_provider: "${AI_PRIMARY_PROVIDER:-groq}"
 
   groq:
@@ -75,6 +75,27 @@ ai:
 
     # Use the model's default reasoning/thinking behavior
     # Set to false to send reasoning_effort: none on OpenCode chat requests
+    thinking_enabled: true
+
+  openrouter:
+    # Enable OpenRouter as a configured provider (required when primary_provider is "openrouter")
+    enabled: false
+
+    # OpenRouter OpenAI-compatible base URL
+    base_url: "https://openrouter.ai/api/v1"
+
+    # Required when primary_provider is "openrouter" or when using OpenRouter as fallback
+    api_key: "${OPENROUTER_API_KEY:-}"
+
+    # Model to use for chat completions
+    model: "google/gemini-2.5-flash"
+
+    # Model to use for attachment description requests
+    # Set this equal to model to allow inline multimodal chat for image attachments
+    vision_model: "google/gemini-2.5-flash"
+
+    # Use the model's default reasoning/thinking behavior
+    # Set to false to send OpenRouter's normalized reasoning config with effort: none
     thinking_enabled: true
 
   retry:

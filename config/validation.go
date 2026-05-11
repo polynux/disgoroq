@@ -88,9 +88,9 @@ func (c *DatabaseConfig) validate() error {
 
 func (c *AIConfig) validate() error {
 	switch c.PrimaryProvider {
-	case AIProviderGroq, AIProviderOllama, AIProviderOpencode:
+	case AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter:
 	default:
-		return fmt.Errorf("ai.primary_provider must be one of %q, %q, or %q", AIProviderGroq, AIProviderOllama, AIProviderOpencode)
+		return fmt.Errorf("ai.primary_provider must be one of %q, %q, %q, or %q", AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter)
 	}
 
 	if c.PrimaryProvider == AIProviderGroq {
@@ -125,6 +125,16 @@ func (c *AIConfig) validate() error {
 		}
 	}
 
+	if c.PrimaryProvider == AIProviderOpenrouter && !c.Openrouter.Enabled {
+		return fmt.Errorf("ai.openrouter.enabled must be true when ai.primary_provider is %q", AIProviderOpenrouter)
+	}
+
+	if c.shouldValidateOpenrouter() {
+		if err := c.Openrouter.validate(); err != nil {
+			return err
+		}
+	}
+
 	if err := c.Retry.validate(); err != nil {
 		return err
 	}
@@ -146,6 +156,10 @@ func (c *AIConfig) shouldValidateOllama() bool {
 
 func (c *AIConfig) shouldValidateOpencode() bool {
 	return c.PrimaryProvider == AIProviderOpencode || c.Opencode.Enabled
+}
+
+func (c *AIConfig) shouldValidateOpenrouter() bool {
+	return c.PrimaryProvider == AIProviderOpenrouter || c.Openrouter.Enabled
 }
 
 func (c *GroqConfig) validate() error {
@@ -192,6 +206,26 @@ func (c *OpencodeConfig) validate() error {
 	}
 	if c.VisionModel == "" {
 		return fmt.Errorf("ai.opencode.vision_model cannot be empty when opencode is enabled")
+	}
+	return nil
+}
+
+func (c *OpenrouterConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.BaseURL == "" {
+		return fmt.Errorf("ai.openrouter.base_url is required when openrouter is enabled")
+	}
+	if c.APIKey == "" {
+		return fmt.Errorf("ai.openrouter.api_key is required when openrouter is enabled")
+	}
+	if c.Model == "" {
+		return fmt.Errorf("ai.openrouter.model cannot be empty when openrouter is enabled")
+	}
+	if c.VisionModel == "" {
+		return fmt.Errorf("ai.openrouter.vision_model cannot be empty when openrouter is enabled")
 	}
 	return nil
 }

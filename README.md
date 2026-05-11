@@ -6,7 +6,7 @@ DisgoroQ is a Go Discord bot with AI chat, image-aware context, guild-scoped mem
 
 - Go 1.24+
 - A Discord bot token
-- GROQ API access, a reachable Ollama instance, or an OpenCode Go API key depending on `ai.primary_provider`
+- GROQ API access, a reachable Ollama instance, an OpenCode Go API key, or an OpenRouter API key depending on `ai.primary_provider`
 - A configured database
 - For voice: `libdave`, the STT sidecar, and the TTS service
 
@@ -22,12 +22,13 @@ Typical interpolated secrets:
 - `DISCORD_TOKEN`
 - `GROQ_API_KEY`
 - `OPENCODE_API_KEY`
+- `OPENROUTER_API_KEY`
 - `DB_URL`
 - `DB_TOKEN`
 
 Start from `config.example.yaml`, then review `config.yaml` for runtime defaults like AI, memory, reengage, and voice.
 
-For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`, or set it to `opencode` and enable `ai.opencode.enabled` with `OPENCODE_API_KEY` to use OpenCode Go's OpenAI-compatible `chat/completions` endpoint.
+For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`, set it to `opencode` and enable `ai.opencode.enabled` with `OPENCODE_API_KEY` to use OpenCode Go's OpenAI-compatible `chat/completions` endpoint, or set it to `openrouter` and enable `ai.openrouter.enabled` with `OPENROUTER_API_KEY` to use OpenRouter's OpenAI-compatible `/api/v1/chat/completions` endpoint.
 
 When image attachments are present, DisgoroQ now keeps raw attachment refs in chat context. If the selected provider is using the same supported multimodal model for chat and vision, attachments are sent inline to chat; otherwise the bot falls back to a separate vision-to-text description step before chat.
 
@@ -36,6 +37,7 @@ Each AI provider section also exposes `thinking_enabled`:
 - `ai.ollama.thinking_enabled` maps directly to Ollama's `think` request flag.
 - `ai.groq.thinking_enabled` keeps Groq's default reasoning behavior when true and sends a lower/no reasoning effort hint when false for supported models.
 - `ai.opencode.thinking_enabled` keeps the provider default when true and sends `reasoning_effort: none` when false on OpenCode chat-completions requests.
+- `ai.openrouter.thinking_enabled` keeps the provider default when true and sends OpenRouter's normalized `reasoning: { effort: "none", exclude: true }` when false.
 
 ## Build And Run
 

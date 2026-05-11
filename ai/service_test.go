@@ -67,6 +67,20 @@ func TestServiceConfigValidate(t *testing.T) {
 			shouldError: false,
 		},
 		{
+			name: "valid openrouter primary config",
+			config: ServiceConfig{
+				PrimaryProvider:       ProviderOpenrouter,
+				OpenrouterEnabled:     true,
+				OpenrouterBaseURL:     "https://openrouter.ai/api/v1",
+				OpenrouterAPIKey:      "test-key",
+				OpenrouterModel:       "google/gemini-2.5-flash",
+				OpenrouterVisionModel: "google/gemini-2.5-flash",
+				MinResponseLength:     1,
+				RetryConfig:           DefaultRetryConfig(),
+			},
+			shouldError: false,
+		},
+		{
 			name: "ollama primary requires enabled provider",
 			config: ServiceConfig{
 				PrimaryProvider:   ProviderOllama,
@@ -233,6 +247,7 @@ func TestServiceGetProviderInfo(t *testing.T) {
 		OllamaURL:         "http://ollama.local:11434",
 		OllamaModel:       "llama2",
 		OllamaVisionModel: "llava",
+		OpenrouterEnabled: false,
 		RetryConfig:       DefaultRetryConfig(),
 		MinResponseLength: 5,
 		FallbackEnabled:   true,
@@ -246,6 +261,7 @@ func TestServiceGetProviderInfo(t *testing.T) {
 	assert.Equal(t, true, info["fallback_enabled"])
 	assert.Equal(t, true, info["groq_enabled"])
 	assert.Equal(t, true, info["ollama_enabled"])
+	assert.Equal(t, false, info["openrouter_enabled"])
 	assert.Equal(t, 5, info["min_response_length"])
 
 	retryConfig, ok := info["retry_config"].(map[string]interface{})
@@ -352,4 +368,24 @@ func TestNewServiceWithOpencodePrimary(t *testing.T) {
 	assert.NotNil(t, service)
 	assert.Equal(t, ProviderOpencode, service.Name())
 	assert.Equal(t, ProviderOpencode, service.GetProviderInfo()["primary_provider"])
+}
+
+func TestNewServiceWithOpenrouterPrimary(t *testing.T) {
+	config := ServiceConfig{
+		PrimaryProvider:       ProviderOpenrouter,
+		OpenrouterEnabled:     true,
+		OpenrouterBaseURL:     "https://openrouter.ai/api/v1",
+		OpenrouterAPIKey:      "test-key",
+		OpenrouterModel:       "google/gemini-2.5-flash",
+		OpenrouterVisionModel: "google/gemini-2.5-flash",
+		RetryConfig:           DefaultRetryConfig(),
+		MinResponseLength:     1,
+		FallbackEnabled:       false,
+	}
+
+	service := NewService(config)
+
+	assert.NotNil(t, service)
+	assert.Equal(t, ProviderOpenrouter, service.Name())
+	assert.Equal(t, ProviderOpenrouter, service.GetProviderInfo()["primary_provider"])
 }

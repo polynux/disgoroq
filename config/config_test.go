@@ -137,6 +137,50 @@ ai:
 	}
 }
 
+func TestLoadWithOpenrouterPrimary(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("DB_URL", "http://localhost:8080")
+	t.Setenv("DB_TOKEN", "test-db-token")
+	t.Setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+
+	configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  url: "${DB_URL}"
+  token: "${DB_TOKEN}"
+  local: false
+
+ai:
+  primary_provider: "openrouter"
+  openrouter:
+    enabled: true
+    base_url: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+    model: "google/gemini-2.5-flash"
+    vision_model: "google/gemini-2.5-flash"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if config.AI.PrimaryProvider != AIProviderOpenrouter {
+		t.Errorf("AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderOpenrouter)
+	}
+	if config.AI.Openrouter.APIKey != "test-openrouter-key" {
+		t.Errorf("AI.Openrouter.APIKey = %v, want test-openrouter-key", config.AI.Openrouter.APIKey)
+	}
+}
+
 func TestLoadMissingFile(t *testing.T) {
 	_, err := Load("/nonexistent/path/config.yaml")
 	if err == nil {
@@ -358,6 +402,36 @@ func TestValidation(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "openrouter primary config",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: AIProviderOpenrouter,
+					Openrouter: OpenrouterConfig{
+						Enabled:     true,
+						BaseURL:     "https://openrouter.ai/api/v1",
+						APIKey:      "test-key",
+						Model:       "google/gemini-2.5-flash",
+						VisionModel: "google/gemini-2.5-flash",
+					},
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid ai primary provider",
 			config: &Config{
 				Discord:  DiscordConfig{Token: "test"},
@@ -557,6 +631,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !config.AI.Opencode.ThinkingEnabled {
 		t.Error("Default AI.Opencode.ThinkingEnabled should be true")
+	}
+	if !config.AI.Openrouter.ThinkingEnabled {
+		t.Error("Default AI.Openrouter.ThinkingEnabled should be true")
 	}
 	if config.AI.Retry.MaxRetries != 2 {
 		t.Errorf("Default Retry.MaxRetries = %v, want 2", config.AI.Retry.MaxRetries)

@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	ProviderGroq     = "groq"
-	ProviderOllama   = "ollama"
-	ProviderOpencode = "opencode"
+	ProviderGroq       = "groq"
+	ProviderOllama     = "ollama"
+	ProviderOpencode   = "opencode"
+	ProviderOpenrouter = "openrouter"
 )
 
 // ServiceConfig contains configuration for the AI service
@@ -38,6 +39,13 @@ type ServiceConfig struct {
 	OpencodeModel           string
 	OpencodeVisionModel     string
 	OpencodeThinkingEnabled bool
+
+	OpenrouterEnabled         bool
+	OpenrouterBaseURL         string
+	OpenrouterAPIKey          string
+	OpenrouterModel           string
+	OpenrouterVisionModel     string
+	OpenrouterThinkingEnabled bool
 
 	// Retry configuration
 	RetryConfig RetryConfig
@@ -90,6 +98,22 @@ func (c *ServiceConfig) Validate() error {
 		}
 		if c.OpencodeVisionModel == "" {
 			return fmt.Errorf("OpenCode vision model is required when opencode is the primary provider")
+		}
+	case ProviderOpenrouter:
+		if !c.OpenrouterEnabled {
+			return fmt.Errorf("openrouter must be enabled when openrouter is the primary provider")
+		}
+		if c.OpenrouterBaseURL == "" {
+			return fmt.Errorf("OpenRouter base URL is required when openrouter is the primary provider")
+		}
+		if c.OpenrouterAPIKey == "" {
+			return fmt.Errorf("OpenRouter API key is required when openrouter is the primary provider")
+		}
+		if c.OpenrouterModel == "" {
+			return fmt.Errorf("OpenRouter model is required when openrouter is the primary provider")
+		}
+		if c.OpenrouterVisionModel == "" {
+			return fmt.Errorf("OpenRouter vision model is required when openrouter is the primary provider")
 		}
 	default:
 		return fmt.Errorf("unsupported primary provider %q", c.PrimaryProvider)
@@ -172,13 +196,29 @@ func NewService(config ServiceConfig) *Service {
 				config.OpencodeModel,
 				config.OpencodeVisionModel,
 			))
+		case ProviderOpenrouter:
+			if !config.OpenrouterEnabled || config.OpenrouterAPIKey == "" {
+				return
+			}
+			openrouterProvider, err := NewOpenrouterProvider(config.OpenrouterBaseURL, config.OpenrouterAPIKey, config.OpenrouterThinkingEnabled)
+			if err != nil {
+				logger.Warn("Failed to create OpenRouter provider", zap.Error(err))
+				return
+			}
+			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+				openrouterProvider,
+				config.RetryConfig,
+				config.MinResponseLength,
+				config.OpenrouterModel,
+				config.OpenrouterVisionModel,
+			))
 		}
 	}
 
 	addProvider(primaryProvider)
 
 	if config.FallbackEnabled {
-		for _, providerName := range []string{ProviderGroq, ProviderOllama, ProviderOpencode} {
+		for _, providerName := range []string{ProviderGroq, ProviderOllama, ProviderOpencode, ProviderOpenrouter} {
 			if providerName == primaryProvider {
 				continue
 			}
@@ -302,11 +342,12 @@ func (s *Service) AvailableModels() []ModelInfo {
 // GetProviderInfo returns information about the current provider configuration
 func (s *Service) GetProviderInfo() map[string]interface{} {
 	info := map[string]interface{}{
-		"primary_provider": s.config.primaryProvider(),
-		"fallback_enabled": s.config.FallbackEnabled,
-		"groq_enabled":     s.config.GroqAPIKey != "",
-		"ollama_enabled":   s.config.OllamaEnabled,
-		"opencode_enabled": s.config.OpencodeEnabled,
+		"primary_provider":   s.config.primaryProvider(),
+		"fallback_enabled":   s.config.FallbackEnabled,
+		"groq_enabled":       s.config.GroqAPIKey != "",
+		"ollama_enabled":     s.config.OllamaEnabled,
+		"opencode_enabled":   s.config.OpencodeEnabled,
+		"openrouter_enabled": s.config.OpenrouterEnabled,
 		"retry_config": map[string]interface{}{
 			"max_retries":    s.config.RetryConfig.MaxRetries,
 			"initial_delay":  s.config.RetryConfig.InitialDelay.String(),
@@ -325,6 +366,10 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 	if s.config.OpencodeEnabled {
 		info["opencode_base_url"] = s.config.OpencodeBaseURL
 		info["opencode_model"] = s.config.OpencodeModel
+	}
+	if s.config.OpenrouterEnabled {
+		info["openrouter_base_url"] = s.config.OpenrouterBaseURL
+		info["openrouter_model"] = s.config.OpenrouterModel
 	}
 
 	return info
