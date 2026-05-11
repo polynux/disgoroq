@@ -30,7 +30,7 @@ func TestOpencodeChatSendsBearerRequest(t *testing.T) {
 		assert.Equal(t, "hello", req.Messages[0].Content)
 
 		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"total_tokens":12}}`)
+		_, err = io.WriteString(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":30,"completion_tokens":12,"total_tokens":42,"prompt_tokens_details":{"cached_tokens":24,"cache_write_tokens":6}}}`)
 		require.NoError(t, err)
 	}))
 	defer server.Close()
@@ -48,7 +48,11 @@ func TestOpencodeChatSendsBearerRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hi", resp.Content)
 	assert.Equal(t, "deepseek-v4-flash", resp.Model)
-	assert.Equal(t, 12, resp.TokensUsed)
+	assert.Equal(t, 42, resp.TokensUsed)
+	assert.Equal(t, 30, resp.PromptTokens)
+	assert.Equal(t, 12, resp.CompletionTokens)
+	assert.Equal(t, 24, resp.CachedTokens)
+	assert.Equal(t, 6, resp.CacheWriteTokens)
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 
@@ -77,7 +81,7 @@ func TestOpencodeVisionSendsMultipartContent(t *testing.T) {
 		assert.Equal(t, "https://example.com/cat.png", parts[1].ImageURL.URL)
 
 		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"cat"},"finish_reason":"stop"}],"usage":{"total_tokens":8}}`)
+		_, err = io.WriteString(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"cat"},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":8,"total_tokens":26,"prompt_tokens_details":{"cached_tokens":10,"cache_write_tokens":4}}}`)
 		require.NoError(t, err)
 	}))
 	defer server.Close()
@@ -93,5 +97,9 @@ func TestOpencodeVisionSendsMultipartContent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cat", resp.Description)
 	assert.Equal(t, "deepseek-v4-flash", resp.Model)
-	assert.Equal(t, 8, resp.TokensUsed)
+	assert.Equal(t, 26, resp.TokensUsed)
+	assert.Equal(t, 18, resp.PromptTokens)
+	assert.Equal(t, 8, resp.CompletionTokens)
+	assert.Equal(t, 10, resp.CachedTokens)
+	assert.Equal(t, 4, resp.CacheWriteTokens)
 }

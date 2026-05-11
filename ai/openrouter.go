@@ -75,10 +75,14 @@ func (o *OpenrouterProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatR
 	}
 
 	return &ChatResponse{
-		Content:      response.Choices[0].Message.Content,
-		Model:        response.Model,
-		TokensUsed:   response.Usage.TotalTokens,
-		FinishReason: response.Choices[0].FinishReason,
+		Content:          response.Choices[0].Message.Content,
+		Model:            response.Model,
+		TokensUsed:       response.Usage.TotalTokens,
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: response.Usage.PromptTokensDetails.CacheWriteTokens,
+		FinishReason:     response.Choices[0].FinishReason,
 	}, nil
 }
 
@@ -125,10 +129,14 @@ func (o *OpenrouterProvider) Vision(ctx context.Context, req *VisionRequest) (*V
 	}
 
 	return &VisionResponse{
-		Description:  response.Choices[0].Message.Content,
-		Model:        response.Model,
-		TokensUsed:   response.Usage.TotalTokens,
-		FinishReason: response.Choices[0].FinishReason,
+		Description:      response.Choices[0].Message.Content,
+		Model:            response.Model,
+		TokensUsed:       response.Usage.TotalTokens,
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
+		CacheWriteTokens: response.Usage.PromptTokensDetails.CacheWriteTokens,
+		FinishReason:     response.Choices[0].FinishReason,
 	}, nil
 }
 
@@ -244,7 +252,13 @@ type openrouterChatResponse struct {
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
-		TotalTokens int `json:"total_tokens"`
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens     int `json:"cached_tokens"`
+			CacheWriteTokens int `json:"cache_write_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 

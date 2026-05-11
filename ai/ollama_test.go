@@ -57,6 +57,8 @@ func TestOllamaChatAggregatesChunkedResponses(t *testing.T) {
 	assert.Equal(t, "hello world", resp.Content)
 	assert.Equal(t, "dolphin3", resp.Model)
 	assert.Equal(t, 20, resp.TokensUsed)
+	assert.Equal(t, 8, resp.PromptTokens)
+	assert.Equal(t, 12, resp.CompletionTokens)
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 
@@ -141,6 +143,8 @@ func TestOllamaVisionSendsImageData(t *testing.T) {
 	assert.Equal(t, "a cat", resp.Description)
 	assert.Equal(t, "llava", resp.Model)
 	assert.Equal(t, 12, resp.TokensUsed)
+	assert.Equal(t, 3, resp.PromptTokens)
+	assert.Equal(t, 9, resp.CompletionTokens)
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 

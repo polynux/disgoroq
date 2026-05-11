@@ -1,6 +1,10 @@
 package ai
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/conneroisu/groq-go"
@@ -69,4 +73,33 @@ func TestGroqReasoningEffortDisablesSupportedModels(t *testing.T) {
 	assert.Equal(t, "none", groqReasoningEffort("qwen/qwen3-32b", false))
 	assert.Equal(t, "", groqReasoningEffort("meta-llama/llama-4-scout-17b-16e-instruct", false))
 	assert.Equal(t, "", groqReasoningEffort("openai/gpt-oss-20b", true))
+}
+
+func TestGroqChatParsesPromptCacheMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"model":"openai/gpt-oss-20b"`)
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"model":"openai/gpt-oss-20b","choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":80,"completion_tokens":20,"total_tokens":100,"prompt_tokens_details":{"cached_tokens":64}}}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider := NewGroqProvider("test-key", false)
+	provider.baseURL = server.URL
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "openai/gpt-oss-20b",
+		Messages: []Message{{
+			Role:    "user",
+			Content: "hello",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "hi", resp.Content)
+	assert.Equal(t, 100, resp.TokensUsed)
+	assert.Equal(t, 80, resp.PromptTokens)
+	assert.Equal(t, 20, resp.CompletionTokens)
+	assert.Equal(t, 64, resp.CachedTokens)
 }

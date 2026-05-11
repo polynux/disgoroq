@@ -53,10 +53,13 @@ func (g *GroqProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	}
 
 	return &ChatResponse{
-		Content:      string(response.Choices[0].Message.Content),
-		Model:        req.Model,
-		TokensUsed:   response.Usage.TotalTokens,
-		FinishReason: string(response.Choices[0].FinishReason),
+		Content:          response.Choices[0].Message.Content,
+		Model:            req.Model,
+		TokensUsed:       response.Usage.TotalTokens,
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
+		FinishReason:     response.Choices[0].FinishReason,
 	}, nil
 }
 
@@ -90,10 +93,13 @@ func (g *GroqProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 	}
 
 	return &VisionResponse{
-		Description:  string(response.Choices[0].Message.Content),
-		Model:        req.Model,
-		TokensUsed:   response.Usage.TotalTokens,
-		FinishReason: string(response.Choices[0].FinishReason),
+		Description:      response.Choices[0].Message.Content,
+		Model:            req.Model,
+		TokensUsed:       response.Usage.TotalTokens,
+		PromptTokens:     response.Usage.PromptTokens,
+		CompletionTokens: response.Usage.CompletionTokens,
+		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
+		FinishReason:     response.Choices[0].FinishReason,
 	}, nil
 }
 
@@ -168,7 +174,7 @@ func groqReasoningEffort(model string, thinkingEnabled bool) string {
 	}
 }
 
-func (g *GroqProvider) doChatCompletion(ctx context.Context, req groqChatCompletionRequest) (*groq.ChatCompletionResponse, error) {
+func (g *GroqProvider) doChatCompletion(ctx context.Context, req groqChatCompletionRequest) (*groqChatCompletionResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling Groq request: %w", err)
@@ -197,7 +203,7 @@ func (g *GroqProvider) doChatCompletion(ctx context.Context, req groqChatComplet
 		return nil, fmt.Errorf("Groq request failed: %s: %s", httpResp.Status, string(responseBody))
 	}
 
-	var response groq.ChatCompletionResponse
+	var response groqChatCompletionResponse
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, fmt.Errorf("error decoding Groq response: %w", err)
 	}
@@ -214,4 +220,22 @@ type groqChatCompletionRequest struct {
 	MaxTokens       int                          `json:"max_tokens,omitempty"`
 	Temperature     float32                      `json:"temperature,omitempty"`
 	ReasoningEffort string                       `json:"reasoning_effort,omitempty"`
+}
+
+type groqChatCompletionResponse struct {
+	Model   string `json:"model"`
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens        int `json:"prompt_tokens"`
+		CompletionTokens    int `json:"completion_tokens"`
+		TotalTokens         int `json:"total_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
 }

@@ -83,20 +83,28 @@ type VisionRequest struct {
 
 // ChatResponse contains the AI-generated text response
 type ChatResponse struct {
-	Content      string // Generated text
-	Provider     string // Provider that generated the response
-	Model        string // Model that generated the response
-	TokensUsed   int    // Total tokens consumed
-	FinishReason string // "stop", "length", etc.
+	Content          string // Generated text
+	Provider         string // Provider that generated the response
+	Model            string // Model that generated the response
+	TokensUsed       int    // Total tokens consumed
+	PromptTokens     int    // Input prompt tokens when exposed by provider
+	CompletionTokens int    // Output tokens when exposed by provider
+	CachedTokens     int    // Prompt tokens served from cache when exposed
+	CacheWriteTokens int    // Prompt tokens written to cache when exposed
+	FinishReason     string // "stop", "length", etc.
 }
 
 // VisionResponse contains the image description
 type VisionResponse struct {
-	Description  string // Generated description
-	Provider     string // Provider that generated the response
-	Model        string // Model used
-	TokensUsed   int    // Tokens consumed
-	FinishReason string // "stop", "length", etc.
+	Description      string // Generated description
+	Provider         string // Provider that generated the response
+	Model            string // Model used
+	TokensUsed       int    // Tokens consumed
+	PromptTokens     int    // Input prompt tokens when exposed by provider
+	CompletionTokens int    // Output tokens when exposed by provider
+	CachedTokens     int    // Prompt tokens served from cache when exposed
+	CacheWriteTokens int    // Prompt tokens written to cache when exposed
+	FinishReason     string // "stop", "length", etc.
 }
 
 // ModelInfo describes a model's capabilities

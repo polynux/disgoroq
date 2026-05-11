@@ -32,7 +32,7 @@ func TestOpenrouterChatSendsBearerRequest(t *testing.T) {
 		assert.Equal(t, "hello", req.Messages[0].Content)
 
 		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"model":"google/gemini-2.5-flash","choices":[{"message":{"content":"hi","reasoning":"hidden"},"finish_reason":"stop"}],"usage":{"total_tokens":12}}`)
+		_, err = io.WriteString(w, `{"model":"google/gemini-2.5-flash","choices":[{"message":{"content":"hi","reasoning":"hidden"},"finish_reason":"stop"}],"usage":{"prompt_tokens":40,"completion_tokens":12,"total_tokens":52,"prompt_tokens_details":{"cached_tokens":32,"cache_write_tokens":8}}}`)
 		require.NoError(t, err)
 	}))
 	defer server.Close()
@@ -50,7 +50,11 @@ func TestOpenrouterChatSendsBearerRequest(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hi", resp.Content)
 	assert.Equal(t, "google/gemini-2.5-flash", resp.Model)
-	assert.Equal(t, 12, resp.TokensUsed)
+	assert.Equal(t, 52, resp.TokensUsed)
+	assert.Equal(t, 40, resp.PromptTokens)
+	assert.Equal(t, 12, resp.CompletionTokens)
+	assert.Equal(t, 32, resp.CachedTokens)
+	assert.Equal(t, 8, resp.CacheWriteTokens)
 	assert.Equal(t, "stop", resp.FinishReason)
 }
 
@@ -79,7 +83,7 @@ func TestOpenrouterVisionSendsMultipartContent(t *testing.T) {
 		assert.Equal(t, "https://example.com/cat.png", parts[1].ImageURL.URL)
 
 		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"model":"google/gemini-2.5-flash","choices":[{"message":{"content":"cat"},"finish_reason":"stop"}],"usage":{"total_tokens":8}}`)
+		_, err = io.WriteString(w, `{"model":"google/gemini-2.5-flash","choices":[{"message":{"content":"cat"},"finish_reason":"stop"}],"usage":{"prompt_tokens":18,"completion_tokens":8,"total_tokens":26,"prompt_tokens_details":{"cached_tokens":12,"cache_write_tokens":4}}}`)
 		require.NoError(t, err)
 	}))
 	defer server.Close()
@@ -95,7 +99,11 @@ func TestOpenrouterVisionSendsMultipartContent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "cat", resp.Description)
 	assert.Equal(t, "google/gemini-2.5-flash", resp.Model)
-	assert.Equal(t, 8, resp.TokensUsed)
+	assert.Equal(t, 26, resp.TokensUsed)
+	assert.Equal(t, 18, resp.PromptTokens)
+	assert.Equal(t, 8, resp.CompletionTokens)
+	assert.Equal(t, 12, resp.CachedTokens)
+	assert.Equal(t, 4, resp.CacheWriteTokens)
 }
 
 func TestOpenrouterSupportsInlineImagesWhenModelsMatch(t *testing.T) {

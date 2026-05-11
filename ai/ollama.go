@@ -27,8 +27,8 @@ type OllamaProvider struct {
 }
 
 type ollamaChatChunk struct {
-	Model string `json:"model"`
-	Error string `json:"error,omitempty"`
+	Model   string `json:"model"`
+	Error   string `json:"error,omitempty"`
 	Message struct {
 		Role     string `json:"role"`
 		Content  string `json:"content"`
@@ -102,10 +102,12 @@ func (o *OllamaProvider) Vision(ctx context.Context, req *VisionRequest) (*Visio
 	}
 
 	return &VisionResponse{
-		Description:  response.Content,
-		Model:        response.Model,
-		TokensUsed:   response.TokensUsed,
-		FinishReason: response.FinishReason,
+		Description:      response.Content,
+		Model:            response.Model,
+		TokensUsed:       response.TokensUsed,
+		PromptTokens:     response.PromptTokens,
+		CompletionTokens: response.CompletionTokens,
+		FinishReason:     response.FinishReason,
 	}, nil
 }
 
@@ -195,6 +197,8 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	responseModel := model
 	finishReason := "stop"
 	var tokensUsed int
+	var promptTokens int
+	var completionTokens int
 
 	for _, chunk := range chunks {
 		if chunk.Error != "" {
@@ -212,6 +216,8 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 		if chunk.DoneReason != "" {
 			finishReason = chunk.DoneReason
 		}
+		completionTokens = chunk.EvalCount
+		promptTokens = chunk.PromptEvalCount
 		tokensUsed = chunk.EvalCount + chunk.PromptEvalCount
 	}
 
@@ -240,10 +246,12 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	}
 
 	return &ChatResponse{
-		Content:      content,
-		Model:        responseModel,
-		TokensUsed:   tokensUsed,
-		FinishReason: finishReason,
+		Content:          content,
+		Model:            responseModel,
+		TokensUsed:       tokensUsed,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		FinishReason:     finishReason,
 	}, nil
 }
 

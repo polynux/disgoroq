@@ -299,7 +299,11 @@ func (s *Service) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, er
 		zap.String("provider", providerName),
 		zap.Duration("duration", duration),
 		zap.Int("response_length", len(response.Content)),
-		zap.Int("tokens_used", response.TokensUsed))
+		zap.Int("tokens_used", response.TokensUsed),
+		zap.Int("prompt_tokens", response.PromptTokens),
+		zap.Int("completion_tokens", response.CompletionTokens),
+		zap.Int("cached_tokens", response.CachedTokens),
+		zap.Int("cache_write_tokens", response.CacheWriteTokens))
 
 	return response, nil
 }
@@ -339,7 +343,11 @@ func (s *Service) Vision(ctx context.Context, req *VisionRequest) (*VisionRespon
 		zap.String("provider", providerName),
 		zap.Duration("duration", duration),
 		zap.Int("description_length", len(response.Description)),
-		zap.Int("tokens_used", response.TokensUsed))
+		zap.Int("tokens_used", response.TokensUsed),
+		zap.Int("prompt_tokens", response.PromptTokens),
+		zap.Int("completion_tokens", response.CompletionTokens),
+		zap.Int("cached_tokens", response.CachedTokens),
+		zap.Int("cache_write_tokens", response.CacheWriteTokens))
 
 	return response, nil
 }
