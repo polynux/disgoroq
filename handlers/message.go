@@ -53,6 +53,8 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client := e.Client()
 	m := e.Message
 
+	h.cacheMessage(context.Background(), m)
+
 	if m.Author.ID == client.ID() {
 		return
 	}
@@ -123,7 +125,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
 	messageCount := h.repo.GetMessagesCount(ctx, m.GuildID.String())
-	messages, err := h.getMessages(ctx, m.ChannelID, messageCount)
+	messages, err := h.getMessages(ctx, m.ChannelID, m.GuildID.String(), messageCount, &m)
 	if err != nil {
 		logger.Error("Error getting messages", zap.Error(err))
 		return
@@ -291,11 +293,43 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 }
 
+func (h *MessageHandler) HandleMessageUpdate(e *events.MessageUpdate) {
+	h.cacheMessage(context.Background(), normalizeEventMessage(e.GenericMessage))
+}
+
+func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
+	guildID := ""
+	if e.GuildID != nil {
+		guildID = e.GuildID.String()
+	}
+
+	if err := h.repo.MarkDiscordMessageDeleted(
+		context.Background(),
+		e.MessageID.String(),
+		e.ChannelID.String(),
+		guildID,
+		time.Now(),
+	); err != nil {
+		logger.Warn("Failed to tombstone deleted Discord message",
+			zap.String("message_id", e.MessageID.String()),
+			zap.String("channel_id", e.ChannelID.String()),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
+	}
+}
+
 func (h *MessageHandler) createMessage(channelID snowflake.ID, message discord.MessageCreate) error {
 	sendCtx, sendCancel := appcontext.Message()
 	defer sendCancel()
 
-	_, err := h.client.Rest.CreateMessage(channelID, message, rest.WithCtx(sendCtx))
+	createdMessage, err := h.client.Rest.CreateMessage(channelID, message, rest.WithCtx(sendCtx))
+	if err != nil {
+		return err
+	}
+
+	if createdMessage != nil {
+		h.cacheMessage(context.Background(), *createdMessage)
+	}
 	return err
 }
 
@@ -325,16 +359,47 @@ func (h *MessageHandler) isExplicitTrigger(ctx context.Context, m *discord.Messa
 	return triggerwords.Contains(m.Content, triggerWords)
 }
 
-func (h *MessageHandler) getMessages(ctx context.Context, channelID snowflake.ID, num int) ([]discord.Message, error) {
+func (h *MessageHandler) getMessages(ctx context.Context, channelID snowflake.ID, guildID string, num int, latest *discord.Message) ([]discord.Message, error) {
+	cachedMessages, err := h.repo.GetRecentDiscordMessagesByChannel(ctx, channelID.String(), num)
+	if err == nil {
+		cachedMessages = ensureLatestMessage(cachedMessages, latest, num)
+		if len(cachedMessages) >= num || h.repo.IsDiscordMessageHistoryExhausted(ctx, channelID.String()) {
+			return cachedMessages, nil
+		}
+	} else {
+		logger.Warn("Failed to read cached Discord messages",
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+
+	messages, exhausted, err := h.fetchMessagesFromDiscord(ctx, channelID, num)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.repo.CacheDiscordMessages(ctx, messages); err != nil {
+		logger.Warn("Failed to backfill Discord messages into cache",
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+	if err := h.repo.SetDiscordMessageHistoryExhausted(ctx, channelID.String(), guildID, exhausted); err != nil {
+		logger.Warn("Failed to update Discord message cache state",
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+	return ensureLatestMessage(messages, latest, num), nil
+}
+
+func (h *MessageHandler) fetchMessagesFromDiscord(ctx context.Context, channelID snowflake.ID, num int) ([]discord.Message, bool, error) {
 	if num <= 100 {
 		messages, err := h.client.Rest.GetMessages(channelID, 0, 0, 0, num, rest.WithCtx(ctx))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return messages, nil
+		return messages, len(messages) < num, nil
 	}
 
 	messages := []discord.Message{}
+	historyExhausted := false
 	for num > 0 {
 		toGet := min(100, num)
 		var before snowflake.ID
@@ -343,12 +408,74 @@ func (h *MessageHandler) getMessages(ctx context.Context, channelID snowflake.ID
 		}
 		newMessages, err := h.client.Rest.GetMessages(channelID, 0, before, 0, toGet, rest.WithCtx(ctx))
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		messages = append(messages, newMessages...)
+		if len(newMessages) < toGet {
+			historyExhausted = true
+			break
+		}
 		num -= toGet
 	}
-	return messages, nil
+	return messages, historyExhausted, nil
+}
+
+func (h *MessageHandler) cacheMessage(ctx context.Context, message discord.Message) {
+	if message.ID == 0 || message.ChannelID == 0 {
+		return
+	}
+
+	if err := h.repo.CacheDiscordMessage(ctx, message); err != nil {
+		guildID := ""
+		if message.GuildID != nil {
+			guildID = message.GuildID.String()
+		}
+		logger.Warn("Failed to cache Discord message",
+			zap.String("message_id", message.ID.String()),
+			zap.String("channel_id", message.ChannelID.String()),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
+	}
+}
+
+func ensureLatestMessage(messages []discord.Message, latest *discord.Message, limit int) []discord.Message {
+	if latest == nil || latest.ID == 0 {
+		return messages
+	}
+	if len(messages) > 0 && messages[0].ID == latest.ID {
+		return messages
+	}
+
+	result := make([]discord.Message, 0, min(limit, len(messages)+1))
+	result = append(result, *latest)
+	for _, message := range messages {
+		if message.ID == latest.ID {
+			continue
+		}
+		if len(result) >= limit {
+			break
+		}
+		result = append(result, message)
+	}
+	return result
+}
+
+func normalizeEventMessage(event *events.GenericMessage) discord.Message {
+	message := event.Message
+	if message.ID == 0 {
+		message.ID = event.MessageID
+	}
+	if message.ChannelID == 0 {
+		message.ChannelID = event.ChannelID
+	}
+	if message.GuildID == nil && event.GuildID != nil {
+		guildID := *event.GuildID
+		message.GuildID = &guildID
+	}
+	if message.CreatedAt.IsZero() && message.ID != 0 {
+		message.CreatedAt = message.ID.Time()
+	}
+	return message
 }
 
 func min(a, b int) int {

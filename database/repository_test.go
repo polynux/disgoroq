@@ -7,7 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "github.com/tursodatabase/go-libsql"
@@ -489,4 +492,82 @@ func TestRepository_AttachmentCacheMiss(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Equal(t, AttachmentCacheEntry{}, entry)
+}
+
+func TestRepository_DiscordMessageCacheRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+	guildID := snowflake.MustParse("1137756996813193227")
+	channelID := snowflake.MustParse("1137756996813193228")
+	messageID := snowflake.MustParse("1137756996813193229")
+	createdAt := time.Unix(1710000000, 0).UTC()
+
+	message := discord.Message{
+		ID:        messageID,
+		GuildID:   &guildID,
+		ChannelID: channelID,
+		Content:   "hello",
+		CreatedAt: createdAt,
+		Author: discord.User{
+			ID:       snowflake.MustParse("1474846449459138734"),
+			Username: "alice",
+		},
+		Attachments: []discord.Attachment{{
+			ID:          snowflake.MustParse("1137756996813193230"),
+			Filename:    "cat.png",
+			URL:         "https://example.com/cat.png",
+			ContentType: ptr("image/png"),
+			Size:        1234,
+		}},
+	}
+
+	require.NoError(t, repo.CacheDiscordMessage(ctx, message))
+
+	messages, err := repo.GetRecentDiscordMessagesByChannel(ctx, channelID.String(), 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, message.ID, messages[0].ID)
+	assert.Equal(t, message.Content, messages[0].Content)
+	require.Len(t, messages[0].Attachments, 1)
+	assert.Equal(t, "cat.png", messages[0].Attachments[0].Filename)
+}
+
+func TestRepository_DiscordMessageDeletionTombstonesCache(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+	guildID := snowflake.MustParse("1137756996813193227")
+	channelID := snowflake.MustParse("1137756996813193228")
+	messageID := snowflake.MustParse("1137756996813193229")
+
+	require.NoError(t, repo.CacheDiscordMessage(ctx, discord.Message{
+		ID:        messageID,
+		GuildID:   &guildID,
+		ChannelID: channelID,
+		Content:   "hello",
+		CreatedAt: time.Unix(1710000000, 0).UTC(),
+		Author: discord.User{
+			ID:       snowflake.MustParse("1474846449459138734"),
+			Username: "alice",
+		},
+	}))
+	require.NoError(t, repo.MarkDiscordMessageDeleted(ctx, messageID.String(), channelID.String(), guildID.String(), time.Now().UTC()))
+
+	messages, err := repo.GetRecentDiscordMessagesByChannel(ctx, channelID.String(), 10)
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+}
+
+func TestRepository_DiscordMessageHistoryExhaustedState(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	assert.False(t, repo.IsDiscordMessageHistoryExhausted(ctx, "channel-1"))
+	require.NoError(t, repo.SetDiscordMessageHistoryExhausted(ctx, "channel-1", "guild-1", true))
+	assert.True(t, repo.IsDiscordMessageHistoryExhausted(ctx, "channel-1"))
+	require.NoError(t, repo.SetDiscordMessageHistoryExhausted(ctx, "channel-1", "guild-1", false))
+	assert.False(t, repo.IsDiscordMessageHistoryExhausted(ctx, "channel-1"))
+}
+
+func ptr[T any](v T) *T {
+	return &v
 }

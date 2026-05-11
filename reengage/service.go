@@ -148,7 +148,7 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string) error {
 	channelIDSnowflake := snowflake.MustParse(channelID)
 
-	messages, err := s.client.Rest.GetMessages(channelIDSnowflake, 0, 0, 0, 20, rest.WithCtx(ctx))
+	messages, err := s.getRecentMessages(ctx, guildID, channelIDSnowflake, 20)
 	if err != nil {
 		return fmt.Errorf("failed to get channel messages: %w", err)
 	}
@@ -228,9 +228,18 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
 	}
 
-	_, err = s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{Content: content}, rest.WithCtx(ctx))
+	createdMessage, err := s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{Content: content}, rest.WithCtx(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
+	}
+	if createdMessage != nil {
+		if err := s.repo.CacheDiscordMessage(context.Background(), *createdMessage); err != nil {
+			logger.Warn("Failed to cache sent reengage message",
+				zap.String("guild_id", guildID),
+				zap.String("channel_id", channelID),
+				zap.String("message_id", createdMessage.ID.String()),
+				zap.Error(err))
+		}
 	}
 
 	_ = s.repo.SetChannelLastMessage(ctx, guildID, channelID, time.Now().Unix())
@@ -242,6 +251,37 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 	)
 
 	return nil
+}
+
+func (s *Service) getRecentMessages(ctx context.Context, guildID string, channelID snowflake.ID, limit int) ([]discord.Message, error) {
+	messages, err := s.repo.GetRecentDiscordMessagesByChannel(ctx, channelID.String(), limit)
+	if err == nil && (len(messages) >= limit || s.repo.IsDiscordMessageHistoryExhausted(ctx, channelID.String())) {
+		return messages, nil
+	}
+	if err != nil {
+		logger.Warn("Failed to read cached reengage messages",
+			zap.String("guild_id", guildID),
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+
+	messages, err = s.client.Rest.GetMessages(channelID, 0, 0, 0, limit, rest.WithCtx(ctx))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.CacheDiscordMessages(ctx, messages); err != nil {
+		logger.Warn("Failed to backfill reengage messages into cache",
+			zap.String("guild_id", guildID),
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+	if err := s.repo.SetDiscordMessageHistoryExhausted(ctx, channelID.String(), guildID, len(messages) < limit); err != nil {
+		logger.Warn("Failed to update reengage message cache state",
+			zap.String("guild_id", guildID),
+			zap.String("channel_id", channelID.String()),
+			zap.Error(err))
+	}
+	return messages, nil
 }
 
 func (s *Service) getDefaultPrompt(botNick string) string {

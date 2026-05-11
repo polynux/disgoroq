@@ -98,6 +98,51 @@ ON CONFLICT(cache_kind, attachment_key, provider, model, instruction_version) DO
     content = excluded.content,
     updated_at = strftime('%s', 'now');
 
+-- Discord message cache queries
+
+-- name: UpsertDiscordMessage :exec
+INSERT INTO discord_messages (
+    message_id, channel_id, guild_id, author_id, author_username, content,
+    referenced_message_id, message_json, created_at, edited_at, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET
+    channel_id = excluded.channel_id,
+    guild_id = excluded.guild_id,
+    author_id = excluded.author_id,
+    author_username = excluded.author_username,
+    content = excluded.content,
+    referenced_message_id = excluded.referenced_message_id,
+    message_json = excluded.message_json,
+    created_at = excluded.created_at,
+    edited_at = excluded.edited_at,
+    deleted_at = excluded.deleted_at;
+
+-- name: MarkDiscordMessageDeleted :exec
+INSERT INTO discord_messages (message_id, channel_id, guild_id, created_at, deleted_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET
+    deleted_at = excluded.deleted_at;
+
+-- name: GetRecentDiscordMessagesByChannel :many
+SELECT message_id, message_json
+FROM discord_messages
+WHERE channel_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
+LIMIT ?;
+
+-- name: GetDiscordMessageCacheState :one
+SELECT history_exhausted
+FROM discord_message_cache_state
+WHERE channel_id = ?;
+
+-- name: UpsertDiscordMessageCacheState :exec
+INSERT INTO discord_message_cache_state (channel_id, guild_id, history_exhausted, updated_at)
+VALUES (?, ?, ?, strftime('%s', 'now'))
+ON CONFLICT(channel_id) DO UPDATE SET
+    guild_id = excluded.guild_id,
+    history_exhausted = excluded.history_exhausted,
+    updated_at = strftime('%s', 'now');
+
 -- name: DeleteMessageBufferEntry :exec
 DELETE FROM message_buffer
 WHERE id = ?;

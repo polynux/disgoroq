@@ -50,6 +50,27 @@ type ConversationSummary struct {
 	Embedding      interface{}
 }
 
+type DiscordMessage struct {
+	MessageID           string
+	ChannelID           string
+	GuildID             string
+	AuthorID            string
+	AuthorUsername      string
+	Content             string
+	ReferencedMessageID string
+	MessageJson         string
+	CreatedAt           int64
+	EditedAt            sql.NullInt64
+	DeletedAt           sql.NullInt64
+}
+
+type DiscordMessageCacheState struct {
+	ChannelID        string
+	GuildID          string
+	HistoryExhausted bool
+	UpdatedAt        int64
+}
+
 type GuildSetting struct {
 	ID      int64
 	GuildID string

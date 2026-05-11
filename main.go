@@ -232,6 +232,8 @@ func main() {
 	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
+		bot.NewListenerFunc(messageHandler.HandleMessageUpdate),
+		bot.NewListenerFunc(messageHandler.HandleMessageDelete),
 		bot.NewListenerFunc(handlers.HandleGuildJoin),
 		bot.NewListenerFunc(handlers.HandleGuildLeave),
 	)

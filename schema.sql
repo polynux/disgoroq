@@ -103,6 +103,33 @@ CREATE TABLE IF NOT EXISTS attachment_cache (
 CREATE INDEX IF NOT EXISTS idx_attachment_cache_lookup
 ON attachment_cache(cache_kind, attachment_key, provider, model, instruction_version);
 
+CREATE TABLE IF NOT EXISTS discord_messages (
+    message_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL DEFAULT '',
+    author_id TEXT NOT NULL DEFAULT '',
+    author_username TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    referenced_message_id TEXT NOT NULL DEFAULT '',
+    message_json TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    edited_at INTEGER,
+    deleted_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_discord_messages_channel_created
+ON discord_messages(channel_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_channel_created
+ON discord_messages(guild_id, channel_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS discord_message_cache_state (
+    channel_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL DEFAULT '',
+    history_exhausted BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
 -- Voice settings per guild
 CREATE TABLE IF NOT EXISTS voice_settings (
     guild_id TEXT PRIMARY KEY,

@@ -141,6 +141,19 @@ func (q *Queries) GetAttachmentCacheEntry(ctx context.Context, arg GetAttachment
 	return i, err
 }
 
+const getDiscordMessageCacheState = `-- name: GetDiscordMessageCacheState :one
+SELECT history_exhausted
+FROM discord_message_cache_state
+WHERE channel_id = ?
+`
+
+func (q *Queries) GetDiscordMessageCacheState(ctx context.Context, channelID string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, getDiscordMessageCacheState, channelID)
+	var history_exhausted bool
+	err := row.Scan(&history_exhausted)
+	return history_exhausted, err
+}
+
 const getEvents = `-- name: GetEvents :many
 SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
 FROM bot_events
@@ -477,6 +490,47 @@ func (q *Queries) GetLatestSummaryForUser(ctx context.Context, arg GetLatestSumm
 	return i, err
 }
 
+const getRecentDiscordMessagesByChannel = `-- name: GetRecentDiscordMessagesByChannel :many
+SELECT message_id, message_json
+FROM discord_messages
+WHERE channel_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
+LIMIT ?
+`
+
+type GetRecentDiscordMessagesByChannelParams struct {
+	ChannelID string
+	Limit     int64
+}
+
+type GetRecentDiscordMessagesByChannelRow struct {
+	MessageID   string
+	MessageJson string
+}
+
+func (q *Queries) GetRecentDiscordMessagesByChannel(ctx context.Context, arg GetRecentDiscordMessagesByChannelParams) ([]GetRecentDiscordMessagesByChannelRow, error) {
+	rows, err := q.db.QueryContext(ctx, getRecentDiscordMessagesByChannel, arg.ChannelID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetRecentDiscordMessagesByChannelRow
+	for rows.Next() {
+		var i GetRecentDiscordMessagesByChannelRow
+		if err := rows.Scan(&i.MessageID, &i.MessageJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getSummariesByGuild = `-- name: GetSummariesByGuild :many
 SELECT id, guild_id, user_id, summary_text, message_count, 
        start_message_id, end_message_id, created_at, updated_at, embedding
@@ -750,6 +804,32 @@ func (q *Queries) InsertSummary(ctx context.Context, arg InsertSummaryParams) er
 	return err
 }
 
+const markDiscordMessageDeleted = `-- name: MarkDiscordMessageDeleted :exec
+INSERT INTO discord_messages (message_id, channel_id, guild_id, created_at, deleted_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET
+    deleted_at = excluded.deleted_at
+`
+
+type MarkDiscordMessageDeletedParams struct {
+	MessageID string
+	ChannelID string
+	GuildID   string
+	CreatedAt int64
+	DeletedAt sql.NullInt64
+}
+
+func (q *Queries) MarkDiscordMessageDeleted(ctx context.Context, arg MarkDiscordMessageDeletedParams) error {
+	_, err := q.db.ExecContext(ctx, markDiscordMessageDeleted,
+		arg.MessageID,
+		arg.ChannelID,
+		arg.GuildID,
+		arg.CreatedAt,
+		arg.DeletedAt,
+	)
+	return err
+}
+
 const markMessagesAsProcessed = `-- name: MarkMessagesAsProcessed :exec
 UPDATE message_buffer 
 SET processed = 1 
@@ -881,6 +961,77 @@ func (q *Queries) UpsertAttachmentCacheEntry(ctx context.Context, arg UpsertAtta
 		arg.InstructionVersion,
 		arg.Content,
 	)
+	return err
+}
+
+const upsertDiscordMessage = `-- name: UpsertDiscordMessage :exec
+
+INSERT INTO discord_messages (
+    message_id, channel_id, guild_id, author_id, author_username, content,
+    referenced_message_id, message_json, created_at, edited_at, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET
+    channel_id = excluded.channel_id,
+    guild_id = excluded.guild_id,
+    author_id = excluded.author_id,
+    author_username = excluded.author_username,
+    content = excluded.content,
+    referenced_message_id = excluded.referenced_message_id,
+    message_json = excluded.message_json,
+    created_at = excluded.created_at,
+    edited_at = excluded.edited_at,
+    deleted_at = excluded.deleted_at
+`
+
+type UpsertDiscordMessageParams struct {
+	MessageID           string
+	ChannelID           string
+	GuildID             string
+	AuthorID            string
+	AuthorUsername      string
+	Content             string
+	ReferencedMessageID string
+	MessageJson         string
+	CreatedAt           int64
+	EditedAt            sql.NullInt64
+	DeletedAt           sql.NullInt64
+}
+
+// Discord message cache queries
+func (q *Queries) UpsertDiscordMessage(ctx context.Context, arg UpsertDiscordMessageParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDiscordMessage,
+		arg.MessageID,
+		arg.ChannelID,
+		arg.GuildID,
+		arg.AuthorID,
+		arg.AuthorUsername,
+		arg.Content,
+		arg.ReferencedMessageID,
+		arg.MessageJson,
+		arg.CreatedAt,
+		arg.EditedAt,
+		arg.DeletedAt,
+	)
+	return err
+}
+
+const upsertDiscordMessageCacheState = `-- name: UpsertDiscordMessageCacheState :exec
+INSERT INTO discord_message_cache_state (channel_id, guild_id, history_exhausted, updated_at)
+VALUES (?, ?, ?, strftime('%s', 'now'))
+ON CONFLICT(channel_id) DO UPDATE SET
+    guild_id = excluded.guild_id,
+    history_exhausted = excluded.history_exhausted,
+    updated_at = strftime('%s', 'now')
+`
+
+type UpsertDiscordMessageCacheStateParams struct {
+	ChannelID        string
+	GuildID          string
+	HistoryExhausted bool
+}
+
+func (q *Queries) UpsertDiscordMessageCacheState(ctx context.Context, arg UpsertDiscordMessageCacheStateParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDiscordMessageCacheState, arg.ChannelID, arg.GuildID, arg.HistoryExhausted)
 	return err
 }
 
