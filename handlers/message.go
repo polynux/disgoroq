@@ -93,10 +93,10 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	randFloat := rand.Float32()
 	if randFloat < float32(thresholdSexe) && !explicitTrigger {
 		if rand.Float32() < 0.5 {
-			client.Rest.CreateMessage(m.ChannelID, discord.MessageCreate{Content: "(et je parle de sexe evidemment)"}, rest.WithCtx(ctx))
+			_ = h.createMessage(m.ChannelID, discord.MessageCreate{Content: "(et je parle de sexe evidemment)"})
 			return
 		} else {
-			client.Rest.CreateMessage(m.ChannelID, discord.MessageCreate{Content: "malin ça, j'ai la barre maintenant"}, rest.WithCtx(ctx))
+			_ = h.createMessage(m.ChannelID, discord.MessageCreate{Content: "malin ça, j'ai la barre maintenant"})
 			return
 		}
 	}
@@ -227,11 +227,10 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 			errorMsg = "Désolé, tous mes systèmes sont en rade... 🤖💀"
 		}
 
-		client.Rest.CreateMessage(m.ChannelID,
-			discord.MessageCreate{
-				Content:          errorMsg,
-				MessageReference: reference,
-			}, rest.WithCtx(ctx))
+		_ = h.createMessage(m.ChannelID, discord.MessageCreate{
+			Content:          errorMsg,
+			MessageReference: reference,
+		})
 		return
 	}
 
@@ -241,21 +240,12 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 			zap.String("guild_id", m.GuildID.String()),
 			zap.String("user_id", m.Author.ID.String()))
 
-		client.Rest.CreateMessage(m.ChannelID,
-			discord.MessageCreate{
-				Content:          "Euh... j'ai perdu mes mots là 😅",
-				MessageReference: reference,
-			}, rest.WithCtx(ctx))
+		_ = h.createMessage(m.ChannelID, discord.MessageCreate{
+			Content:          "Euh... j'ai perdu mes mots là 😅",
+			MessageReference: reference,
+		})
 		return
 	}
-
-	// Log successful response
-	logger.Info("AI response successful",
-		zap.String("guild_id", m.GuildID.String()),
-		zap.String("user_id", m.Author.ID.String()),
-		zap.String("provider", h.aiservice.Name()),
-		zap.Int("response_length", len(response.Content)),
-		zap.Int("tokens_used", response.TokensUsed))
 
 	response.Content = utils.NormalizeBotText(response.Content)
 
@@ -264,12 +254,49 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID.String())
 	}
 
-	client.Rest.CreateMessage(m.ChannelID,
-		discord.MessageCreate{
-			Content:          response.Content,
+	if response.Content == "" {
+		logger.Error("AI response became empty after post-processing",
+			zap.String("guild_id", m.GuildID.String()),
+			zap.String("user_id", m.Author.ID.String()))
+		_ = h.createMessage(m.ChannelID, discord.MessageCreate{
+			Content:          "Euh... j'ai perdu mes mots là 😅",
 			MessageReference: reference,
-			AllowedMentions:  &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
-		}, rest.WithCtx(ctx))
+		})
+		return
+	}
+
+	providerName := response.Provider
+	if providerName == "" {
+		providerName = h.aiservice.Name()
+	}
+
+	// Log successful response after post-processing so the payload reflects what is sent.
+	logger.Info("AI response successful",
+		zap.String("guild_id", m.GuildID.String()),
+		zap.String("user_id", m.Author.ID.String()),
+		zap.String("provider", providerName),
+		zap.Int("response_length", len(response.Content)),
+		zap.Int("tokens_used", response.TokensUsed))
+
+	if err := h.createMessage(m.ChannelID, discord.MessageCreate{
+		Content:          response.Content,
+		MessageReference: reference,
+		AllowedMentions:  &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	}); err != nil {
+		logger.Error("Failed to send AI response",
+			zap.String("guild_id", m.GuildID.String()),
+			zap.String("user_id", m.Author.ID.String()),
+			zap.String("provider", providerName),
+			zap.Error(err))
+	}
+}
+
+func (h *MessageHandler) createMessage(channelID snowflake.ID, message discord.MessageCreate) error {
+	sendCtx, sendCancel := appcontext.Message()
+	defer sendCancel()
+
+	_, err := h.client.Rest.CreateMessage(channelID, message, rest.WithCtx(sendCtx))
+	return err
 }
 
 func (h *MessageHandler) botMentioned(m *discord.Message, botID snowflake.ID) bool {
