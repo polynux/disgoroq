@@ -256,7 +256,13 @@ func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []d
 				continue
 			}
 			if cb.docProcessor != nil && cb.docProcessor.CanProcess(*attachment.ContentType) {
-				summary, err := cb.docProcessor.ProcessDocument(ctx, attachment.URL, attachment.Filename)
+				summary, err := cb.docProcessor.ProcessDocument(ctx, DocumentContext{
+					MessageID:   messages[idx].ID.String(),
+					URL:         attachment.URL,
+					Filename:    attachment.Filename,
+					ContentType: *attachment.ContentType,
+					Size:        int64(attachment.Size),
+				})
 				if err == nil && summary != "" {
 					summaries[messages[idx].ID.String()] = summary
 				}

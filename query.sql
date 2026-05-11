@@ -76,6 +76,28 @@ WHERE id IN (
 DELETE FROM message_buffer 
 WHERE processed = 1 AND timestamp < ?;
 
+-- Attachment cache queries
+
+-- name: GetAttachmentCacheEntry :one
+SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+       provider, model, instruction_version, content, created_at, updated_at
+FROM attachment_cache
+WHERE cache_kind = ? AND attachment_key = ? AND provider = ? AND model = ? AND instruction_version = ?
+LIMIT 1;
+
+-- name: UpsertAttachmentCacheEntry :exec
+INSERT INTO attachment_cache (
+    cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+    provider, model, instruction_version, content, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+ON CONFLICT(cache_kind, attachment_key, provider, model, instruction_version) DO UPDATE SET
+    source_url = excluded.source_url,
+    filename = excluded.filename,
+    content_type = excluded.content_type,
+    size_bytes = excluded.size_bytes,
+    content = excluded.content,
+    updated_at = strftime('%s', 'now');
+
 -- name: DeleteMessageBufferEntry :exec
 DELETE FROM message_buffer
 WHERE id = ?;

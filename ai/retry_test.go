@@ -7,8 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"polynux/disgoroq/database"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 // MockProvider is a mock implementation of the Provider interface for testing
@@ -54,7 +57,7 @@ func TestNewRetryWrapper(t *testing.T) {
 	mockProvider := new(MockProvider)
 	config := DefaultRetryConfig()
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 
 	assert.NotNil(t, wrapper)
 	assert.Equal(t, mockProvider, wrapper.provider)
@@ -67,7 +70,7 @@ func TestRetryWrapperName(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockProvider.On("Name").Return("test-provider")
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	name := wrapper.Name()
 
 	assert.Equal(t, "test-provider", name)
@@ -82,7 +85,7 @@ func TestRetryWrapperAvailableModels(t *testing.T) {
 	}
 	mockProvider.On("AvailableModels").Return(expectedModels)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	models := wrapper.AvailableModels()
 
 	assert.Equal(t, expectedModels, models)
@@ -101,7 +104,7 @@ func TestRetryWrapperChatSuccessFirstAttempt(t *testing.T) {
 	mockProvider.On("Name").Return("test-provider")
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(expectedResponse, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -129,7 +132,7 @@ func TestRetryWrapperChatAnnotatesModelWhenProviderLeavesItEmpty(t *testing.T) {
 		FinishReason: "stop",
 	}, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	response, err := wrapper.Chat(context.Background(), &ChatRequest{
 		Messages: []Message{{Role: "user", Content: "Hello"}},
 	})
@@ -167,7 +170,7 @@ func TestRetryWrapperChatFallsBackToImageDescriptions(t *testing.T) {
 			strings.Contains(req.Messages[0].Content, "a cat")
 	})).Return(expectedResponse, nil).Once()
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	response, err := wrapper.Chat(context.Background(), &ChatRequest{
 		Messages: []Message{{
 			Role:      "user",
@@ -207,7 +210,7 @@ func TestRetryWrapperChatPreservesInlineImagesWhenProviderSupportsThem(t *testin
 			!strings.Contains(req.Messages[0].Content, "<IMAGE_DESC>")
 	})).Return(expectedResponse, nil).Once()
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "shared-model", "shared-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "shared-model", "shared-model", nil)
 	response, err := wrapper.Chat(context.Background(), &ChatRequest{
 		Messages: []Message{{
 			Role:      "user",
@@ -248,7 +251,7 @@ func TestRetryWrapperChatEmptyResponseRetry(t *testing.T) {
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -285,7 +288,7 @@ func TestRetryWrapperChatAPIErrorRetry(t *testing.T) {
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -323,7 +326,7 @@ func TestRetryWrapperChatMaxRetriesExhausted(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -363,7 +366,7 @@ func TestRetryWrapperChatDisableRetryOnEmpty(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -398,7 +401,7 @@ func TestRetryWrapperChatDisableRetryOnError(t *testing.T) {
 		RetryOnError:  false,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -438,7 +441,7 @@ func TestRetryWrapperChatZeroRetries(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &ChatRequest{
 		Model: "test-model",
@@ -468,7 +471,7 @@ func TestRetryWrapperVisionSuccess(t *testing.T) {
 	mockProvider.On("Name").Return("test-provider")
 	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(expectedResponse, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -505,7 +508,7 @@ func TestRetryWrapperVisionEmptyResponse(t *testing.T) {
 	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(validResponse, nil).Once()
 
 	config := DefaultRetryConfig()
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -542,7 +545,7 @@ func TestRetryWrapperVisionMaxRetriesExhausted(t *testing.T) {
 		RetryOnError:  true,
 	}
 
-	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 1, "test-chat-model", "test-vision-model", nil)
 	ctx := context.Background()
 	req := &VisionRequest{
 		Model:       "vision-model",
@@ -574,10 +577,124 @@ func TestRetryWrapperChatHonorsMinResponseLength(t *testing.T) {
 	mockProvider.On("Name").Return("test-provider")
 	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(shortResponse, nil)
 
-	wrapper := NewRetryWrapper(mockProvider, config, 5, "test-chat-model", "test-vision-model")
+	wrapper := NewRetryWrapper(mockProvider, config, 5, "test-chat-model", "test-vision-model", nil)
 	_, err := wrapper.Chat(context.Background(), &ChatRequest{Model: "test-model"})
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "empty response")
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatUsesAttachmentCacheHit(t *testing.T) {
+	mockProvider := new(MockProvider)
+	cache := newMemoryAttachmentCache()
+	input := documentSummaryCacheInput(DocumentContext{
+		URL:         "https://example.com/report.pdf",
+		Filename:    "report.pdf",
+		ContentType: "application/pdf",
+		Size:        1234,
+	}, 500)
+
+	require.NoError(t, cache.PutAttachmentCache(context.Background(), database.AttachmentCacheEntry{
+		AttachmentCacheKey: attachmentCacheKey(input, "test-provider", "test-chat-model"),
+		Content:            "cached summary",
+		SourceURL:          input.SourceURL,
+		Filename:           input.Filename,
+		ContentType:        input.ContentType,
+		SizeBytes:          input.SizeBytes,
+	}))
+
+	mockProvider.On("Name").Return("test-provider")
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", cache)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages:        []Message{{Role: "user", Content: "ignored"}},
+		AttachmentCache: cacheInputPtr(input),
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "cached summary", response.Content)
+	assert.Equal(t, "test-provider", response.Provider)
+	assert.Equal(t, "test-chat-model", response.Model)
+	mockProvider.AssertNotCalled(t, "Chat", mock.Anything, mock.Anything)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatStoresAttachmentCacheOnSuccess(t *testing.T) {
+	mockProvider := new(MockProvider)
+	cache := newMemoryAttachmentCache()
+	input := documentSummaryCacheInput(DocumentContext{
+		URL:         "https://example.com/report.pdf",
+		Filename:    "report.pdf",
+		ContentType: "application/pdf",
+		Size:        1234,
+	}, 500)
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+		Content:      "fresh summary",
+		Model:        "test-chat-model",
+		FinishReason: "stop",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", cache)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages:        []Message{{Role: "user", Content: "summarize"}},
+		AttachmentCache: cacheInputPtr(input),
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "fresh summary", response.Content)
+
+	entry, found, err := cache.GetAttachmentCache(context.Background(), attachmentCacheKey(input, "test-provider", "test-chat-model"))
+	assert.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, "fresh summary", entry.Content)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestRetryWrapperChatUsesCachedImageDescriptions(t *testing.T) {
+	mockProvider := new(MockProvider)
+	cache := newMemoryAttachmentCache()
+	image := ImageContext{
+		URL:    "https://example.com/cat.png",
+		Type:   "image/png",
+		Width:  800,
+		Height: 600,
+		Size:   1234,
+	}
+
+	require.NoError(t, cache.PutAttachmentCache(context.Background(), database.AttachmentCacheEntry{
+		AttachmentCacheKey: attachmentCacheKey(imageDescriptionCacheInput(image), "test-provider", "test-vision-model"),
+		Content:            "a cached cat",
+		SourceURL:          image.URL,
+		ContentType:        image.Type,
+		SizeBytes:          image.Size,
+	}))
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return len(req.Images) == 0 &&
+			len(req.Messages) == 1 &&
+			strings.Contains(req.Messages[0].Content, "a cached cat") &&
+			len(req.Messages[0].ImageRefs) == 0
+	})).Return(&ChatResponse{
+		Content: "described",
+		Model:   "test-chat-model",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", cache)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{image},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "described", response.Content)
+	mockProvider.AssertNotCalled(t, "Vision", mock.Anything, mock.Anything)
 	mockProvider.AssertExpectations(t)
 }

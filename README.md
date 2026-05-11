@@ -30,7 +30,7 @@ Start from `config.example.yaml`, then review `config.yaml` for runtime defaults
 
 For AI, `ai.primary_provider` defaults to `groq`. Set it to `ollama` and enable `ai.ollama.enabled` to run Ollama by default without requiring `GROQ_API_KEY`, set it to `opencode` and enable `ai.opencode.enabled` with `OPENCODE_API_KEY` to use OpenCode Go's OpenAI-compatible `chat/completions` endpoint, or set it to `openrouter` and enable `ai.openrouter.enabled` with `OPENROUTER_API_KEY` to use OpenRouter's OpenAI-compatible `/api/v1/chat/completions` endpoint.
 
-When image attachments are present, DisgoroQ now keeps raw attachment refs in chat context. If the selected provider is using the same supported multimodal model for chat and vision, attachments are sent inline to chat; otherwise the bot falls back to a separate vision-to-text description step before chat.
+When image attachments are present, DisgoroQ keeps raw attachment refs in chat context. If the selected provider is using the same supported multimodal model for chat and vision, attachments are sent inline to chat; otherwise the bot falls back to a separate vision-to-text description step before chat. Detached image descriptions and document summaries are cached in the database per attachment fingerprint, provider, model, and prompt version so repeated requests do not keep paying the same preprocessing cost.
 
 Each AI provider section also exposes `thinking_enabled`:
 

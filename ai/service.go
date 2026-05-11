@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 )
 
@@ -55,6 +56,9 @@ type ServiceConfig struct {
 
 	// Fallback configuration
 	FallbackEnabled bool
+
+	// Optional persistent cache for detached attachment-to-text conversions.
+	AttachmentCache database.AttachmentCache
 }
 
 // Validate checks if the service configuration is valid
@@ -142,12 +146,14 @@ type Service struct {
 	config   ServiceConfig
 	provider Provider
 	chain    *ProviderChain
+	scopes   []AttachmentCacheScope
 }
 
 // NewService creates a new AI service with the given configuration
 func NewService(config ServiceConfig) *Service {
 	// Build wrapped providers (with retry logic for each)
 	var wrappedProviders []Provider
+	var chatCacheScopes []AttachmentCacheScope
 	primaryProvider := config.primaryProvider()
 
 	addProvider := func(providerName string) {
@@ -163,7 +169,9 @@ func NewService(config ServiceConfig) *Service {
 				config.MinResponseLength,
 				config.GroqModel,
 				config.GroqVisionModel,
+				config.AttachmentCache,
 			))
+			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderGroq, Model: config.GroqModel})
 		case ProviderOllama:
 			if !config.OllamaEnabled {
 				return
@@ -179,7 +187,9 @@ func NewService(config ServiceConfig) *Service {
 				config.MinResponseLength,
 				config.OllamaModel,
 				config.OllamaVisionModel,
+				config.AttachmentCache,
 			))
+			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOllama, Model: config.OllamaModel})
 		case ProviderOpencode:
 			if !config.OpencodeEnabled || config.OpencodeAPIKey == "" {
 				return
@@ -195,7 +205,9 @@ func NewService(config ServiceConfig) *Service {
 				config.MinResponseLength,
 				config.OpencodeModel,
 				config.OpencodeVisionModel,
+				config.AttachmentCache,
 			))
+			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOpencode, Model: config.OpencodeModel})
 		case ProviderOpenrouter:
 			if !config.OpenrouterEnabled || config.OpenrouterAPIKey == "" {
 				return
@@ -211,7 +223,9 @@ func NewService(config ServiceConfig) *Service {
 				config.MinResponseLength,
 				config.OpenrouterModel,
 				config.OpenrouterVisionModel,
+				config.AttachmentCache,
 			))
+			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOpenrouter, Model: config.OpenrouterModel})
 		}
 	}
 
@@ -245,6 +259,7 @@ func NewService(config ServiceConfig) *Service {
 		config:   config,
 		provider: finalProvider,
 		chain:    chain,
+		scopes:   chatCacheScopes,
 	}
 }
 
@@ -337,6 +352,14 @@ func (s *Service) Name() string {
 // AvailableModels returns available models from the underlying provider
 func (s *Service) AvailableModels() []ModelInfo {
 	return s.provider.AvailableModels()
+}
+
+func (s *Service) AttachmentCache() database.AttachmentCache {
+	return s.config.AttachmentCache
+}
+
+func (s *Service) ChatCacheScopes() []AttachmentCacheScope {
+	return append([]AttachmentCacheScope(nil), s.scopes...)
 }
 
 // GetProviderInfo returns information about the current provider configuration

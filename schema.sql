@@ -83,6 +83,26 @@ ON message_buffer(channel_id, processed, timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_buffer_message_id
 ON message_buffer(message_id);
 
+CREATE TABLE IF NOT EXISTS attachment_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cache_kind TEXT NOT NULL,
+    attachment_key TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL DEFAULT '',
+    content_type TEXT NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    instruction_version TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(cache_kind, attachment_key, provider, model, instruction_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_attachment_cache_lookup
+ON attachment_cache(cache_kind, attachment_key, provider, model, instruction_version);
+
 -- Voice settings per guild
 CREATE TABLE IF NOT EXISTS voice_settings (
     guild_id TEXT PRIMARY KEY,
@@ -95,4 +115,3 @@ CREATE TABLE IF NOT EXISTS voice_settings (
 
 CREATE INDEX IF NOT EXISTS idx_voice_settings_guild_id
 ON voice_settings(guild_id);
-

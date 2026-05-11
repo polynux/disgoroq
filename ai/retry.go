@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -18,6 +19,7 @@ type RetryWrapper struct {
 	minResponseLength int
 	chatModel         string // Provider-specific chat model
 	visionModel       string // Provider-specific vision model
+	cache             database.AttachmentCache
 }
 
 type modelAwareProvider interface {
@@ -26,7 +28,7 @@ type modelAwareProvider interface {
 }
 
 // NewRetryWrapper creates a new retry wrapper around a provider
-func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength int, chatModel, visionModel string) *RetryWrapper {
+func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength int, chatModel, visionModel string, cache database.AttachmentCache) *RetryWrapper {
 	if minResponseLength < 1 {
 		minResponseLength = 1
 	}
@@ -38,6 +40,7 @@ func NewRetryWrapper(provider Provider, config RetryConfig, minResponseLength in
 		minResponseLength: minResponseLength,
 		chatModel:         chatModel,
 		visionModel:       visionModel,
+		cache:             cache,
 	}
 }
 
@@ -54,6 +57,20 @@ func (r *RetryWrapper) VisionModelName() string {
 	return r.visionModel
 }
 
+func (r *RetryWrapper) AttachmentCache() database.AttachmentCache {
+	return r.cache
+}
+
+func (r *RetryWrapper) ChatCacheScopes() []AttachmentCacheScope {
+	if r.chatModel == "" {
+		return nil
+	}
+	return []AttachmentCacheScope{{
+		Provider: r.provider.Name(),
+		Model:    r.chatModel,
+	}}
+}
+
 // AvailableModels returns the available models from the wrapped provider
 func (r *RetryWrapper) AvailableModels() []ModelInfo {
 	return r.provider.AvailableModels()
@@ -67,6 +84,10 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	requestWithModel := *req
 	requestWithModel.Model = r.chatModel
 	preparedRequest := r.prepareChatRequest(ctx, &requestWithModel)
+
+	if cached := r.getCachedChatResponse(ctx, preparedRequest); cached != nil {
+		return cached, nil
+	}
 
 	// Attempt up to MaxRetries + 1 times (initial attempt + retries)
 	maxAttempts := r.config.MaxRetries + 1
@@ -120,6 +141,7 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				response.Model = preparedRequest.Model
 			}
 			response.Provider = r.provider.Name()
+			r.storeCachedChatResponse(ctx, preparedRequest, response)
 
 			// Success! Return the response
 			if attempt > 1 {
@@ -184,6 +206,77 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 
 	// This should not happen, but handle the case
 	return nil, fmt.Errorf("AI chat failed after %d attempts with unknown error", maxAttempts)
+}
+
+func (r *RetryWrapper) getCachedChatResponse(ctx context.Context, req *ChatRequest) *ChatResponse {
+	if r.cache == nil || req.AttachmentCache == nil {
+		return nil
+	}
+
+	entry, found, err := r.cache.GetAttachmentCache(ctx, attachmentCacheKey(*req.AttachmentCache, r.provider.Name(), req.Model))
+	if err != nil {
+		logger.Warn("Failed to read attachment chat cache",
+			zap.Error(err),
+			zap.String("provider", r.provider.Name()),
+			zap.String("model", req.Model),
+			zap.String("cache_kind", req.AttachmentCache.Kind))
+		return nil
+	}
+	if !found {
+		return nil
+	}
+
+	content := strings.TrimSpace(entry.Content)
+	if content == "" {
+		return nil
+	}
+
+	logger.Debug("Using cached attachment chat response",
+		zap.String("provider", r.provider.Name()),
+		zap.String("model", req.Model),
+		zap.String("cache_kind", req.AttachmentCache.Kind))
+
+	return &ChatResponse{
+		Content:      content,
+		Provider:     r.provider.Name(),
+		Model:        req.Model,
+		FinishReason: "cache",
+	}
+}
+
+func (r *RetryWrapper) storeCachedChatResponse(ctx context.Context, req *ChatRequest, response *ChatResponse) {
+	if r.cache == nil || req.AttachmentCache == nil {
+		return
+	}
+
+	content := strings.TrimSpace(response.Content)
+	if content == "" {
+		return
+	}
+
+	providerName := response.Provider
+	if providerName == "" {
+		providerName = r.provider.Name()
+	}
+	modelName := response.Model
+	if modelName == "" {
+		modelName = req.Model
+	}
+
+	if err := r.cache.PutAttachmentCache(ctx, database.AttachmentCacheEntry{
+		AttachmentCacheKey: attachmentCacheKey(*req.AttachmentCache, providerName, modelName),
+		Content:            content,
+		SourceURL:          req.AttachmentCache.SourceURL,
+		Filename:           req.AttachmentCache.Filename,
+		ContentType:        req.AttachmentCache.ContentType,
+		SizeBytes:          req.AttachmentCache.SizeBytes,
+	}); err != nil {
+		logger.Warn("Failed to write attachment chat cache",
+			zap.Error(err),
+			zap.String("provider", providerName),
+			zap.String("model", modelName),
+			zap.String("cache_kind", req.AttachmentCache.Kind))
+	}
 }
 
 // waitBeforeRetry waits for the appropriate delay before the next retry attempt

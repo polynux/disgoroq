@@ -6,6 +6,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 )
 
@@ -77,6 +78,11 @@ func cloneMessages(messages []Message) []Message {
 func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []ImageContext) map[int]string {
 	descriptions := make(map[int]string, len(images))
 	for idx, image := range images {
+		if description, ok := r.getCachedImageDescription(ctx, image); ok {
+			descriptions[idx] = description
+			continue
+		}
+
 		response, err := r.Vision(ctx, &VisionRequest{
 			Instruction: defaultVisionInstruction,
 			ImageURL:    image.URL,
@@ -96,10 +102,68 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			continue
 		}
 
-		descriptions[idx] = response.Description
+		description := strings.TrimSpace(response.Description)
+		if description == "" {
+			continue
+		}
+
+		r.storeCachedImageDescription(ctx, image, description)
+		descriptions[idx] = description
 	}
 
 	return descriptions
+}
+
+func (r *RetryWrapper) getCachedImageDescription(ctx context.Context, image ImageContext) (string, bool) {
+	if r.cache == nil {
+		return "", false
+	}
+
+	entry, found, err := r.cache.GetAttachmentCache(ctx, attachmentCacheKey(imageDescriptionCacheInput(image), r.provider.Name(), r.visionModel))
+	if err != nil {
+		logger.Warn("Failed to read image description cache",
+			zap.Error(err),
+			zap.String("provider", r.provider.Name()),
+			zap.String("model", r.visionModel),
+			zap.String("image_url", image.URL))
+		return "", false
+	}
+	if !found {
+		return "", false
+	}
+
+	description := strings.TrimSpace(entry.Content)
+	if description == "" {
+		return "", false
+	}
+
+	logger.Debug("Using cached image description",
+		zap.String("provider", r.provider.Name()),
+		zap.String("model", r.visionModel),
+		zap.String("image_url", image.URL))
+
+	return description, true
+}
+
+func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image ImageContext, description string) {
+	if r.cache == nil {
+		return
+	}
+
+	input := imageDescriptionCacheInput(image)
+	if err := r.cache.PutAttachmentCache(ctx, database.AttachmentCacheEntry{
+		AttachmentCacheKey: attachmentCacheKey(input, r.provider.Name(), r.visionModel),
+		Content:            description,
+		SourceURL:          input.SourceURL,
+		ContentType:        input.ContentType,
+		SizeBytes:          input.SizeBytes,
+	}); err != nil {
+		logger.Warn("Failed to write image description cache",
+			zap.Error(err),
+			zap.String("provider", r.provider.Name()),
+			zap.String("model", r.visionModel),
+			zap.String("image_url", image.URL))
+	}
 }
 
 func descriptionsForRefs(refs []int, descriptions map[int]string) []string {

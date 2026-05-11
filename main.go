@@ -111,6 +111,7 @@ func main() {
 
 	eventRepo := logger.NewEventRepository(utils.DB, logger.Log)
 	logger.SetEventRepository(eventRepo)
+	repo := database.NewRepository()
 
 	// Create AI service configuration from central config
 	aiServiceConfig := ai.ServiceConfig{
@@ -146,6 +147,7 @@ func main() {
 		},
 		MinResponseLength: cfg.AI.MinResponseLength,
 		FallbackEnabled:   cfg.AI.FallbackEnabled,
+		AttachmentCache:   repo,
 	}
 
 	if err := aiServiceConfig.Validate(); err != nil {
@@ -222,8 +224,6 @@ func main() {
 	} else {
 		logger.Info("Memory service disabled by configuration")
 	}
-
-	repo := database.NewRepository()
 
 	// Initialize emoji manager for shortcode conversion
 	emojiManager := emoji.NewManager(client, cfg.Emoji)

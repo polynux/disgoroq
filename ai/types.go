@@ -19,12 +19,13 @@ type Provider interface {
 
 // ChatRequest contains all context needed for AI text generation
 type ChatRequest struct {
-	Model        string         // e.g., "llama-3-70b", "dolphin3"
-	SystemPrompt string         // System instructions
-	Messages     []Message      // Conversation history
-	Temperature  float32        // 0.0-1.0
-	MaxTokens    int            // Max response tokens
-	Images       []ImageContext // Images referenced in messages
+	Model           string                // e.g., "llama-3-70b", "dolphin3"
+	SystemPrompt    string                // System instructions
+	Messages        []Message             // Conversation history
+	Temperature     float32               // 0.0-1.0
+	MaxTokens       int                   // Max response tokens
+	Images          []ImageContext        // Images referenced in messages
+	AttachmentCache *AttachmentCacheInput // Optional detached attachment summary cache key
 }
 
 // Message represents a single message in the conversation
@@ -45,6 +46,27 @@ type ImageContext struct {
 	Width     int    // Image width in pixels
 	Height    int    // Image height in pixels
 	Size      int64  // File size in bytes
+}
+
+// DocumentContext contains document metadata for summary processing.
+type DocumentContext struct {
+	MessageID   string // Which Discord message has this document
+	URL         string // Document URL
+	Filename    string // Original filename
+	ContentType string // MIME type
+	Size        int64  // File size in bytes
+}
+
+// AttachmentCacheInput identifies a detached attachment-to-text conversion that
+// can be reused across requests.
+type AttachmentCacheInput struct {
+	Kind               string // image_description, document_summary, etc.
+	AttachmentKey      string // Stable fingerprint for the effective attachment input
+	SourceURL          string // Original attachment URL or data URI
+	Filename           string // Original filename when applicable
+	ContentType        string // MIME type
+	SizeBytes          int64  // Attachment size in bytes
+	InstructionVersion string // Prompt/instruction discriminator
 }
 
 // VisionRequest contains parameters for image analysis

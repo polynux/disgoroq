@@ -8,6 +8,22 @@ import (
 	"database/sql"
 )
 
+type AttachmentCache struct {
+	ID                 int64
+	CacheKind          string
+	AttachmentKey      string
+	SourceUrl          string
+	Filename           string
+	ContentType        string
+	SizeBytes          int64
+	Provider           string
+	Model              string
+	InstructionVersion string
+	Content            string
+	CreatedAt          int64
+	UpdatedAt          int64
+}
+
 type BotEvent struct {
 	ID         int64
 	Timestamp  int64

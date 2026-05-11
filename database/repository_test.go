@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,9 +32,17 @@ func setupTestDB(t *testing.T) *Repository {
 		t.Fatalf("Failed to read schema: %v", err)
 	}
 
-	_, err = database.Exec(string(schema))
-	if err != nil {
-		t.Fatalf("Failed to create tables: %v", err)
+	for _, statement := range strings.Split(string(schema), ";") {
+		statement = strings.TrimSpace(statement)
+		if statement == "" {
+			continue
+		}
+		if strings.Contains(statement, "libsql_vector_idx") {
+			continue
+		}
+		if _, err = database.Exec(statement); err != nil {
+			t.Fatalf("Failed to create tables: %v", err)
+		}
 	}
 
 	queries := db.New(database)
@@ -426,4 +435,58 @@ func TestRepository_GetReengageThreshold_NotConfigured(t *testing.T) {
 	if threshold != 0 {
 		t.Errorf("Expected zero threshold when not configured, got %d", threshold)
 	}
+}
+
+func TestRepository_AttachmentCacheRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	expected := AttachmentCacheEntry{
+		AttachmentCacheKey: AttachmentCacheKey{
+			Kind:               "image_description",
+			AttachmentKey:      "fingerprint",
+			Provider:           "groq",
+			Model:              "llama-4",
+			InstructionVersion: "image_description:v1",
+		},
+		Content:     "cached content",
+		SourceURL:   "https://example.com/image.png",
+		Filename:    "",
+		ContentType: "image/png",
+		SizeBytes:   1234,
+	}
+
+	require.NoError(t, repo.PutAttachmentCache(ctx, expected))
+
+	actual, found, err := repo.GetAttachmentCache(ctx, expected.AttachmentCacheKey)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, expected.Kind, actual.Kind)
+	assert.Equal(t, expected.AttachmentKey, actual.AttachmentKey)
+	assert.Equal(t, expected.Provider, actual.Provider)
+	assert.Equal(t, expected.Model, actual.Model)
+	assert.Equal(t, expected.InstructionVersion, actual.InstructionVersion)
+	assert.Equal(t, expected.Content, actual.Content)
+	assert.Equal(t, expected.SourceURL, actual.SourceURL)
+	assert.Equal(t, expected.ContentType, actual.ContentType)
+	assert.Equal(t, expected.SizeBytes, actual.SizeBytes)
+	assert.NotZero(t, actual.CreatedAt)
+	assert.NotZero(t, actual.UpdatedAt)
+}
+
+func TestRepository_AttachmentCacheMiss(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	entry, found, err := repo.GetAttachmentCache(ctx, AttachmentCacheKey{
+		Kind:               "document_summary",
+		AttachmentKey:      "missing",
+		Provider:           "groq",
+		Model:              "llama-4",
+		InstructionVersion: "document_summary:v1",
+	})
+
+	require.NoError(t, err)
+	assert.False(t, found)
+	assert.Equal(t, AttachmentCacheEntry{}, entry)
 }

@@ -96,6 +96,51 @@ func (q *Queries) GetAllGuilds(ctx context.Context) ([]string, error) {
 	return items, nil
 }
 
+const getAttachmentCacheEntry = `-- name: GetAttachmentCacheEntry :one
+
+SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+       provider, model, instruction_version, content, created_at, updated_at
+FROM attachment_cache
+WHERE cache_kind = ? AND attachment_key = ? AND provider = ? AND model = ? AND instruction_version = ?
+LIMIT 1
+`
+
+type GetAttachmentCacheEntryParams struct {
+	CacheKind          string
+	AttachmentKey      string
+	Provider           string
+	Model              string
+	InstructionVersion string
+}
+
+// Attachment cache queries
+func (q *Queries) GetAttachmentCacheEntry(ctx context.Context, arg GetAttachmentCacheEntryParams) (AttachmentCache, error) {
+	row := q.db.QueryRowContext(ctx, getAttachmentCacheEntry,
+		arg.CacheKind,
+		arg.AttachmentKey,
+		arg.Provider,
+		arg.Model,
+		arg.InstructionVersion,
+	)
+	var i AttachmentCache
+	err := row.Scan(
+		&i.ID,
+		&i.CacheKind,
+		&i.AttachmentKey,
+		&i.SourceUrl,
+		&i.Filename,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.Provider,
+		&i.Model,
+		&i.InstructionVersion,
+		&i.Content,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getEvents = `-- name: GetEvents :many
 SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
 FROM bot_events
@@ -792,6 +837,49 @@ func (q *Queries) UpdateSummary(ctx context.Context, arg UpdateSummaryParams) er
 		arg.UpdatedAt,
 		arg.Embedding,
 		arg.ID,
+	)
+	return err
+}
+
+const upsertAttachmentCacheEntry = `-- name: UpsertAttachmentCacheEntry :exec
+INSERT INTO attachment_cache (
+    cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+    provider, model, instruction_version, content, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+ON CONFLICT(cache_kind, attachment_key, provider, model, instruction_version) DO UPDATE SET
+    source_url = excluded.source_url,
+    filename = excluded.filename,
+    content_type = excluded.content_type,
+    size_bytes = excluded.size_bytes,
+    content = excluded.content,
+    updated_at = strftime('%s', 'now')
+`
+
+type UpsertAttachmentCacheEntryParams struct {
+	CacheKind          string
+	AttachmentKey      string
+	SourceUrl          string
+	Filename           string
+	ContentType        string
+	SizeBytes          int64
+	Provider           string
+	Model              string
+	InstructionVersion string
+	Content            string
+}
+
+func (q *Queries) UpsertAttachmentCacheEntry(ctx context.Context, arg UpsertAttachmentCacheEntryParams) error {
+	_, err := q.db.ExecContext(ctx, upsertAttachmentCacheEntry,
+		arg.CacheKind,
+		arg.AttachmentKey,
+		arg.SourceUrl,
+		arg.Filename,
+		arg.ContentType,
+		arg.SizeBytes,
+		arg.Provider,
+		arg.Model,
+		arg.InstructionVersion,
+		arg.Content,
 	)
 	return err
 }

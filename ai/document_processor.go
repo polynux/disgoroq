@@ -13,6 +13,10 @@ import (
 	"github.com/young2j/oxmltotext/docxtotext"
 	"github.com/young2j/oxmltotext/pptxtotext"
 	"github.com/young2j/oxmltotext/xlsxtotext"
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/database"
+	"polynux/disgoroq/logger"
 )
 
 // DocumentProcessor handles document text extraction and summarization
@@ -21,6 +25,8 @@ type DocumentProcessor struct {
 	maxSummaryTokens int
 	summaryModel     string
 	provider         Provider
+	cache            database.AttachmentCache
+	chatCacheScopes  []AttachmentCacheScope
 }
 
 type DocumentProcessorConfig struct {
@@ -57,6 +63,18 @@ func NewDocumentProcessor(provider Provider, cfg DocumentProcessorConfig) *Docum
 		maxSummaryTokens: cfg.MaxSummaryTokens,
 		summaryModel:     cfg.SummaryModel,
 		provider:         provider,
+		cache: func() database.AttachmentCache {
+			if cacheProvider, ok := provider.(cacheAwareProvider); ok {
+				return cacheProvider.AttachmentCache()
+			}
+			return nil
+		}(),
+		chatCacheScopes: func() []AttachmentCacheScope {
+			if cacheProvider, ok := provider.(cacheAwareProvider); ok {
+				return cacheProvider.ChatCacheScopes()
+			}
+			return nil
+		}(),
 	}
 }
 
@@ -67,20 +85,24 @@ func (dp *DocumentProcessor) CanProcess(contentType string) bool {
 }
 
 // ProcessDocument processes a document and returns a markdown summary
-func (dp *DocumentProcessor) ProcessDocument(ctx context.Context, docURL, filename string) (string, error) {
-	format := dp.getFormatFromFilename(filename)
+func (dp *DocumentProcessor) ProcessDocument(ctx context.Context, doc DocumentContext) (string, error) {
+	format := dp.getFormatFromFilename(doc.Filename)
 	if format == "" {
-		return "", fmt.Errorf("unsupported document format: %s", filename)
+		return "", fmt.Errorf("unsupported document format: %s", doc.Filename)
 	}
 
-	text, err := dp.extractText(ctx, docURL, format)
+	if summary, ok := dp.getCachedSummary(ctx, doc); ok {
+		return summary, nil
+	}
+
+	text, err := dp.extractText(ctx, doc.URL, format)
 	if err != nil {
 		return "", fmt.Errorf("failed to extract text: %w", err)
 	}
 
-	summary, err := dp.summarizeText(ctx, text, filename)
+	summary, err := dp.summarizeText(ctx, text, doc)
 	if err != nil {
-		return fmt.Sprintf("[Document: %s]", filename), nil
+		return fmt.Sprintf("[Document: %s]", doc.Filename), nil
 	}
 
 	return summary, nil
@@ -133,26 +155,19 @@ func (dp *DocumentProcessor) extractText(ctx context.Context, docURL, format str
 }
 
 // summarizeText summarizes extracted text using AI
-func (dp *DocumentProcessor) summarizeText(ctx context.Context, text, filename string) (string, error) {
+func (dp *DocumentProcessor) summarizeText(ctx context.Context, text string, doc DocumentContext) (string, error) {
 	if len(text) > 12000 {
 		text = text[:12000] + "\n...[truncated]"
 	}
 
-	prompt := fmt.Sprintf(`Summarize the following document in markdown format.
-Use headers, bullet points, and bold text for structure.
-Capture key information concisely.
-Maximum length: %d tokens.
-
-Document: %s
-
-Content:
-%s`, dp.maxSummaryTokens, filename, text)
+	prompt := buildDocumentSummaryPrompt(doc.Filename, text, dp.maxSummaryTokens)
 
 	req := &ChatRequest{
-		Model:       dp.summaryModel,
-		Messages:    []Message{{Role: "user", Content: prompt}},
-		MaxTokens:   dp.maxSummaryTokens,
-		Temperature: 0.3,
+		Model:           dp.summaryModel,
+		Messages:        []Message{{Role: "user", Content: prompt}},
+		MaxTokens:       dp.maxSummaryTokens,
+		Temperature:     0.3,
+		AttachmentCache: cacheInputPtr(documentSummaryCacheInput(doc, dp.maxSummaryTokens)),
 	}
 
 	resp, err := dp.provider.Chat(ctx, req)
@@ -160,7 +175,66 @@ Content:
 		return "", fmt.Errorf("failed to summarize: %w", err)
 	}
 
-	return resp.Content, nil
+	summary := strings.TrimSpace(resp.Content)
+	if summary == "" {
+		return "", fmt.Errorf("empty document summary response")
+	}
+
+	return summary, nil
+}
+
+func buildDocumentSummaryPrompt(filename, text string, maxSummaryTokens int) string {
+	return fmt.Sprintf(`%s
+Maximum length: %d tokens.
+
+Document: %s
+
+Content:
+%s`, defaultDocumentSummaryInstruction, maxSummaryTokens, filename, text)
+}
+
+func (dp *DocumentProcessor) getCachedSummary(ctx context.Context, doc DocumentContext) (string, bool) {
+	if dp.cache == nil || len(dp.chatCacheScopes) == 0 {
+		return "", false
+	}
+
+	input := documentSummaryCacheInput(doc, dp.maxSummaryTokens)
+	for _, scope := range dp.chatCacheScopes {
+		if scope.Provider == "" || scope.Model == "" {
+			continue
+		}
+
+		entry, found, err := dp.cache.GetAttachmentCache(ctx, attachmentCacheKey(input, scope.Provider, scope.Model))
+		if err != nil {
+			logger.Warn("Failed to read document summary cache",
+				zap.Error(err),
+				zap.String("provider", scope.Provider),
+				zap.String("model", scope.Model),
+				zap.String("filename", doc.Filename))
+			continue
+		}
+		if !found {
+			continue
+		}
+
+		summary := strings.TrimSpace(entry.Content)
+		if summary == "" {
+			continue
+		}
+
+		logger.Debug("Using cached document summary",
+			zap.String("provider", scope.Provider),
+			zap.String("model", scope.Model),
+			zap.String("filename", doc.Filename))
+
+		return summary, true
+	}
+
+	return "", false
+}
+
+func cacheInputPtr(input AttachmentCacheInput) *AttachmentCacheInput {
+	return &input
 }
 
 // downloadDocument downloads a document from URL
