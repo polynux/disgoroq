@@ -401,4 +401,10 @@ func TestServiceChatHydratesMissingWebFetchURLFromLatestUserMessage(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, tool.calls, 1)
 	assert.Equal(t, `{"url":"https://example.com/page"}`, tool.calls[0].Function.Arguments)
+	require.Len(t, provider.requests, 2)
+	require.Len(t, provider.requests[1].Messages, 3)
+	assert.Equal(t, `{"url":"https://example.com/page"}`, provider.requests[1].Messages[1].ToolCalls[0].Function.Arguments)
+	require.NotNil(t, provider.requests[1].ToolChoice)
+	assert.Equal(t, ToolChoiceAuto, provider.requests[1].ToolChoice.Mode)
+	assert.Empty(t, provider.requests[1].ToolChoice.Name)
 }

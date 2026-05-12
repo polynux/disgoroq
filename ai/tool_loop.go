@@ -64,6 +64,7 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 		if totalCalls > s.config.ToolConfig.MaxCallsTotal {
 			return nil, fmt.Errorf("tool loop exceeded max total calls (%d > %d)", totalCalls, s.config.ToolConfig.MaxCallsTotal)
 		}
+		toolCalls = hydrateToolCalls(toolCalls, working.Messages)
 
 		logger.Info("Executing model tool calls",
 			zap.Int("round", round+1),
@@ -72,8 +73,7 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 			zap.String("model", response.Model))
 
 		working.Messages = append(working.Messages, AssistantToolCallMessage(response.Content, toolCalls...))
-		for _, originalCall := range toolCalls {
-			call := hydrateToolCallArguments(originalCall, working.Messages)
+		for _, call := range toolCalls {
 			result, err := s.tools.Execute(ctx, call)
 			if result == nil {
 				result = &ToolResult{
@@ -91,6 +91,7 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 			}
 			working.Messages = append(working.Messages, result.Message())
 		}
+		working.ToolChoice = &ToolChoice{Mode: ToolChoiceAuto}
 	}
 }
 
@@ -178,6 +179,7 @@ func buildToolSystemPrompt(base string, definitions []ToolDefinition) string {
 		guidance.WriteString("- If the user asks you to search the web, browse online, or find current information without giving a URL, call web_search first.\n")
 	}
 	guidance.WriteString("- Do not pretend you fetched or searched anything unless you actually used the tool.\n")
+	guidance.WriteString("- If a tool result already contains the needed information, answer from that result instead of calling the same tool again with the same input.\n")
 	guidance.WriteString("- After tool results are available, answer normally and keep the answer grounded in the fetched/search results.\n")
 
 	return guidance.String()
@@ -261,6 +263,18 @@ func containsAny(content string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+func hydrateToolCalls(calls []ToolCall, messages []Message) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	hydrated := make([]ToolCall, len(calls))
+	for idx, call := range calls {
+		hydrated[idx] = hydrateToolCallArguments(call, messages)
+	}
+	return hydrated
 }
 
 func hydrateToolCallArguments(call ToolCall, messages []Message) ToolCall {
