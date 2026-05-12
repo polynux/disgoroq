@@ -18,6 +18,8 @@ type ValidationDetails struct {
 	TrimmedLength int
 	HasWhitespace bool
 	HasContent    bool
+	ToolCallCount int
+	HasToolCalls  bool
 	MinLengthMet  bool
 }
 
@@ -74,6 +76,21 @@ func (v *ResponseValidator) ValidateChatResponse(resp *ChatResponse) *Validation
 			IsValid: false,
 			Reason:  "response is nil",
 			Details: ValidationDetails{},
+		}
+	}
+
+	if len(resp.ToolCalls) > 0 {
+		return &ValidationResult{
+			IsValid: true,
+			Reason:  "response requests tool calls",
+			Details: ValidationDetails{
+				ContentLength: len(resp.Content),
+				TrimmedLength: len(strings.TrimSpace(resp.Content)),
+				HasContent:    strings.TrimSpace(resp.Content) != "",
+				ToolCallCount: len(resp.ToolCalls),
+				HasToolCalls:  true,
+				MinLengthMet:  true,
+			},
 		}
 	}
 

@@ -123,6 +123,39 @@ func TestValidateChatResponse(t *testing.T) {
 			reason:  "content is valid",
 		},
 		{
+			name: "tool calls without content",
+			response: &ChatResponse{
+				ToolCalls: []ToolCall{{
+					ID: "call-1",
+					Function: ToolFunctionCall{
+						Name:      "web_fetch",
+						Arguments: `{"url":"https://example.com"}`,
+					},
+				}},
+			},
+			options: []ResponseValidatorOption{},
+			valid:   true,
+			reason:  "response requests tool calls",
+		},
+		{
+			name: "tool calls with assistant text",
+			response: &ChatResponse{
+				Content: "checking that for you",
+				ToolCalls: []ToolCall{{
+					ID: "call-1",
+					Function: ToolFunctionCall{
+						Name:      "web_fetch",
+						Arguments: `{"url":"https://example.com"}`,
+					},
+				}},
+			},
+			options: []ResponseValidatorOption{
+				WithMinLength(100),
+			},
+			valid:  true,
+			reason: "response requests tool calls",
+		},
+		{
 			name: "content too short",
 			response: &ChatResponse{
 				Content: "Hi",
@@ -206,8 +239,10 @@ func TestValidateChatResponse(t *testing.T) {
 			assert.Equal(t, tt.reason, result.Reason, "validation reason should match expected")
 
 			if result.IsValid {
-				assert.True(t, result.Details.HasContent, "valid response should have content")
 				assert.True(t, result.Details.MinLengthMet, "valid response should meet minimum length")
+				if len(tt.response.ToolCalls) == 0 || tt.response.Content != "" {
+					assert.True(t, result.Details.HasContent, "valid response should have content")
+				}
 			}
 		})
 	}
@@ -323,6 +358,16 @@ func TestIsEmptyResponse(t *testing.T) {
 			},
 			isEmpty: false,
 		},
+		{
+			name: "tool call response",
+			response: &ChatResponse{
+				ToolCalls: []ToolCall{{
+					ID:       "call-1",
+					Function: ToolFunctionCall{Name: "web_fetch"},
+				}},
+			},
+			isEmpty: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -369,6 +414,27 @@ func TestValidationDetails(t *testing.T) {
 		assert.Equal(t, 13, result.Details.TrimmedLength)
 		assert.False(t, result.Details.HasWhitespace)
 		assert.True(t, result.Details.HasContent)
+		assert.False(t, result.Details.HasToolCalls)
+		assert.Equal(t, 0, result.Details.ToolCallCount)
+		assert.True(t, result.Details.MinLengthMet)
+	})
+
+	t.Run("tool call details", func(t *testing.T) {
+		response := &ChatResponse{
+			Content: "let me check",
+			ToolCalls: []ToolCall{{
+				ID:       "call-1",
+				Function: ToolFunctionCall{Name: "web_fetch"},
+			}},
+		}
+		result := validator.ValidateChatResponse(response)
+
+		require.True(t, result.IsValid)
+		assert.Equal(t, 12, result.Details.ContentLength)
+		assert.Equal(t, 12, result.Details.TrimmedLength)
+		assert.True(t, result.Details.HasContent)
+		assert.True(t, result.Details.HasToolCalls)
+		assert.Equal(t, 1, result.Details.ToolCallCount)
 		assert.True(t, result.Details.MinLengthMet)
 	})
 }
