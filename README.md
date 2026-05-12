@@ -39,6 +39,45 @@ Each AI provider section also exposes `thinking_enabled`:
 - `ai.opencode.thinking_enabled` keeps the provider default when true and sends `reasoning_effort: none` when false on OpenCode chat-completions requests.
 - `ai.openrouter.thinking_enabled` keeps the provider default when true and sends OpenRouter's normalized `reasoning: { effort: "none", exclude: true }` when false.
 
+### Tool Calling And Zero-Cost Web Search
+
+DisgoroQ now supports provider-agnostic tool calling for chat models. The built-in tools are:
+
+- `web_fetch` for fetching a known URL and converting its content into markdown-friendly text.
+- `web_search` for zero-API-cost search through a self-hosted `SearXNG` instance.
+
+Typical bot-side config:
+
+```yaml
+ai:
+  tools:
+    enabled: true
+    max_rounds: 3
+    max_calls_per_round: 2
+    max_calls_total: 4
+    timeout_ms: 10000
+    web:
+      enabled: true
+    search:
+      enabled: true
+      provider: "searxng"
+      base_url: "http://127.0.0.1:8888"
+      max_results: 5
+      default_language: "fr"
+      safe_search: 2
+```
+
+Recommended `SearXNG` tweaks for this bot:
+
+- Prefer `server.bind_address: "127.0.0.1"` when the bot runs on the same host. Keep `0.0.0.0` only if the bot must reach SearXNG from another container or machine.
+- Keep `valkey` enabled if available. It helps search responsiveness and reduces repeated upstream work.
+- `server.limiter: false` is acceptable for a private bot-only instance. Turn it on if the instance is exposed beyond your local/private network.
+- `search.safe_search` is fine as a backend default, but DisgoroQ also sends its own `ai.tools.search.safe_search` value on each request. Keep them aligned if you want predictable behavior.
+- `server.image_proxy`, `search.autocomplete`, and most UI plugins do not matter for DisgoroQ's JSON search flow.
+- Your current engine set is enough to start. If you want broader/fallback coverage, add one more non-API engine such as `wikipedia`, `qwant`, or `startpage`.
+
+Security note: keep `server.secret_key` private. If a real secret key was pasted into chat or another public place, rotate it.
+
 ## Build And Run
 
 - Build: `make build`
