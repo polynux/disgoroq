@@ -148,6 +148,21 @@ func main() {
 		MinResponseLength: cfg.AI.MinResponseLength,
 		FallbackEnabled:   cfg.AI.FallbackEnabled,
 		AttachmentCache:   repo,
+		ToolConfig: ai.ToolRuntimeConfig{
+			Enabled:          cfg.AI.Tools.Enabled,
+			MaxRounds:        cfg.AI.Tools.MaxRounds,
+			MaxCallsPerRound: cfg.AI.Tools.MaxCallsPerRound,
+			MaxCallsTotal:    cfg.AI.Tools.MaxCallsTotal,
+			Timeout:          cfg.AI.Tools.Timeout,
+			Web: ai.WebToolConfig{
+				Enabled:              cfg.AI.Tools.Web.Enabled,
+				AllowedSchemes:       append([]string(nil), cfg.AI.Tools.Web.AllowedSchemes...),
+				UserAgent:            cfg.AI.Tools.Web.UserAgent,
+				MaxBytes:             cfg.AI.Tools.Web.MaxBytes,
+				MaxCharacters:        cfg.AI.Tools.Web.MaxCharacters,
+				AllowPrivateNetworks: cfg.AI.Tools.Web.AllowPrivateNetworks,
+			},
+		},
 	}
 
 	if err := aiServiceConfig.Validate(); err != nil {

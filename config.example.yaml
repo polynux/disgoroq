@@ -123,6 +123,41 @@ ai:
   # Minimum response length to accept
   min_response_length: 1
 
+  tools:
+    # Enable provider tool/function calling
+    enabled: true
+
+    # Maximum assistant->tool->assistant rounds per reply
+    max_rounds: 3
+
+    # Maximum number of tool calls accepted in a single round
+    max_calls_per_round: 2
+
+    # Maximum number of tool calls accepted across the full reply
+    max_calls_total: 4
+
+    # Per-tool execution timeout in milliseconds
+    timeout_ms: 10000
+
+    web:
+      # Enable the built-in web fetch tool
+      enabled: true
+
+      # Allowed URL schemes for web fetches
+      allowed_schemes: ["http", "https"]
+
+      # User-Agent sent to remote servers
+      user_agent: "DisgoroQ/1.0 (+https://github.com/polynux/disgoroq)"
+
+      # Maximum number of bytes downloaded per request
+      max_bytes: 2097152
+
+      # Maximum number of characters returned to the model
+      max_characters: 12000
+
+      # Allow access to localhost/private network targets
+      allow_private_networks: false
+
 logging:
   # Enable logging
   enabled: true

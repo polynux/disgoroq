@@ -120,6 +120,12 @@ func convertDurations(config *Config) {
 		config.AI.Retry.MaxDelay = 5 * time.Second
 	}
 
+	if config.AI.Tools.TimeoutMs > 0 {
+		config.AI.Tools.Timeout = time.Duration(config.AI.Tools.TimeoutMs) * time.Millisecond
+	} else {
+		config.AI.Tools.Timeout = 10 * time.Second
+	}
+
 	// Convert MemoryConfig SummaryInterval from seconds
 	if config.Memory.SummaryIntervalSeconds > 0 {
 		config.Memory.SummaryInterval = time.Duration(config.Memory.SummaryIntervalSeconds) * time.Second

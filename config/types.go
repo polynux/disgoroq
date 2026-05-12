@@ -44,6 +44,7 @@ type AIConfig struct {
 	Ollama            OllamaConfig     `yaml:"ollama"`
 	Opencode          OpencodeConfig   `yaml:"opencode"`
 	Openrouter        OpenrouterConfig `yaml:"openrouter"`
+	Tools             ToolsConfig      `yaml:"tools"`
 	Retry             RetryConfig      `yaml:"retry"`
 	FallbackEnabled   bool             `yaml:"fallback_enabled"`
 	MinResponseLength int              `yaml:"min_response_length"`
@@ -91,6 +92,25 @@ type OpenrouterConfig struct {
 	Model           string `yaml:"model"`
 	VisionModel     string `yaml:"vision_model"`
 	ThinkingEnabled bool   `yaml:"thinking_enabled"`
+}
+
+type ToolsConfig struct {
+	Enabled          bool               `yaml:"enabled"`
+	MaxRounds        int                `yaml:"max_rounds"`
+	MaxCallsPerRound int                `yaml:"max_calls_per_round"`
+	MaxCallsTotal    int                `yaml:"max_calls_total"`
+	Timeout          time.Duration      `yaml:"-"`
+	TimeoutMs        int                `yaml:"timeout_ms"`
+	Web              WebFetchToolConfig `yaml:"web"`
+}
+
+type WebFetchToolConfig struct {
+	Enabled              bool     `yaml:"enabled"`
+	AllowedSchemes       []string `yaml:"allowed_schemes"`
+	UserAgent            string   `yaml:"user_agent"`
+	MaxBytes             int64    `yaml:"max_bytes"`
+	MaxCharacters        int      `yaml:"max_characters"`
+	AllowPrivateNetworks bool     `yaml:"allow_private_networks"`
 }
 
 // RetryConfig contains retry logic configuration.
@@ -194,6 +214,22 @@ func DefaultConfig() *Config {
 				Model:           "google/gemini-2.5-flash",
 				VisionModel:     "google/gemini-2.5-flash",
 				ThinkingEnabled: true,
+			},
+			Tools: ToolsConfig{
+				Enabled:          false,
+				MaxRounds:        3,
+				MaxCallsPerRound: 2,
+				MaxCallsTotal:    4,
+				Timeout:          10 * time.Second,
+				TimeoutMs:        10000,
+				Web: WebFetchToolConfig{
+					Enabled:              true,
+					AllowedSchemes:       []string{"http", "https"},
+					UserAgent:            "DisgoroQ/1.0 (+https://github.com/polynux/disgoroq)",
+					MaxBytes:             2 * 1024 * 1024,
+					MaxCharacters:        12000,
+					AllowPrivateNetworks: false,
+				},
 			},
 			Retry: RetryConfig{
 				MaxRetries:     2,

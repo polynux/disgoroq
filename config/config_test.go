@@ -513,6 +513,45 @@ func TestValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "voice.audio.vad_amplitude_threshold must be between 0 and 1",
 		},
+		{
+			name: "invalid tool loop config",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: AIProviderGroq,
+					Groq:            GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
+					Tools: ToolsConfig{
+						Enabled:          true,
+						MaxRounds:        0,
+						MaxCallsPerRound: 1,
+						MaxCallsTotal:    1,
+						Timeout:          time.Second,
+						Web: WebFetchToolConfig{
+							Enabled:        true,
+							AllowedSchemes: []string{"http", "https"},
+							UserAgent:      "test-agent",
+							MaxBytes:       1024,
+							MaxCharacters:  1024,
+						},
+					},
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
+			},
+			wantErr: true,
+			errMsg:  "ai.tools.max_rounds must be at least 1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -556,6 +595,18 @@ ai:
     api_key: "${GROQ_API_KEY}"
     model: "test-model"
     vision_model: "test-vision"
+  tools:
+    enabled: true
+    max_rounds: 4
+    max_calls_per_round: 2
+    max_calls_total: 5
+    timeout_ms: 1500
+    web:
+      enabled: true
+      allowed_schemes: ["http", "https"]
+      user_agent: "test-agent"
+      max_bytes: 4096
+      max_characters: 2048
   retry:
     max_retries: 3
     initial_delay_ms: 1000
@@ -601,6 +652,15 @@ memory:
 	if config.AI.Retry.RetryOnEmpty != false {
 		t.Errorf("RetryOnEmpty = %v, want false", config.AI.Retry.RetryOnEmpty)
 	}
+	if config.AI.Tools.Timeout != 1500*time.Millisecond {
+		t.Errorf("Tools.Timeout = %v, want 1500ms", config.AI.Tools.Timeout)
+	}
+	if config.AI.Tools.MaxRounds != 4 {
+		t.Errorf("Tools.MaxRounds = %v, want 4", config.AI.Tools.MaxRounds)
+	}
+	if config.AI.Tools.Web.MaxBytes != 4096 {
+		t.Errorf("Tools.Web.MaxBytes = %v, want 4096", config.AI.Tools.Web.MaxBytes)
+	}
 
 	// Verify memory config
 	if config.Memory.SummaryInterval != 30*time.Minute {
@@ -634,6 +694,21 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !config.AI.Openrouter.ThinkingEnabled {
 		t.Error("Default AI.Openrouter.ThinkingEnabled should be true")
+	}
+	if config.AI.Tools.Enabled {
+		t.Error("Default AI.Tools.Enabled should be false")
+	}
+	if config.AI.Tools.MaxRounds != 3 {
+		t.Errorf("Default AI.Tools.MaxRounds = %v, want 3", config.AI.Tools.MaxRounds)
+	}
+	if config.AI.Tools.Timeout != 10*time.Second {
+		t.Errorf("Default AI.Tools.Timeout = %v, want 10s", config.AI.Tools.Timeout)
+	}
+	if !config.AI.Tools.Web.Enabled {
+		t.Error("Default AI.Tools.Web.Enabled should be true")
+	}
+	if config.AI.Tools.Web.MaxCharacters != 12000 {
+		t.Errorf("Default AI.Tools.Web.MaxCharacters = %v, want 12000", config.AI.Tools.Web.MaxCharacters)
 	}
 	if config.AI.Retry.MaxRetries != 2 {
 		t.Errorf("Default Retry.MaxRetries = %v, want 2", config.AI.Retry.MaxRetries)

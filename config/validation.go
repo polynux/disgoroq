@@ -143,6 +143,10 @@ func (c *AIConfig) validate() error {
 		return fmt.Errorf("ai.min_response_length must be at least 1, got %d", c.MinResponseLength)
 	}
 
+	if err := c.Tools.validate(); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -227,6 +231,55 @@ func (c *OpenrouterConfig) validate() error {
 	if c.VisionModel == "" {
 		return fmt.Errorf("ai.openrouter.vision_model cannot be empty when openrouter is enabled")
 	}
+	return nil
+}
+
+func (c *ToolsConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.MaxRounds < 1 {
+		return fmt.Errorf("ai.tools.max_rounds must be at least 1")
+	}
+	if c.MaxCallsPerRound < 1 {
+		return fmt.Errorf("ai.tools.max_calls_per_round must be at least 1")
+	}
+	if c.MaxCallsTotal < c.MaxCallsPerRound {
+		return fmt.Errorf("ai.tools.max_calls_total must be greater than or equal to max_calls_per_round")
+	}
+	if c.Timeout <= 0 {
+		return fmt.Errorf("ai.tools.timeout_ms must be positive")
+	}
+
+	return c.Web.validate()
+}
+
+func (c *WebFetchToolConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if len(c.AllowedSchemes) == 0 {
+		return fmt.Errorf("ai.tools.web.allowed_schemes cannot be empty when the web tool is enabled")
+	}
+	for _, scheme := range c.AllowedSchemes {
+		switch strings.ToLower(strings.TrimSpace(scheme)) {
+		case "http", "https":
+		default:
+			return fmt.Errorf("ai.tools.web.allowed_schemes only supports http and https, got %q", scheme)
+		}
+	}
+	if c.UserAgent == "" {
+		return fmt.Errorf("ai.tools.web.user_agent cannot be empty when the web tool is enabled")
+	}
+	if c.MaxBytes < 1 {
+		return fmt.Errorf("ai.tools.web.max_bytes must be positive")
+	}
+	if c.MaxCharacters < 1 {
+		return fmt.Errorf("ai.tools.web.max_characters must be positive")
+	}
+
 	return nil
 }
 

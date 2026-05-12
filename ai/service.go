@@ -59,6 +59,9 @@ type ServiceConfig struct {
 
 	// Optional persistent cache for detached attachment-to-text conversions.
 	AttachmentCache database.AttachmentCache
+
+	// Optional tool-calling runtime configuration.
+	ToolConfig ToolRuntimeConfig
 }
 
 // Validate checks if the service configuration is valid
@@ -131,6 +134,10 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf("minimum response length must be at least 1")
 	}
 
+	if err := c.ToolConfig.Validate(); err != nil {
+		return fmt.Errorf("invalid tool config: %w", err)
+	}
+
 	return nil
 }
 
@@ -147,6 +154,7 @@ type Service struct {
 	provider Provider
 	chain    *ProviderChain
 	scopes   []AttachmentCacheScope
+	tools    *ToolRegistry
 }
 
 // NewService creates a new AI service with the given configuration
@@ -260,6 +268,7 @@ func NewService(config ServiceConfig) *Service {
 		provider: finalProvider,
 		chain:    chain,
 		scopes:   chatCacheScopes,
+		tools:    NewToolRegistry(config.ToolConfig),
 	}
 }
 
@@ -370,6 +379,10 @@ func (s *Service) ChatCacheScopes() []AttachmentCacheScope {
 	return append([]AttachmentCacheScope(nil), s.scopes...)
 }
 
+func (s *Service) ToolRegistry() *ToolRegistry {
+	return s.tools
+}
+
 // GetProviderInfo returns information about the current provider configuration
 func (s *Service) GetProviderInfo() map[string]interface{} {
 	info := map[string]interface{}{
@@ -388,6 +401,7 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 			"retry_on_error": s.config.RetryConfig.RetryOnError,
 		},
 		"min_response_length": s.config.MinResponseLength,
+		"tools_enabled":       s.config.ToolConfig.Enabled,
 	}
 
 	if s.config.OllamaEnabled {
