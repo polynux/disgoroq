@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -71,7 +72,8 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 			zap.String("model", response.Model))
 
 		working.Messages = append(working.Messages, AssistantToolCallMessage(response.Content, toolCalls...))
-		for _, call := range toolCalls {
+		for _, originalCall := range toolCalls {
+			call := hydrateToolCallArguments(originalCall, working.Messages)
 			result, err := s.tools.Execute(ctx, call)
 			if result == nil {
 				result = &ToolResult{
@@ -259,4 +261,53 @@ func containsAny(content string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+func hydrateToolCallArguments(call ToolCall, messages []Message) ToolCall {
+	if call.Function.Name != defaultWebToolName {
+		return call
+	}
+	if hasNonEmptyURLArgument(call.Function.Arguments) {
+		return call
+	}
+
+	latestUser := latestUserMessage(messages)
+	if latestUser == nil {
+		return call
+	}
+
+	urls := directURLPattern.FindAllString(latestUser.Content, -1)
+	if len(urls) != 1 {
+		return call
+	}
+
+	payload, err := json.Marshal(struct {
+		URL string `json:"url"`
+	}{
+		URL: urls[0],
+	})
+	if err != nil {
+		return call
+	}
+
+	call.Function.Arguments = string(payload)
+	logger.Info("Hydrated missing web_fetch URL from latest user message",
+		zap.String("tool_call_id", call.ID),
+		zap.String("url", urls[0]))
+	return call
+}
+
+func hasNonEmptyURLArgument(arguments string) bool {
+	if strings.TrimSpace(arguments) == "" {
+		return false
+	}
+
+	var payload struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(arguments), &payload); err != nil {
+		return false
+	}
+
+	return strings.TrimSpace(payload.URL) != ""
 }

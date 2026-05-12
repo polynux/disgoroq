@@ -331,3 +331,74 @@ func TestServiceChatRequiresToolForSearchIntent(t *testing.T) {
 	assert.Equal(t, ToolChoiceRequired, provider.requests[0].ToolChoice.Mode)
 	assert.Contains(t, provider.requests[0].SystemPrompt, "call web_search")
 }
+
+func TestServiceChatHydratesMissingWebFetchURLFromLatestUserMessage(t *testing.T) {
+	provider := &scriptedProvider{
+		responses: []*ChatResponse{
+			{
+				FinishReason: FinishReasonToolCalls,
+				ToolCalls: []ToolCall{{
+					ID:   "call-1",
+					Type: ToolTypeFunction,
+					Function: ToolFunctionCall{
+						Name:      defaultWebToolName,
+						Arguments: `{}`,
+					},
+				}},
+			},
+			{
+				Content:      "done",
+				FinishReason: FinishReasonStop,
+			},
+		},
+	}
+
+	tool := &stubTool{
+		definition: ToolDefinition{
+			Function: ToolFunctionDefinition{
+				Name: defaultWebToolName,
+				Parameters: ToolSchema{
+					Type: "object",
+				},
+			},
+		},
+		result: ToolResult{Content: "web result"},
+	}
+
+	registry := &ToolRegistry{
+		config: ToolRuntimeConfig{
+			Enabled:          true,
+			MaxRounds:        2,
+			MaxCallsPerRound: 1,
+			MaxCallsTotal:    2,
+			Timeout:          time.Second,
+		},
+		tools: make(map[string]Tool),
+	}
+	registry.Register(tool)
+
+	service := &Service{
+		config: ServiceConfig{
+			ToolConfig: ToolRuntimeConfig{
+				Enabled:          true,
+				MaxRounds:        2,
+				MaxCallsPerRound: 1,
+				MaxCallsTotal:    2,
+				Timeout:          time.Second,
+			},
+		},
+		provider: provider,
+		tools:    registry,
+	}
+
+	_, err := service.Chat(context.Background(), &ChatRequest{
+		Model: "test-model",
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "ouvre https://example.com/page et résume",
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, tool.calls, 1)
+	assert.Equal(t, `{"url":"https://example.com/page"}`, tool.calls[0].Function.Arguments)
+}
