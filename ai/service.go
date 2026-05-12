@@ -279,10 +279,11 @@ func (s *Service) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, er
 	logger.Debug("Starting AI service chat",
 		zap.String("model", req.Model),
 		zap.Int("message_count", len(req.Messages)),
-		zap.Bool("has_images", len(req.Images) > 0))
+		zap.Bool("has_images", len(req.Images) > 0),
+		zap.Bool("tools_enabled", s.tools != nil && s.tools.Enabled()))
 
 	// Make the API call through the provider chain with retry wrapper
-	response, err := s.provider.Chat(ctx, req)
+	response, err := s.chatWithTools(ctx, req)
 
 	duration := time.Since(start)
 

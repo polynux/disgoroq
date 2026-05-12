@@ -30,9 +30,10 @@ type ollamaChatChunk struct {
 	Model   string `json:"model"`
 	Error   string `json:"error,omitempty"`
 	Message struct {
-		Role     string `json:"role"`
-		Content  string `json:"content"`
-		Thinking string `json:"thinking,omitempty"`
+		Role      string         `json:"role"`
+		Content   string         `json:"content"`
+		Thinking  string         `json:"thinking,omitempty"`
+		ToolCalls []api.ToolCall `json:"tool_calls,omitempty"`
 	} `json:"message"`
 	DoneReason      string `json:"done_reason,omitempty"`
 	Done            bool   `json:"done"`
@@ -76,7 +77,7 @@ func (o *OllamaProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		return nil, fmt.Errorf("error preparing Ollama chat: %w", err)
 	}
 
-	response, err := o.runChat(ctx, req.Model, messages, req.MaxTokens, req.Temperature)
+	response, err := o.runChat(ctx, req.Model, messages, buildOllamaTools(req.Tools), req.MaxTokens, req.Temperature)
 	if err != nil {
 		return nil, fmt.Errorf("error in Ollama chat: %w", err)
 	}
@@ -96,7 +97,7 @@ func (o *OllamaProvider) Vision(ctx context.Context, req *VisionRequest) (*Visio
 			Content: req.Instruction,
 			Images:  []api.ImageData{imageData},
 		},
-	}, req.MaxTokens, req.Temperature)
+	}, nil, req.MaxTokens, req.Temperature)
 	if err != nil {
 		return nil, fmt.Errorf("error in Ollama vision chat: %w", err)
 	}
@@ -126,6 +127,9 @@ func (o *OllamaProvider) buildChatMessages(ctx context.Context, req *ChatRequest
 			Role:    msg.Role,
 			Content: msg.Content,
 		}
+		if msg.HasToolCalls() {
+			ollamaMessage.ToolCalls = buildOllamaToolCalls(msg.ToolCalls)
+		}
 
 		for _, image := range resolveImageRefs(req.Images, msg.ImageRefs) {
 			imageData, err := o.downloadImage(ctx, image.URL)
@@ -141,16 +145,18 @@ func (o *OllamaProvider) buildChatMessages(ctx context.Context, req *ChatRequest
 	return messages, nil
 }
 
-func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []api.Message, maxTokens int, temperature float32) (*ChatResponse, error) {
+func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []api.Message, tools []api.Tool, maxTokens int, temperature float32) (*ChatResponse, error) {
 	chatReq := struct {
 		Model    string         `json:"model"`
 		Messages []api.Message  `json:"messages"`
+		Tools    []api.Tool     `json:"tools,omitempty"`
 		Stream   *bool          `json:"stream,omitempty"`
 		Think    bool           `json:"think"`
 		Options  map[string]any `json:"options,omitempty"`
 	}{
 		Model:    model,
 		Messages: messages,
+		Tools:    tools,
 		Stream:   new(bool),
 		Think:    o.thinkingEnabled,
 		Options: map[string]any{
@@ -199,6 +205,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	var tokensUsed int
 	var promptTokens int
 	var completionTokens int
+	var responseToolCalls []ToolCall
 
 	for _, chunk := range chunks {
 		if chunk.Error != "" {
@@ -209,6 +216,9 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 		}
 		if chunk.Message.Thinking != "" {
 			thinkingBuilder.WriteString(chunk.Message.Thinking)
+		}
+		if len(chunk.Message.ToolCalls) > 0 {
+			responseToolCalls = append(responseToolCalls, parseOllamaToolCalls(chunk.Message.ToolCalls)...)
 		}
 		if chunk.Model != "" {
 			responseModel = chunk.Model
@@ -247,12 +257,93 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 
 	return &ChatResponse{
 		Content:          content,
+		ToolCalls:        responseToolCalls,
 		Model:            responseModel,
 		TokensUsed:       tokensUsed,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		FinishReason:     finishReason,
 	}, nil
+}
+
+func buildOllamaTools(definitions []ToolDefinition) []api.Tool {
+	if len(definitions) == 0 {
+		return nil
+	}
+
+	tools := make([]api.Tool, 0, len(definitions))
+	for _, definition := range definitions {
+		tool := api.Tool{Type: definition.EffectiveType()}
+		tool.Function.Name = definition.Function.Name
+		tool.Function.Description = definition.Function.Description
+		tool.Function.Parameters.Type = definition.Function.Parameters.Type
+		tool.Function.Parameters.Required = append([]string(nil), definition.Function.Parameters.Required...)
+		tool.Function.Parameters.Properties = make(map[string]struct {
+			Type        string   `json:"type"`
+			Description string   `json:"description"`
+			Enum        []string `json:"enum,omitempty"`
+		}, len(definition.Function.Parameters.Properties))
+		for name, property := range definition.Function.Parameters.Properties {
+			tool.Function.Parameters.Properties[name] = struct {
+				Type        string   `json:"type"`
+				Description string   `json:"description"`
+				Enum        []string `json:"enum,omitempty"`
+			}{
+				Type:        property.Type,
+				Description: property.Description,
+				Enum:        append([]string(nil), property.Enum...),
+			}
+		}
+		tools = append(tools, tool)
+	}
+
+	return tools
+}
+
+func buildOllamaToolCalls(calls []ToolCall) []api.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	result := make([]api.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		toolCall := api.ToolCall{}
+		toolCall.Function.Name = call.Function.Name
+		if call.Function.Arguments != "" {
+			var arguments map[string]any
+			if err := json.Unmarshal([]byte(call.Function.Arguments), &arguments); err == nil {
+				toolCall.Function.Arguments = arguments
+			}
+		}
+		result = append(result, toolCall)
+	}
+
+	return result
+}
+
+func parseOllamaToolCalls(calls []api.ToolCall) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	result := make([]ToolCall, 0, len(calls))
+	for _, call := range calls {
+		arguments := "{}"
+		if len(call.Function.Arguments) > 0 {
+			if encoded, err := json.Marshal(call.Function.Arguments); err == nil {
+				arguments = string(encoded)
+			}
+		}
+		result = append(result, ToolCall{
+			Type: ToolTypeFunction,
+			Function: ToolFunctionCall{
+				Name:      call.Function.Name,
+				Arguments: arguments,
+			},
+		})
+	}
+
+	return result
 }
 
 func parseOllamaChatResponse(body []byte) ([]ollamaChatChunk, error) {

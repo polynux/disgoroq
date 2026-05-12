@@ -71,6 +71,9 @@ func cloneMessages(messages []Message) []Message {
 		if len(msg.ImageRefs) > 0 {
 			cloned[idx].ImageRefs = append([]int(nil), msg.ImageRefs...)
 		}
+		if len(msg.ToolCalls) > 0 {
+			cloned[idx].ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
+		}
 	}
 	return cloned
 }

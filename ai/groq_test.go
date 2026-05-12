@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/conneroisu/groq-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,19 +34,21 @@ func TestGroqBuildMessagesInlinesReferencedImages(t *testing.T) {
 	messages := buildGroqMessages(req)
 
 	require.Len(t, messages, 3)
-	assert.Equal(t, groq.RoleSystem, messages[0].Role)
+	assert.Equal(t, RoleSystem, messages[0].Role)
 	assert.Equal(t, "system prompt", messages[0].Content)
 
-	assert.Equal(t, groq.RoleUser, messages[1].Role)
-	require.Len(t, messages[1].MultiContent, 3)
-	assert.Equal(t, groq.ChatMessagePartTypeText, messages[1].MultiContent[0].Type)
-	assert.Equal(t, "describe this", messages[1].MultiContent[0].Text)
-	assert.Equal(t, groq.ChatMessagePartTypeImageURL, messages[1].MultiContent[1].Type)
-	assert.Equal(t, "https://example.com/one.png", messages[1].MultiContent[1].ImageURL.URL)
-	assert.Equal(t, groq.ChatMessagePartTypeImageURL, messages[1].MultiContent[2].Type)
-	assert.Equal(t, "https://example.com/two.png", messages[1].MultiContent[2].ImageURL.URL)
+	assert.Equal(t, RoleUser, messages[1].Role)
+	parts, ok := messages[1].Content.([]openAIMessageContentPart)
+	require.True(t, ok)
+	require.Len(t, parts, 3)
+	assert.Equal(t, "text", parts[0].Type)
+	assert.Equal(t, "describe this", parts[0].Text)
+	assert.Equal(t, "image_url", parts[1].Type)
+	assert.Equal(t, "https://example.com/one.png", parts[1].ImageURL.URL)
+	assert.Equal(t, "image_url", parts[2].Type)
+	assert.Equal(t, "https://example.com/two.png", parts[2].ImageURL.URL)
 
-	assert.Equal(t, groq.RoleAssistant, messages[2].Role)
+	assert.Equal(t, RoleAssistant, messages[2].Role)
 	assert.Equal(t, "done", messages[2].Content)
 }
 
@@ -102,4 +103,46 @@ func TestGroqChatParsesPromptCacheMetrics(t *testing.T) {
 	assert.Equal(t, 80, resp.PromptTokens)
 	assert.Equal(t, 20, resp.CompletionTokens)
 	assert.Equal(t, 64, resp.CachedTokens)
+}
+
+func TestGroqChatParsesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"tools":[`)
+		assert.Contains(t, string(body), `"tool_choice":"auto"`)
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"model":"openai/gpt-oss-20b","choices":[{"message":{"content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"web_fetch","arguments":"{\"url\":\"https://example.com\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider := NewGroqProvider("test-key", false)
+	provider.baseURL = server.URL
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "openai/gpt-oss-20b",
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "hello",
+		}},
+		Tools: []ToolDefinition{{
+			Function: ToolFunctionDefinition{
+				Name:        defaultWebToolName,
+				Description: "fetch web pages",
+				Parameters: ToolSchema{
+					Type: "object",
+					Properties: map[string]ToolProperty{
+						"url": {Type: "string"},
+					},
+					Required: []string{"url"},
+				},
+			},
+		}},
+		ToolChoice: &ToolChoice{Mode: ToolChoiceAuto},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
+	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
 }

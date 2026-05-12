@@ -58,6 +58,8 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 	body, err := json.Marshal(opencodeChatRequest{
 		Model:           req.Model,
 		Messages:        buildOpencodeMessages(req),
+		Tools:           buildOpenAITools(req.Tools),
+		ToolChoice:      buildOpenAIToolChoice(req.ToolChoice),
 		MaxTokens:       req.MaxTokens,
 		Temperature:     req.Temperature,
 		ReasoningEffort: opencodeReasoningEffort(o.thinkingEnabled),
@@ -82,6 +84,7 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 
 	return &ChatResponse{
 		Content:          response.Choices[0].Message.Content,
+		ToolCalls:        parseOpenAIToolCalls(response.Choices[0].Message.ToolCalls),
 		Model:            response.Model,
 		TokensUsed:       response.Usage.TotalTokens,
 		PromptTokens:     response.Usage.PromptTokens,
@@ -95,17 +98,17 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
 	body, err := json.Marshal(opencodeChatRequest{
 		Model: req.Model,
-		Messages: []opencodeChatMessage{
+		Messages: []openAIChatMessage{
 			{
 				Role: "user",
-				Content: []opencodeMessageContentPart{
+				Content: []openAIMessageContentPart{
 					{
 						Type: "text",
 						Text: req.Instruction,
 					},
 					{
 						Type: "image_url",
-						ImageURL: &opencodeMessageImageURL{
+						ImageURL: &openAIMessageImageURL{
 							URL: req.ImageURL,
 						},
 					},
@@ -174,79 +177,27 @@ func (o *OpencodeProvider) doChatRequest(ctx context.Context, body []byte) ([]by
 	return responseBody, nil
 }
 
-func buildOpencodeMessages(req *ChatRequest) []opencodeChatMessage {
-	messages := make([]opencodeChatMessage, 0, len(req.Messages)+1)
-
-	if req.SystemPrompt != "" {
-		messages = append(messages, opencodeChatMessage{
-			Role:    "system",
-			Content: req.SystemPrompt,
-		})
-	}
-
-	for _, msg := range req.Messages {
-		images := resolveImageRefs(req.Images, msg.ImageRefs)
-		if len(images) > 0 {
-			parts := make([]opencodeMessageContentPart, 0, len(images)+1)
-			if msg.Content != "" {
-				parts = append(parts, opencodeMessageContentPart{
-					Type: "text",
-					Text: msg.Content,
-				})
-			}
-			for _, image := range images {
-				parts = append(parts, opencodeMessageContentPart{
-					Type: "image_url",
-					ImageURL: &opencodeMessageImageURL{
-						URL: image.URL,
-					},
-				})
-			}
-			messages = append(messages, opencodeChatMessage{
-				Role:    msg.Role,
-				Content: parts,
-			})
-			continue
-		}
-
-		messages = append(messages, opencodeChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	return messages
+func buildOpencodeMessages(req *ChatRequest) []openAIChatMessage {
+	return buildOpenAIChatMessages(req, "")
 }
 
 type opencodeChatRequest struct {
-	Model           string                `json:"model"`
-	Messages        []opencodeChatMessage `json:"messages"`
-	MaxTokens       int                   `json:"max_tokens,omitempty"`
-	Temperature     float32               `json:"temperature,omitempty"`
-	ReasoningEffort string                `json:"reasoning_effort,omitempty"`
-	Stream          bool                  `json:"stream"`
-}
-
-type opencodeChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
-}
-
-type opencodeMessageContentPart struct {
-	Type     string                   `json:"type"`
-	Text     string                   `json:"text,omitempty"`
-	ImageURL *opencodeMessageImageURL `json:"image_url,omitempty"`
-}
-
-type opencodeMessageImageURL struct {
-	URL string `json:"url"`
+	Model           string              `json:"model"`
+	Messages        []openAIChatMessage `json:"messages"`
+	Tools           []openAITool        `json:"tools,omitempty"`
+	ToolChoice      any                 `json:"tool_choice,omitempty"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	Temperature     float32             `json:"temperature,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
+	Stream          bool                `json:"stream"`
 }
 
 type opencodeChatResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

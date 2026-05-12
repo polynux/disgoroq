@@ -52,6 +52,8 @@ func (o *OpenrouterProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatR
 	body, err := json.Marshal(openrouterChatRequest{
 		Model:               req.Model,
 		Messages:            buildOpenrouterMessages(req),
+		Tools:               buildOpenAITools(req.Tools),
+		ToolChoice:          buildOpenAIToolChoice(req.ToolChoice),
 		MaxCompletionTokens: req.MaxTokens,
 		Temperature:         req.Temperature,
 		Reasoning:           openrouterReasoningConfig(o.thinkingEnabled),
@@ -76,6 +78,7 @@ func (o *OpenrouterProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatR
 
 	return &ChatResponse{
 		Content:          response.Choices[0].Message.Content,
+		ToolCalls:        parseOpenAIToolCalls(response.Choices[0].Message.ToolCalls),
 		Model:            response.Model,
 		TokensUsed:       response.Usage.TotalTokens,
 		PromptTokens:     response.Usage.PromptTokens,
@@ -89,17 +92,17 @@ func (o *OpenrouterProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatR
 func (o *OpenrouterProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
 	body, err := json.Marshal(openrouterChatRequest{
 		Model: req.Model,
-		Messages: []openrouterChatMessage{
+		Messages: []openAIChatMessage{
 			{
 				Role: "user",
-				Content: []openrouterMessageContentPart{
+				Content: []openAIMessageContentPart{
 					{
 						Type: "text",
 						Text: req.Instruction,
 					},
 					{
 						Type: "image_url",
-						ImageURL: &openrouterMessageImageURL{
+						ImageURL: &openAIMessageImageURL{
 							URL: req.ImageURL,
 						},
 					},
@@ -168,73 +171,19 @@ func (o *OpenrouterProvider) doChatRequest(ctx context.Context, body []byte) ([]
 	return responseBody, nil
 }
 
-func buildOpenrouterMessages(req *ChatRequest) []openrouterChatMessage {
-	messages := make([]openrouterChatMessage, 0, len(req.Messages)+1)
-
-	if req.SystemPrompt != "" {
-		messages = append(messages, openrouterChatMessage{
-			Role:    "system",
-			Content: req.SystemPrompt,
-		})
-	}
-
-	for _, msg := range req.Messages {
-		images := resolveImageRefs(req.Images, msg.ImageRefs)
-		if len(images) > 0 {
-			parts := make([]openrouterMessageContentPart, 0, len(images)+1)
-			if msg.Content != "" {
-				parts = append(parts, openrouterMessageContentPart{
-					Type: "text",
-					Text: msg.Content,
-				})
-			}
-			for _, image := range images {
-				parts = append(parts, openrouterMessageContentPart{
-					Type: "image_url",
-					ImageURL: &openrouterMessageImageURL{
-						URL: image.URL,
-					},
-				})
-			}
-			messages = append(messages, openrouterChatMessage{
-				Role:    msg.Role,
-				Content: parts,
-			})
-			continue
-		}
-
-		messages = append(messages, openrouterChatMessage{
-			Role:    msg.Role,
-			Content: msg.Content,
-		})
-	}
-
-	return messages
+func buildOpenrouterMessages(req *ChatRequest) []openAIChatMessage {
+	return buildOpenAIChatMessages(req, "")
 }
 
 type openrouterChatRequest struct {
-	Model               string                  `json:"model"`
-	Messages            []openrouterChatMessage `json:"messages"`
-	MaxCompletionTokens int                     `json:"max_completion_tokens,omitempty"`
-	Temperature         float32                 `json:"temperature,omitempty"`
-	Reasoning           *openrouterReasoning    `json:"reasoning,omitempty"`
-	Stream              bool                    `json:"stream"`
-}
-
-type openrouterChatMessage struct {
-	Role    string `json:"role"`
-	Content any    `json:"content"`
-}
-
-type openrouterMessageContentPart struct {
-	Type     string                     `json:"type"`
-	Text     string                     `json:"text,omitempty"`
-	ImageURL *openrouterMessageImageURL `json:"image_url,omitempty"`
-}
-
-type openrouterMessageImageURL struct {
-	URL    string `json:"url"`
-	Detail string `json:"detail,omitempty"`
+	Model               string               `json:"model"`
+	Messages            []openAIChatMessage  `json:"messages"`
+	Tools               []openAITool         `json:"tools,omitempty"`
+	ToolChoice          any                  `json:"tool_choice,omitempty"`
+	MaxCompletionTokens int                  `json:"max_completion_tokens,omitempty"`
+	Temperature         float32              `json:"temperature,omitempty"`
+	Reasoning           *openrouterReasoning `json:"reasoning,omitempty"`
+	Stream              bool                 `json:"stream"`
 }
 
 type openrouterReasoning struct {
@@ -246,8 +195,9 @@ type openrouterChatResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content   string `json:"content"`
-			Reasoning string `json:"reasoning,omitempty"`
+			Content   string           `json:"content"`
+			Reasoning string           `json:"reasoning,omitempty"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

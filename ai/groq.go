@@ -8,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/conneroisu/groq-go"
 )
 
 const groqBaseURL = "https://api.groq.com/openai/v1"
@@ -54,6 +52,7 @@ func (g *GroqProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 
 	return &ChatResponse{
 		Content:          response.Choices[0].Message.Content,
+		ToolCalls:        parseOpenAIToolCalls(response.Choices[0].Message.ToolCalls),
 		Model:            req.Model,
 		TokensUsed:       response.Usage.TotalTokens,
 		PromptTokens:     response.Usage.PromptTokens,
@@ -65,18 +64,18 @@ func (g *GroqProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 
 func (g *GroqProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
 	response, err := g.doChatCompletion(ctx, groqChatCompletionRequest{
-		Model: groq.ChatModel(req.Model),
-		Messages: []groq.ChatCompletionMessage{
+		Model: req.Model,
+		Messages: []openAIChatMessage{
 			{
-				Role: groq.RoleUser,
-				MultiContent: []groq.ChatMessagePart{
+				Role: RoleUser,
+				Content: []openAIMessageContentPart{
 					{
-						Type: groq.ChatMessagePartTypeText,
+						Type: "text",
 						Text: req.Instruction,
 					},
 					{
-						Type: groq.ChatMessagePartTypeImageURL,
-						ImageURL: &groq.ChatMessageImageURL{
+						Type: "image_url",
+						ImageURL: &openAIMessageImageURL{
 							URL:    req.ImageURL,
 							Detail: "auto",
 						},
@@ -103,55 +102,16 @@ func (g *GroqProvider) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 	}, nil
 }
 
-func buildGroqMessages(req *ChatRequest) []groq.ChatCompletionMessage {
-	groqMessages := make([]groq.ChatCompletionMessage, 0, len(req.Messages)+1)
-
-	if req.SystemPrompt != "" {
-		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
-			Role:    groq.RoleSystem,
-			Content: req.SystemPrompt,
-		})
-	}
-
-	for _, msg := range req.Messages {
-		images := resolveImageRefs(req.Images, msg.ImageRefs)
-		if msg.Role == "user" && len(images) > 0 {
-			parts := make([]groq.ChatMessagePart, 0, len(images)+1)
-			if msg.Content != "" {
-				parts = append(parts, groq.ChatMessagePart{
-					Type: groq.ChatMessagePartTypeText,
-					Text: msg.Content,
-				})
-			}
-			for _, image := range images {
-				parts = append(parts, groq.ChatMessagePart{
-					Type: groq.ChatMessagePartTypeImageURL,
-					ImageURL: &groq.ChatMessageImageURL{
-						URL:    image.URL,
-						Detail: "auto",
-					},
-				})
-			}
-			groqMessages = append(groqMessages, groq.ChatCompletionMessage{
-				Role:         groq.Role(msg.Role),
-				MultiContent: parts,
-			})
-			continue
-		}
-
-		groqMessages = append(groqMessages, groq.ChatCompletionMessage{
-			Role:    groq.Role(msg.Role),
-			Content: msg.Content,
-		})
-	}
-
-	return groqMessages
+func buildGroqMessages(req *ChatRequest) []openAIChatMessage {
+	return buildOpenAIChatMessages(req, "auto")
 }
 
 func buildGroqChatRequest(req *ChatRequest, thinkingEnabled bool) groqChatCompletionRequest {
 	return groqChatCompletionRequest{
-		Model:           groq.ChatModel(req.Model),
+		Model:           req.Model,
 		Messages:        buildGroqMessages(req),
+		Tools:           buildOpenAITools(req.Tools),
+		ToolChoice:      buildOpenAIToolChoice(req.ToolChoice),
 		MaxTokens:       req.MaxTokens,
 		Temperature:     req.Temperature,
 		ReasoningEffort: groqReasoningEffort(req.Model, thinkingEnabled),
@@ -215,18 +175,21 @@ func (g *GroqProvider) doChatCompletion(ctx context.Context, req groqChatComplet
 }
 
 type groqChatCompletionRequest struct {
-	Model           groq.ChatModel               `json:"model"`
-	Messages        []groq.ChatCompletionMessage `json:"messages"`
-	MaxTokens       int                          `json:"max_tokens,omitempty"`
-	Temperature     float32                      `json:"temperature,omitempty"`
-	ReasoningEffort string                       `json:"reasoning_effort,omitempty"`
+	Model           string              `json:"model"`
+	Messages        []openAIChatMessage `json:"messages"`
+	Tools           []openAITool        `json:"tools,omitempty"`
+	ToolChoice      any                 `json:"tool_choice,omitempty"`
+	MaxTokens       int                 `json:"max_tokens,omitempty"`
+	Temperature     float32             `json:"temperature,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 }
 
 type groqChatCompletionResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content string `json:"content"`
+			Content   string           `json:"content"`
+			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

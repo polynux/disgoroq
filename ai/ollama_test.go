@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ollama/ollama/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -283,4 +284,57 @@ func TestOllamaChatPrefersContentOverThinking(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "final answer", resp.Content)
+}
+
+func TestOllamaChatSendsAndParsesToolCalls(t *testing.T) {
+	type chatRequest struct {
+		Model    string        `json:"model"`
+		Messages []api.Message `json:"messages"`
+		Tools    []api.Tool    `json:"tools"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req chatRequest
+		err = json.Unmarshal(body, &req)
+		require.NoError(t, err)
+		require.Len(t, req.Tools, 1)
+		assert.Equal(t, defaultWebToolName, req.Tools[0].Function.Name)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"model":"dolphin3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"web_fetch","arguments":{"url":"https://example.com"}}}]},"done":true,"done_reason":"tool_calls","eval_count":4,"prompt_eval_count":6}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "dolphin3",
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "hello",
+		}},
+		Tools: []ToolDefinition{{
+			Function: ToolFunctionDefinition{
+				Name:        defaultWebToolName,
+				Description: "fetch web pages",
+				Parameters: ToolSchema{
+					Type: "object",
+					Properties: map[string]ToolProperty{
+						"url": {Type: "string"},
+					},
+					Required: []string{"url"},
+				},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
+	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
+	assert.Equal(t, `{"url":"https://example.com"}`, resp.ToolCalls[0].Function.Arguments)
 }

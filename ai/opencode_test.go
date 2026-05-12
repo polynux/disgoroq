@@ -69,7 +69,7 @@ func TestOpencodeVisionSendsMultipartContent(t *testing.T) {
 		partsData, err := json.Marshal(req.Messages[0].Content)
 		require.NoError(t, err)
 
-		var parts []opencodeMessageContentPart
+		var parts []openAIMessageContentPart
 		err = json.Unmarshal(partsData, &parts)
 		require.NoError(t, err)
 
@@ -102,4 +102,52 @@ func TestOpencodeVisionSendsMultipartContent(t *testing.T) {
 	assert.Equal(t, 8, resp.CompletionTokens)
 	assert.Equal(t, 10, resp.CachedTokens)
 	assert.Equal(t, 4, resp.CacheWriteTokens)
+}
+
+func TestOpencodeChatParsesToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req opencodeChatRequest
+		err = json.Unmarshal(body, &req)
+		require.NoError(t, err)
+		require.Len(t, req.Tools, 1)
+		assert.Equal(t, defaultWebToolName, req.Tools[0].Function.Name)
+		assert.Equal(t, "auto", req.ToolChoice)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"model":"deepseek-v4-flash","choices":[{"message":{"content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"web_fetch","arguments":"{\"url\":\"https://example.com\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":0,"cache_write_tokens":0}}}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpencodeProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "hello",
+		}},
+		Tools: []ToolDefinition{{
+			Function: ToolFunctionDefinition{
+				Name:        defaultWebToolName,
+				Description: "fetch web pages",
+				Parameters: ToolSchema{
+					Type: "object",
+					Properties: map[string]ToolProperty{
+						"url": {Type: "string"},
+					},
+					Required: []string{"url"},
+				},
+			},
+		}},
+		ToolChoice: &ToolChoice{Mode: ToolChoiceAuto},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
+	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
 }
