@@ -186,10 +186,11 @@ func buildToolSystemPrompt(base string, definitions []ToolDefinition) string {
 }
 
 func inferToolChoice(messages []Message, definitions []ToolDefinition) *ToolChoice {
-	latestUser := latestUserMessage(messages)
-	if latestUser == nil {
+	latestIdx := latestUserMessageIndex(messages)
+	if latestIdx < 0 {
 		return nil
 	}
+	latestUser := &messages[latestIdx]
 
 	if hasToolDefinition(definitions, defaultWebToolName) && directURLPattern.MatchString(latestUser.Content) {
 		return &ToolChoice{Name: defaultWebToolName}
@@ -199,11 +200,40 @@ func inferToolChoice(messages []Message, definitions []ToolDefinition) *ToolChoi
 		return &ToolChoice{Mode: ToolChoiceRequired}
 	}
 
+	if looksLikeRetryIntent(latestUser.Content) {
+		previousUser := previousUserMessageBefore(messages, latestIdx)
+		if previousUser != nil {
+			if hasToolDefinition(definitions, defaultWebToolName) && directURLPattern.MatchString(previousUser.Content) {
+				return &ToolChoice{Name: defaultWebToolName}
+			}
+			if hasToolDefinition(definitions, defaultWebSearchToolName) && looksLikeSearchIntent(previousUser.Content) {
+				return &ToolChoice{Mode: ToolChoiceRequired}
+			}
+		}
+	}
+
 	return nil
 }
 
 func latestUserMessage(messages []Message) *Message {
+	idx := latestUserMessageIndex(messages)
+	if idx < 0 {
+		return nil
+	}
+	return &messages[idx]
+}
+
+func latestUserMessageIndex(messages []Message) int {
 	for idx := len(messages) - 1; idx >= 0; idx-- {
+		if messages[idx].Role == RoleUser && strings.TrimSpace(messages[idx].Content) != "" {
+			return idx
+		}
+	}
+	return -1
+}
+
+func previousUserMessageBefore(messages []Message, before int) *Message {
+	for idx := before - 1; idx >= 0; idx-- {
 		if messages[idx].Role == RoleUser && strings.TrimSpace(messages[idx].Content) != "" {
 			return &messages[idx]
 		}
@@ -276,6 +306,27 @@ func containsAny(content string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+func looksLikeRetryIntent(content string) bool {
+	content = strings.ToLower(strings.TrimSpace(content))
+	if content == "" {
+		return false
+	}
+
+	retryPhrases := []string{
+		"reessaie",
+		"réessaie",
+		"reessaye",
+		"réessaye",
+		"essaie encore",
+		"retente",
+		"relance la recherche",
+		"retry",
+		"try again",
+		"retry the search",
+	}
+	return containsAny(content, retryPhrases)
 }
 
 func hydrateToolCalls(calls []ToolCall, messages []Message) []ToolCall {

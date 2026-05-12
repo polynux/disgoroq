@@ -466,3 +466,71 @@ func TestServiceChatHydratesMissingWebFetchURLFromLatestUserMessage(t *testing.T
 	assert.Equal(t, ToolChoiceAuto, provider.requests[1].ToolChoice.Mode)
 	assert.Empty(t, provider.requests[1].ToolChoice.Name)
 }
+
+func TestServiceChatInfersSearchRetryFromPreviousUserMessage(t *testing.T) {
+	provider := &scriptedProvider{
+		responses: []*ChatResponse{{
+			Content:      "done",
+			FinishReason: FinishReasonStop,
+		}},
+	}
+
+	tool := &stubTool{
+		definition: ToolDefinition{
+			Function: ToolFunctionDefinition{
+				Name: defaultWebSearchToolName,
+				Parameters: ToolSchema{
+					Type: "object",
+				},
+			},
+		},
+	}
+
+	registry := &ToolRegistry{
+		config: ToolRuntimeConfig{
+			Enabled:          true,
+			MaxRounds:        2,
+			MaxCallsPerRound: 1,
+			MaxCallsTotal:    2,
+			Timeout:          time.Second,
+		},
+		tools: make(map[string]Tool),
+	}
+	registry.Register(tool)
+
+	service := &Service{
+		config: ServiceConfig{
+			ToolConfig: ToolRuntimeConfig{
+				Enabled:          true,
+				MaxRounds:        2,
+				MaxCallsPerRound: 1,
+				MaxCallsTotal:    2,
+				Timeout:          time.Second,
+			},
+		},
+		provider: provider,
+		tools:    registry,
+	}
+
+	_, err := service.Chat(context.Background(), &ChatRequest{
+		Model: "test-model",
+		Messages: []Message{
+			{
+				Role:    RoleUser,
+				Content: "fais moi une recherche sur le leak de forza horizon 6 stp",
+			},
+			{
+				Role:    RoleAssistant,
+				Content: "le moteur de recherche a fail",
+			},
+			{
+				Role:    RoleUser,
+				Content: "vas y, reessaie la recherche stp",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, provider.requests, 1)
+	require.NotNil(t, provider.requests[0].ToolChoice)
+	assert.Equal(t, ToolChoiceRequired, provider.requests[0].ToolChoice.Mode)
+}
