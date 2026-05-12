@@ -72,6 +72,16 @@ Recommended `SearXNG` tweaks for this bot:
 - Prefer `server.bind_address: "127.0.0.1"` when the bot runs on the same host. Keep `0.0.0.0` only if the bot must reach SearXNG from another container or machine.
 - Keep `valkey` enabled if available. It helps search responsiveness and reduces repeated upstream work.
 - `server.limiter: false` is acceptable for a private bot-only instance. Turn it on if the instance is exposed beyond your local/private network.
+- **Enable JSON results** in SearXNG. DisgoroQ calls `/search?format=json`, and SearXNG defaults to `search.formats: [html]`, which causes `403 FORBIDDEN` until `json` is allowed too:
+
+```yaml
+search:
+  safe_search: 2
+  formats:
+    - html
+    - json
+```
+
 - `search.safe_search` is fine as a backend default, but DisgoroQ also sends its own `ai.tools.search.safe_search` value on each request. Keep them aligned if you want predictable behavior.
 - `server.image_proxy`, `search.autocomplete`, and most UI plugins do not matter for DisgoroQ's JSON search flow.
 - Your current engine set is enough to start. If you want broader/fallback coverage, add one more non-API engine such as `wikipedia`, `qwant`, or `startpage`.
