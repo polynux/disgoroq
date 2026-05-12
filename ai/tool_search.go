@@ -120,6 +120,13 @@ func (t *WebSearchTool) Execute(ctx context.Context, call ToolCall) (*ToolResult
 		params.Set("language", language)
 	}
 	searchURL.RawQuery = params.Encode()
+	limit := requestedMaxResults(args.MaxResults, t.config.MaxResults)
+
+	logger.Info("Executing web search",
+		zap.String("provider", t.config.Provider),
+		zap.String("query", query),
+		zap.String("language", language),
+		zap.Int("max_results", limit))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL.String(), nil)
 	if err != nil {
@@ -161,11 +168,11 @@ func (t *WebSearchTool) Execute(ctx context.Context, call ToolCall) (*ToolResult
 		}, fmt.Errorf("decode search response: %w", err)
 	}
 
-	rendered, truncated := t.renderResults(query, payload.Results, requestedMaxResults(args.MaxResults, t.config.MaxResults))
-	logger.Debug("Web search completed",
+	rendered, truncated := t.renderResults(query, payload.Results, limit)
+	logger.Info("Web search completed",
 		zap.String("provider", t.config.Provider),
 		zap.String("query", query),
-		zap.Int("results_returned", minInt(len(payload.Results), t.config.MaxResults)),
+		zap.Int("results_returned", minInt(len(payload.Results), limit)),
 		zap.Bool("truncated", truncated))
 
 	return &ToolResult{

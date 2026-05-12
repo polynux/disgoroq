@@ -55,14 +55,12 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 		if round >= s.config.ToolConfig.MaxRounds {
 			return nil, fmt.Errorf("tool loop exceeded max rounds (%d)", s.config.ToolConfig.MaxRounds)
 		}
-		if len(response.ToolCalls) > s.config.ToolConfig.MaxCallsPerRound {
-			return nil, fmt.Errorf("tool loop exceeded max calls per round (%d > %d)", len(response.ToolCalls), s.config.ToolConfig.MaxCallsPerRound)
-		}
-
 		toolCalls := normalizeToolCalls(response.ToolCalls, round)
+		toolCalls = truncateToolCallsPerRound(toolCalls, s.config.ToolConfig.MaxCallsPerRound)
+		toolCalls = truncateToolCallsTotal(toolCalls, s.config.ToolConfig.MaxCallsTotal-totalCalls)
 		totalCalls += len(toolCalls)
-		if totalCalls > s.config.ToolConfig.MaxCallsTotal {
-			return nil, fmt.Errorf("tool loop exceeded max total calls (%d > %d)", totalCalls, s.config.ToolConfig.MaxCallsTotal)
+		if len(toolCalls) == 0 {
+			return nil, fmt.Errorf("tool loop reached max total calls (%d)", s.config.ToolConfig.MaxCallsTotal)
 		}
 		toolCalls = hydrateToolCalls(toolCalls, working.Messages)
 
@@ -325,6 +323,31 @@ func containsAny(content string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+func truncateToolCallsPerRound(calls []ToolCall, maxCalls int) []ToolCall {
+	if len(calls) <= maxCalls {
+		return calls
+	}
+
+	logger.Warn("Model requested too many tool calls in one round; truncating",
+		zap.Int("requested_tool_calls", len(calls)),
+		zap.Int("max_calls_per_round", maxCalls))
+	return calls[:maxCalls]
+}
+
+func truncateToolCallsTotal(calls []ToolCall, remaining int) []ToolCall {
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(calls) <= remaining {
+		return calls
+	}
+
+	logger.Warn("Tool loop reached remaining total call budget; truncating",
+		zap.Int("requested_tool_calls", len(calls)),
+		zap.Int("remaining_tool_calls", remaining))
+	return calls[:remaining]
 }
 
 func looksLikeRetryIntent(content string) bool {

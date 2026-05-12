@@ -214,6 +214,77 @@ func TestServiceChatStopsWhenToolRoundsExceeded(t *testing.T) {
 	assert.Contains(t, err.Error(), "max rounds")
 }
 
+func TestServiceChatTruncatesExcessToolCallsPerRound(t *testing.T) {
+	provider := &scriptedProvider{
+		responses: []*ChatResponse{
+			{
+				FinishReason: FinishReasonToolCalls,
+				ToolCalls: []ToolCall{
+					{ID: "call-1", Function: ToolFunctionCall{Name: defaultWebSearchToolName, Arguments: `{"query":"one"}`}},
+					{ID: "call-2", Function: ToolFunctionCall{Name: defaultWebSearchToolName, Arguments: `{"query":"two"}`}},
+					{ID: "call-3", Function: ToolFunctionCall{Name: defaultWebSearchToolName, Arguments: `{"query":"three"}`}},
+					{ID: "call-4", Function: ToolFunctionCall{Name: defaultWebSearchToolName, Arguments: `{"query":"four"}`}},
+				},
+			},
+			{
+				Content:      "done",
+				FinishReason: FinishReasonStop,
+			},
+		},
+	}
+
+	tool := &stubTool{
+		definition: ToolDefinition{
+			Function: ToolFunctionDefinition{
+				Name: defaultWebSearchToolName,
+				Parameters: ToolSchema{
+					Type: "object",
+				},
+			},
+		},
+		result: ToolResult{Content: "search result"},
+	}
+
+	registry := &ToolRegistry{
+		config: ToolRuntimeConfig{
+			Enabled:          true,
+			MaxRounds:        2,
+			MaxCallsPerRound: 2,
+			MaxCallsTotal:    4,
+			Timeout:          time.Second,
+		},
+		tools: make(map[string]Tool),
+	}
+	registry.Register(tool)
+
+	service := &Service{
+		config: ServiceConfig{
+			ToolConfig: ToolRuntimeConfig{
+				Enabled:          true,
+				MaxRounds:        2,
+				MaxCallsPerRound: 2,
+				MaxCallsTotal:    4,
+				Timeout:          time.Second,
+			},
+		},
+		provider: provider,
+		tools:    registry,
+	}
+
+	response, err := service.Chat(context.Background(), &ChatRequest{
+		Model: "test-model",
+		Messages: []Message{{
+			Role:    RoleUser,
+			Content: "cherche ce qui se passe sur internet",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "done", response.Content)
+	require.Len(t, tool.calls, 2)
+	assert.Equal(t, "call-1", tool.calls[0].ID)
+	assert.Equal(t, "call-2", tool.calls[1].ID)
+}
+
 func TestServiceChatPrefersWebFetchWhenLatestUserMessageHasURL(t *testing.T) {
 	provider := &scriptedProvider{
 		responses: []*ChatResponse{{
