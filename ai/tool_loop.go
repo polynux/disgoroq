@@ -3,12 +3,15 @@ package ai
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/logger"
 )
+
+var directURLPattern = regexp.MustCompile(`https?://[^\s>]+`)
 
 func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	if s.tools == nil || !s.tools.Enabled() {
@@ -26,8 +29,17 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 
 	working := cloneChatRequest(req)
 	working.Tools = definitions
+	working.SystemPrompt = buildToolSystemPrompt(working.SystemPrompt, definitions)
 	if working.ToolChoice == nil {
-		working.ToolChoice = &ToolChoice{Mode: ToolChoiceAuto}
+		working.ToolChoice = inferToolChoice(working.Messages, definitions)
+		if working.ToolChoice != nil {
+			logger.Info("Inferred tool choice for chat request",
+				zap.String("mode", working.ToolChoice.Mode),
+				zap.String("tool", working.ToolChoice.Name))
+		}
+		if working.ToolChoice == nil {
+			working.ToolChoice = &ToolChoice{Mode: ToolChoiceAuto}
+		}
 	}
 
 	totalCalls := 0
@@ -52,7 +64,7 @@ func (s *Service) chatWithTools(ctx context.Context, req *ChatRequest) (*ChatRes
 			return nil, fmt.Errorf("tool loop exceeded max total calls (%d > %d)", totalCalls, s.config.ToolConfig.MaxCallsTotal)
 		}
 
-		logger.Debug("Executing model tool calls",
+		logger.Info("Executing model tool calls",
 			zap.Int("round", round+1),
 			zap.Int("tool_call_count", len(toolCalls)),
 			zap.String("provider", response.Provider),
@@ -137,4 +149,114 @@ func normalizeToolCalls(calls []ToolCall, round int) []ToolCall {
 	}
 
 	return normalized
+}
+
+func buildToolSystemPrompt(base string, definitions []ToolDefinition) string {
+	if len(definitions) == 0 {
+		return base
+	}
+
+	hasFetch := hasToolDefinition(definitions, defaultWebToolName)
+	hasSearch := hasToolDefinition(definitions, defaultWebSearchToolName)
+	if !hasFetch && !hasSearch {
+		return base
+	}
+
+	var guidance strings.Builder
+	if base != "" {
+		guidance.WriteString(strings.TrimSpace(base))
+		guidance.WriteString("\n\n")
+	}
+	guidance.WriteString("Tool-use policy:\n")
+	guidance.WriteString("- Use available tools whenever the user asks for current web information or asks you to inspect a URL.\n")
+	if hasFetch {
+		guidance.WriteString("- If the user provides an http/https URL or asks you to open/read/fetch a page, call web_fetch instead of guessing.\n")
+	}
+	if hasSearch {
+		guidance.WriteString("- If the user asks you to search the web, browse online, or find current information without giving a URL, call web_search first.\n")
+	}
+	guidance.WriteString("- Do not pretend you fetched or searched anything unless you actually used the tool.\n")
+	guidance.WriteString("- After tool results are available, answer normally and keep the answer grounded in the fetched/search results.\n")
+
+	return guidance.String()
+}
+
+func inferToolChoice(messages []Message, definitions []ToolDefinition) *ToolChoice {
+	latestUser := latestUserMessage(messages)
+	if latestUser == nil {
+		return nil
+	}
+
+	if hasToolDefinition(definitions, defaultWebToolName) && directURLPattern.MatchString(latestUser.Content) {
+		return &ToolChoice{Name: defaultWebToolName}
+	}
+
+	if hasToolDefinition(definitions, defaultWebSearchToolName) && looksLikeSearchIntent(latestUser.Content) {
+		return &ToolChoice{Mode: ToolChoiceRequired}
+	}
+
+	return nil
+}
+
+func latestUserMessage(messages []Message) *Message {
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		if messages[idx].Role == RoleUser && strings.TrimSpace(messages[idx].Content) != "" {
+			return &messages[idx]
+		}
+	}
+	return nil
+}
+
+func hasToolDefinition(definitions []ToolDefinition, name string) bool {
+	for _, definition := range definitions {
+		if definition.Function.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeSearchIntent(content string) bool {
+	content = strings.ToLower(strings.TrimSpace(content))
+	if content == "" {
+		return false
+	}
+
+	explicitPhrases := []string{
+		"search the web",
+		"search on the web",
+		"search internet",
+		"web search",
+		"browse the web",
+		"look up online",
+		"go search on internet",
+		"cherche sur internet",
+		"cherche sur le web",
+		"recherche sur internet",
+		"va chercher sur internet",
+		"va voir sur internet",
+	}
+	for _, phrase := range explicitPhrases {
+		if strings.Contains(content, phrase) {
+			return true
+		}
+	}
+
+	searchVerbs := []string{"search", "look up", "lookup", "browse", "cherche", "recherche", "trouve", "va voir", "va chercher"}
+	webTargets := []string{"internet", "web", "online", "en ligne"}
+	if containsAny(content, searchVerbs) && containsAny(content, webTargets) {
+		return true
+	}
+
+	currentInfoMarkers := []string{"latest news", "current info", "up-to-date", "actualités", "actu du jour"}
+	return containsAny(content, currentInfoMarkers)
+}
+
+func containsAny(content string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(content, needle) {
+			return true
+		}
+	}
+	return false
 }
