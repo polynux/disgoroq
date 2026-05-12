@@ -295,8 +295,27 @@ func looksLikeSearchIntent(content string) bool {
 		return true
 	}
 
-	currentInfoMarkers := []string{"latest news", "current info", "up-to-date", "actualités", "actu du jour"}
-	return containsAny(content, currentInfoMarkers)
+	currentInfoMarkers := []string{
+		"latest news",
+		"current info",
+		"up-to-date",
+		"actualités",
+		"actu du jour",
+		"quoi de neuf",
+		"en ce moment",
+		"il se passe quoi",
+		"qu'est-ce qui se passe",
+		"qu’est-ce qui se passe",
+		"what's happening",
+		"what is happening",
+		"what's going on",
+		"what is going on",
+	}
+	if containsAny(content, currentInfoMarkers) && (containsAny(content, webTargets) || containsAny(content, []string{"news", "actualité", "actu"})) {
+		return true
+	}
+
+	return false
 }
 
 func containsAny(content string, needles []string) bool {
