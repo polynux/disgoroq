@@ -5,6 +5,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,7 +47,13 @@ func init() {
 	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
 	flag.BoolVar(&sendDirectFartingFriday, "sendFartingFriday", false, "Send farting friday directly")
 	flag.BoolVar(&clearCommands, "clearCommands", false, "Clear all registered commands")
-	flag.Parse()
+	if !runningUnderGoTest() {
+		flag.Parse()
+	}
+}
+
+func runningUnderGoTest() bool {
+	return strings.HasSuffix(os.Args[0], ".test")
 }
 
 func main() {
@@ -361,8 +368,12 @@ func main() {
 }
 
 // aiServiceAdapter adapts the existing ai.Service to memory.AIService interface
+type chatService interface {
+	Chat(ctx context.Context, req *ai.ChatRequest) (*ai.ChatResponse, error)
+}
+
 type aiServiceAdapter struct {
-	service *ai.Service
+	service chatService
 }
 
 // Chat implements the memory.AIService interface
@@ -379,6 +390,7 @@ func (a *aiServiceAdapter) Chat(ctx context.Context, messages []memory.Message, 
 	request := &ai.ChatRequest{
 		Model:       model,
 		Messages:    aiMessages,
+		ToolChoice:  &ai.ToolChoice{Mode: ai.ToolChoiceNone},
 		Temperature: database.DefaultTemperature,
 		MaxTokens:   database.DefaultMaxTokens,
 	}
