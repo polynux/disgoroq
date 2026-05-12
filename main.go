@@ -162,6 +162,16 @@ func main() {
 				MaxCharacters:        cfg.AI.Tools.Web.MaxCharacters,
 				AllowPrivateNetworks: cfg.AI.Tools.Web.AllowPrivateNetworks,
 			},
+			Search: ai.SearchToolConfig{
+				Enabled:         cfg.AI.Tools.Search.Enabled,
+				Provider:        cfg.AI.Tools.Search.Provider,
+				BaseURL:         cfg.AI.Tools.Search.BaseURL,
+				UserAgent:       cfg.AI.Tools.Search.UserAgent,
+				MaxResults:      cfg.AI.Tools.Search.MaxResults,
+				MaxCharacters:   cfg.AI.Tools.Search.MaxCharacters,
+				DefaultLanguage: cfg.AI.Tools.Search.DefaultLanguage,
+				SafeSearch:      cfg.AI.Tools.Search.SafeSearch,
+			},
 		},
 	}
 

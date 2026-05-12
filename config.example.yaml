@@ -158,6 +158,31 @@ ai:
       # Allow access to localhost/private network targets
       allow_private_networks: false
 
+    search:
+      # Enable the built-in web search tool
+      enabled: false
+
+      # Search backend provider (currently only self-hosted SearXNG is supported)
+      provider: "searxng"
+
+      # Base URL of your self-hosted SearXNG instance
+      base_url: "http://localhost:8081"
+
+      # User-Agent sent to the search backend
+      user_agent: "DisgoroQ/1.0 (+https://github.com/polynux/disgoroq)"
+
+      # Maximum number of results returned to the model
+      max_results: 5
+
+      # Maximum number of characters returned to the model
+      max_characters: 6000
+
+      # Optional default language; leave empty to use backend defaults
+      default_language: ""
+
+      # SearXNG safe-search level: 0 = off, 1 = moderate, 2 = strict
+      safe_search: 1
+
 logging:
   # Enable logging
   enabled: true

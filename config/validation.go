@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -252,7 +253,11 @@ func (c *ToolsConfig) validate() error {
 		return fmt.Errorf("ai.tools.timeout_ms must be positive")
 	}
 
-	return c.Web.validate()
+	if err := c.Web.validate(); err != nil {
+		return err
+	}
+
+	return c.Search.validate()
 }
 
 func (c *WebFetchToolConfig) validate() error {
@@ -278,6 +283,40 @@ func (c *WebFetchToolConfig) validate() error {
 	}
 	if c.MaxCharacters < 1 {
 		return fmt.Errorf("ai.tools.web.max_characters must be positive")
+	}
+
+	return nil
+}
+
+func (c *SearchToolConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if strings.TrimSpace(c.Provider) == "" {
+		return fmt.Errorf("ai.tools.search.provider cannot be empty when the search tool is enabled")
+	}
+	if !strings.EqualFold(strings.TrimSpace(c.Provider), "searxng") {
+		return fmt.Errorf("ai.tools.search.provider only supports searxng, got %q", c.Provider)
+	}
+	if strings.TrimSpace(c.BaseURL) == "" {
+		return fmt.Errorf("ai.tools.search.base_url cannot be empty when the search tool is enabled")
+	}
+	parsedURL, err := url.Parse(strings.TrimSpace(c.BaseURL))
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return fmt.Errorf("ai.tools.search.base_url must be a valid absolute URL")
+	}
+	if c.UserAgent == "" {
+		return fmt.Errorf("ai.tools.search.user_agent cannot be empty when the search tool is enabled")
+	}
+	if c.MaxResults < 1 {
+		return fmt.Errorf("ai.tools.search.max_results must be positive")
+	}
+	if c.MaxCharacters < 1 {
+		return fmt.Errorf("ai.tools.search.max_characters must be positive")
+	}
+	if c.SafeSearch < 0 || c.SafeSearch > 2 {
+		return fmt.Errorf("ai.tools.search.safe_search must be between 0 and 2")
 	}
 
 	return nil

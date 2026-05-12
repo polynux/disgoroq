@@ -17,7 +17,10 @@ import (
 	"polynux/disgoroq/logger"
 )
 
-const defaultWebToolName = "web_fetch"
+const (
+	defaultWebToolName       = "web_fetch"
+	defaultWebSearchToolName = "web_search"
+)
 
 type ToolRuntimeConfig struct {
 	Enabled          bool
@@ -26,6 +29,7 @@ type ToolRuntimeConfig struct {
 	MaxCallsTotal    int
 	Timeout          time.Duration
 	Web              WebToolConfig
+	Search           SearchToolConfig
 }
 
 type WebToolConfig struct {
@@ -35,6 +39,17 @@ type WebToolConfig struct {
 	MaxBytes             int64
 	MaxCharacters        int
 	AllowPrivateNetworks bool
+}
+
+type SearchToolConfig struct {
+	Enabled         bool
+	Provider        string
+	BaseURL         string
+	UserAgent       string
+	MaxResults      int
+	MaxCharacters   int
+	DefaultLanguage string
+	SafeSearch      int
 }
 
 type Tool interface {
@@ -81,7 +96,11 @@ func (c ToolRuntimeConfig) Validate() error {
 		return fmt.Errorf("timeout must be positive")
 	}
 
-	return c.Web.Validate()
+	if err := c.Web.Validate(); err != nil {
+		return err
+	}
+
+	return c.Search.Validate()
 }
 
 func (c WebToolConfig) Validate() error {
@@ -112,6 +131,43 @@ func (c WebToolConfig) Validate() error {
 	return nil
 }
 
+func (c SearchToolConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+
+	if c.Provider == "" {
+		return errors.New("search provider cannot be empty")
+	}
+	if !strings.EqualFold(strings.TrimSpace(c.Provider), "searxng") {
+		return fmt.Errorf("unsupported search provider %q", c.Provider)
+	}
+	if c.BaseURL == "" {
+		return errors.New("search base URL cannot be empty")
+	}
+	parsedURL, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return fmt.Errorf("invalid search base URL: %w", err)
+	}
+	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+		return fmt.Errorf("invalid search base URL %q", c.BaseURL)
+	}
+	if c.UserAgent == "" {
+		return errors.New("search user agent cannot be empty")
+	}
+	if c.MaxResults < 1 {
+		return errors.New("search max results must be positive")
+	}
+	if c.MaxCharacters < 1 {
+		return errors.New("search max characters must be positive")
+	}
+	if c.SafeSearch < 0 || c.SafeSearch > 2 {
+		return fmt.Errorf("search safe search must be between 0 and 2, got %d", c.SafeSearch)
+	}
+
+	return nil
+}
+
 func NewToolRegistry(cfg ToolRuntimeConfig) *ToolRegistry {
 	registry := &ToolRegistry{
 		config: cfg,
@@ -123,6 +179,9 @@ func NewToolRegistry(cfg ToolRuntimeConfig) *ToolRegistry {
 
 	if cfg.Web.Enabled {
 		registry.Register(NewWebFetchTool(cfg.Web))
+	}
+	if cfg.Search.Enabled {
+		registry.Register(NewWebSearchTool(cfg.Search))
 	}
 
 	return registry

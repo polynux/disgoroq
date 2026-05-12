@@ -102,6 +102,7 @@ type ToolsConfig struct {
 	Timeout          time.Duration      `yaml:"-"`
 	TimeoutMs        int                `yaml:"timeout_ms"`
 	Web              WebFetchToolConfig `yaml:"web"`
+	Search           SearchToolConfig   `yaml:"search"`
 }
 
 type WebFetchToolConfig struct {
@@ -111,6 +112,17 @@ type WebFetchToolConfig struct {
 	MaxBytes             int64    `yaml:"max_bytes"`
 	MaxCharacters        int      `yaml:"max_characters"`
 	AllowPrivateNetworks bool     `yaml:"allow_private_networks"`
+}
+
+type SearchToolConfig struct {
+	Enabled         bool   `yaml:"enabled"`
+	Provider        string `yaml:"provider"`
+	BaseURL         string `yaml:"base_url"`
+	UserAgent       string `yaml:"user_agent"`
+	MaxResults      int    `yaml:"max_results"`
+	MaxCharacters   int    `yaml:"max_characters"`
+	DefaultLanguage string `yaml:"default_language"`
+	SafeSearch      int    `yaml:"safe_search"`
 }
 
 // RetryConfig contains retry logic configuration.
@@ -229,6 +241,16 @@ func DefaultConfig() *Config {
 					MaxBytes:             2 * 1024 * 1024,
 					MaxCharacters:        12000,
 					AllowPrivateNetworks: false,
+				},
+				Search: SearchToolConfig{
+					Enabled:         false,
+					Provider:        "searxng",
+					BaseURL:         "http://localhost:8081",
+					UserAgent:       "DisgoroQ/1.0 (+https://github.com/polynux/disgoroq)",
+					MaxResults:      5,
+					MaxCharacters:   6000,
+					DefaultLanguage: "",
+					SafeSearch:      1,
 				},
 			},
 			Retry: RetryConfig{

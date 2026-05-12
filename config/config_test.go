@@ -552,6 +552,54 @@ func TestValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "ai.tools.max_rounds must be at least 1",
 		},
+		{
+			name: "invalid search config",
+			config: &Config{
+				Discord:  DiscordConfig{Token: "test"},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
+				AI: AIConfig{
+					PrimaryProvider: AIProviderGroq,
+					Groq:            GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
+					Tools: ToolsConfig{
+						Enabled:          true,
+						MaxRounds:        1,
+						MaxCallsPerRound: 1,
+						MaxCallsTotal:    1,
+						Timeout:          time.Second,
+						Web: WebFetchToolConfig{
+							Enabled:        true,
+							AllowedSchemes: []string{"http", "https"},
+							UserAgent:      "test-agent",
+							MaxBytes:       1024,
+							MaxCharacters:  1024,
+						},
+						Search: SearchToolConfig{
+							Enabled:       true,
+							Provider:      "unknown",
+							BaseURL:       "http://localhost:8081",
+							UserAgent:     "test-agent",
+							MaxResults:    5,
+							MaxCharacters: 1024,
+							SafeSearch:    1,
+						},
+					},
+					Retry: RetryConfig{
+						InitialDelay:  time.Millisecond,
+						MaxDelay:      2 * time.Millisecond,
+						BackoffFactor: 2.0,
+					},
+					MinResponseLength: 1,
+				},
+				Logging:   LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:    MemoryConfig{Enabled: false},
+				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
+				Horoscope: HoroscopeConfig{IncludeEmojis: true},
+				Reengage:  ReengageConfig{CheckIntervalSeconds: 300, DefaultInactivityMinutes: 30, DefaultChance: 0.1},
+				Bot:       BotConfig{DefaultPrompt: "hello", TriggerWords: []string{"feun", "feunboy"}},
+			},
+			wantErr: true,
+			errMsg:  "ai.tools.search.provider only supports searxng",
+		},
 	}
 
 	for _, tt := range tests {
@@ -607,6 +655,15 @@ ai:
       user_agent: "test-agent"
       max_bytes: 4096
       max_characters: 2048
+    search:
+      enabled: true
+      provider: "searxng"
+      base_url: "http://localhost:8081"
+      user_agent: "test-agent"
+      max_results: 7
+      max_characters: 4096
+      default_language: "fr"
+      safe_search: 2
   retry:
     max_retries: 3
     initial_delay_ms: 1000
@@ -661,6 +718,12 @@ memory:
 	if config.AI.Tools.Web.MaxBytes != 4096 {
 		t.Errorf("Tools.Web.MaxBytes = %v, want 4096", config.AI.Tools.Web.MaxBytes)
 	}
+	if config.AI.Tools.Search.MaxResults != 7 {
+		t.Errorf("Tools.Search.MaxResults = %v, want 7", config.AI.Tools.Search.MaxResults)
+	}
+	if config.AI.Tools.Search.SafeSearch != 2 {
+		t.Errorf("Tools.Search.SafeSearch = %v, want 2", config.AI.Tools.Search.SafeSearch)
+	}
 
 	// Verify memory config
 	if config.Memory.SummaryInterval != 30*time.Minute {
@@ -709,6 +772,15 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if config.AI.Tools.Web.MaxCharacters != 12000 {
 		t.Errorf("Default AI.Tools.Web.MaxCharacters = %v, want 12000", config.AI.Tools.Web.MaxCharacters)
+	}
+	if config.AI.Tools.Search.Enabled {
+		t.Error("Default AI.Tools.Search.Enabled should be false")
+	}
+	if config.AI.Tools.Search.Provider != "searxng" {
+		t.Errorf("Default AI.Tools.Search.Provider = %v, want searxng", config.AI.Tools.Search.Provider)
+	}
+	if config.AI.Tools.Search.MaxResults != 5 {
+		t.Errorf("Default AI.Tools.Search.MaxResults = %v, want 5", config.AI.Tools.Search.MaxResults)
 	}
 	if config.AI.Retry.MaxRetries != 2 {
 		t.Errorf("Default Retry.MaxRetries = %v, want 2", config.AI.Retry.MaxRetries)
