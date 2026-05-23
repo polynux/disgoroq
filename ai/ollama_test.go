@@ -209,6 +209,55 @@ func TestOllamaChatSendsReferencedImages(t *testing.T) {
 	assert.Equal(t, "ok", resp.Content)
 }
 
+func TestOllamaChatSendsReferencedDataURIImages(t *testing.T) {
+	type chatMessage struct {
+		Role    string   `json:"role"`
+		Content string   `json:"content"`
+		Images  []string `json:"images"`
+	}
+	type chatRequest struct {
+		Model    string        `json:"model"`
+		Messages []chatMessage `json:"messages"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+
+		var req chatRequest
+		err = json.Unmarshal(body, &req)
+		require.NoError(t, err)
+
+		require.Len(t, req.Messages, 1)
+		assert.Equal(t, "llava", req.Model)
+		require.Len(t, req.Messages[0].Images, 1)
+		assert.NotEmpty(t, req.Messages[0].Images[0])
+
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		_, err = io.WriteString(w, "{\"model\":\"llava\",\"message\":{\"role\":\"assistant\",\"content\":\"ok\"},\"done\":true,\"done_reason\":\"stop\",\"eval_count\":5,\"prompt_eval_count\":4}\n")
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "llava",
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:  "data:image/png;base64,ZmFrZS1pbWFnZS1ieXRlcw==",
+			Type: "image/png",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ok", resp.Content)
+}
+
 func TestOllamaVisionErrorsOnImageDownloadFailure(t *testing.T) {
 	provider, err := NewOllamaProvider("http://localhost:11434", false)
 	require.NoError(t, err)

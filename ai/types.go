@@ -64,7 +64,8 @@ type Message struct {
 // ImageContext contains image metadata for vision processing
 type ImageContext struct {
 	MessageID string // Which Discord message has this image
-	URL       string // Image URL
+	URL       string // Image URL or materialized data URI
+	SourceURL string // Original attachment URL when materialized
 	Type      string // image/jpeg, image/png, etc.
 	Width     int    // Image width in pixels
 	Height    int    // Image height in pixels

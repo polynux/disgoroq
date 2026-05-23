@@ -37,10 +37,14 @@ func attachmentCacheKey(input AttachmentCacheInput, provider, model string) data
 }
 
 func imageDescriptionCacheInput(image ImageContext) AttachmentCacheInput {
+	sourceURL := image.SourceURL
+	if sourceURL == "" {
+		sourceURL = image.URL
+	}
 	return AttachmentCacheInput{
 		Kind:               attachmentCacheKindImageDescription,
-		AttachmentKey:      fingerprintAttachment(image.URL, image.Type, image.Size, image.Width, image.Height),
-		SourceURL:          image.URL,
+		AttachmentKey:      fingerprintAttachment(sourceURL, image.Type, image.Size, image.Width, image.Height),
+		SourceURL:          sourceURL,
 		ContentType:        image.Type,
 		SizeBytes:          image.Size,
 		InstructionVersion: cacheInstructionVersion(attachmentCacheKindImageDescription, defaultVisionInstruction),

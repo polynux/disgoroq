@@ -384,6 +384,14 @@ func parseOllamaChatResponse(body []byte) ([]ollamaChatChunk, error) {
 }
 
 func (o *OllamaProvider) downloadImage(ctx context.Context, imageURL string) (api.ImageData, error) {
+	if strings.HasPrefix(imageURL, "data:") {
+		_, data, err := decodeDataURI(imageURL)
+		if err != nil {
+			return nil, err
+		}
+		return api.ImageData(data), nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return nil, err

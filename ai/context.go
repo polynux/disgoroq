@@ -2,13 +2,15 @@ package ai
 
 import (
 	"context"
+	"net/http"
+	"slices"
+	"strings"
+
 	"github.com/disgoorg/disgo/bot"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
-	"slices"
-	"strings"
 
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
@@ -18,6 +20,7 @@ type ContextBuilder struct {
 	client       *bot.Client
 	gifProcessor *GIFProcessor
 	docProcessor *DocumentProcessor
+	download     func(ctx context.Context, rawURL string, maxBytes int64) (*remoteContent, error)
 }
 
 func NewContextBuilder(client *bot.Client, provider Provider) *ContextBuilder {
@@ -25,6 +28,9 @@ func NewContextBuilder(client *bot.Client, provider Provider) *ContextBuilder {
 		client:       client,
 		gifProcessor: NewGIFProcessor(),
 		docProcessor: NewDocumentProcessor(provider, DocumentProcessorConfig{}),
+		download: func(ctx context.Context, rawURL string, maxBytes int64) (*remoteContent, error) {
+			return downloadRemoteContent(ctx, http.DefaultClient, rawURL, maxBytes)
+		},
 	}
 }
 
@@ -51,6 +57,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		normalizedContent := emoji.NormalizeDiscordEmojiShortcodes(messages[idx].Content)
+		normalizedContent = stripAttachmentURLs(normalizedContent, messages[idx].Attachments)
 
 		if strings.Contains(messages[idx].Content, "Horoscope du jour:") && messages[idx].Author.ID == botID {
 			idx--
@@ -163,6 +170,7 @@ func buildImageContexts(imagesToProcess []imageToProcess) ([]ImageContext, map[s
 		imageContexts = append(imageContexts, ImageContext{
 			MessageID: img.id,
 			URL:       img.url,
+			SourceURL: img.sourceURL,
 			Type:      img.contentType,
 			Width:     img.width,
 			Height:    img.height,
@@ -177,6 +185,7 @@ func buildImageContexts(imagesToProcess []imageToProcess) ([]ImageContext, map[s
 type imageToProcess struct {
 	id          string
 	url         string
+	sourceURL   string
 	contentType string
 	width       int
 	height      int
@@ -211,18 +220,6 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []dis
 				}
 			}
 
-			// Process animated GIFs
-			url := attachment.URL
-			contentType := *attachment.ContentType
-			if *attachment.ContentType == "image/gif" && cb.gifProcessor != nil {
-				base64Grid, err := cb.gifProcessor.ProcessGIF(ctx, attachment.URL)
-				if err == nil && base64Grid != "" {
-					// Replace with base64 data URI
-					url = "data:image/jpeg;base64," + base64Grid
-					contentType = "image/jpeg"
-				}
-			}
-
 			width := 0
 			if attachment.Width != nil {
 				width = *attachment.Width
@@ -232,9 +229,15 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []dis
 				height = *attachment.Height
 			}
 
+			url, contentType, ok := cb.materializeImageAttachment(ctx, attachment)
+			if !ok {
+				continue
+			}
+
 			imagesToProcess = append(imagesToProcess, imageToProcess{
 				id:          messages[idx].ID.String(),
 				url:         url,
+				sourceURL:   attachment.URL,
 				contentType: contentType,
 				width:       width,
 				height:      height,
@@ -245,6 +248,68 @@ func (cb *ContextBuilder) getImagesToProcess(ctx context.Context, messages []dis
 	}
 
 	return imagesToProcess
+}
+
+func (cb *ContextBuilder) materializeImageAttachment(ctx context.Context, attachment discord.Attachment) (string, string, bool) {
+	if cb.download == nil {
+		return "", "", false
+	}
+
+	sourceURL := strings.TrimSpace(attachment.URL)
+	if sourceURL == "" || attachment.ContentType == nil {
+		return "", "", false
+	}
+
+	contentType := normalizeContentType(*attachment.ContentType)
+	content, err := cb.download(ctx, sourceURL, 20_000_000)
+	if err != nil {
+		logger.Warn("Failed to materialize image attachment",
+			zap.String("attachment_url", sourceURL),
+			zap.String("content_type", contentType),
+			zap.Error(err))
+		return "", "", false
+	}
+
+	if downloadedType := normalizeContentType(content.ContentType); slices.Contains(supportedImageTypes, downloadedType) {
+		contentType = downloadedType
+	}
+
+	if contentType == "image/gif" && cb.gifProcessor != nil {
+		base64Grid, animated, err := cb.gifProcessor.ProcessGIFData(content.Data)
+		if err != nil {
+			logger.Warn("Failed to process GIF attachment",
+				zap.String("attachment_url", sourceURL),
+				zap.Error(err))
+			return "", "", false
+		}
+		if animated {
+			return "data:image/jpeg;base64," + base64Grid, "image/jpeg", true
+		}
+	}
+
+	dataURI, err := encodeDataURI(contentType, content.Data)
+	if err != nil {
+		logger.Warn("Failed to encode image attachment data URI",
+			zap.String("attachment_url", sourceURL),
+			zap.String("content_type", contentType),
+			zap.Error(err))
+		return "", "", false
+	}
+
+	return dataURI, contentType, true
+}
+
+func stripAttachmentURLs(content string, attachments []discord.Attachment) string {
+	result := content
+	for _, attachment := range attachments {
+		url := strings.TrimSpace(attachment.URL)
+		if url == "" {
+			continue
+		}
+		result = strings.ReplaceAll(result, "<"+url+">", "")
+		result = strings.ReplaceAll(result, url, "")
+	}
+	return strings.TrimSpace(result)
 }
 
 func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []discord.Message) map[string]string {

@@ -2,15 +2,12 @@ package ai
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"fmt"
 	"image"
 	"image/draw"
 	"image/gif"
 	"image/jpeg"
-	"io"
-	"net/http"
 )
 
 // GIFProcessor handles animated GIF processing for vision models
@@ -29,57 +26,34 @@ func NewGIFProcessor() *GIFProcessor {
 	}
 }
 
-// IsAnimatedGIF checks if the provided reader contains an animated GIF
-func (gp *GIFProcessor) IsAnimatedGIF(r io.Reader) (bool, error) {
-	g, err := gif.DecodeAll(r)
+// ProcessGIFData processes an animated GIF payload and returns a base64 encoded
+// JPEG grid. The boolean reports whether the GIF was animated.
+func (gp *GIFProcessor) ProcessGIFData(data []byte) (string, bool, error) {
+	gifData, err := gif.DecodeAll(bytes.NewReader(data))
 	if err != nil {
-		return false, err
-	}
-	return len(g.Image) >= 2, nil
-}
-
-// ProcessGIF processes an animated GIF and returns a base64 encoded JPEG grid
-func (gp *GIFProcessor) ProcessGIF(ctx context.Context, gifURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", gifURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to download GIF: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to download GIF: status %d", resp.StatusCode)
-	}
-
-	gifData, err := gif.DecodeAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode GIF: %w", err)
+		return "", false, fmt.Errorf("failed to decode GIF: %w", err)
 	}
 
 	if len(gifData.Image) < 2 {
-		return "", nil
+		return "", false, nil
 	}
 
 	frames, err := gp.extractFrames(gifData)
 	if err != nil {
-		return "", fmt.Errorf("failed to extract frames: %w", err)
+		return "", false, fmt.Errorf("failed to extract frames: %w", err)
 	}
 
 	grid, err := gp.createGrid(frames)
 	if err != nil {
-		return "", fmt.Errorf("failed to create grid: %w", err)
+		return "", false, fmt.Errorf("failed to create grid: %w", err)
 	}
 
 	base64Data, err := gp.encodeToBase64(grid)
 	if err != nil {
-		return "", fmt.Errorf("failed to encode grid: %w", err)
+		return "", false, fmt.Errorf("failed to encode grid: %w", err)
 	}
 
-	return base64Data, nil
+	return base64Data, true, nil
 }
 
 // extractFrames extracts evenly spaced frames from an animated GIF

@@ -52,6 +52,30 @@ func TestGroqBuildMessagesInlinesReferencedImages(t *testing.T) {
 	assert.Equal(t, "done", messages[2].Content)
 }
 
+func TestGroqBuildMessagesPrefersMaterializedImageURLOverSourceURL(t *testing.T) {
+	req := &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "describe this",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:       "data:image/png;base64,ZmFrZS1pbWFnZS1ieXRlcw==",
+			SourceURL: "https://media.discordapp.net/attachments/example.png",
+		}},
+	}
+
+	messages := buildGroqMessages(req)
+
+	require.Len(t, messages, 1)
+	parts, ok := messages[0].Content.([]openAIMessageContentPart)
+	require.True(t, ok)
+	require.Len(t, parts, 2)
+	require.NotNil(t, parts[1].ImageURL)
+	assert.Equal(t, "data:image/png;base64,ZmFrZS1pbWFnZS1ieXRlcw==", parts[1].ImageURL.URL)
+	assert.NotEqual(t, req.Images[0].SourceURL, parts[1].ImageURL.URL)
+}
+
 func TestGroqSupportsInlineImagesOnlyForSharedScoutModel(t *testing.T) {
 	provider := NewGroqProvider("test-key", true)
 

@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -98,6 +99,50 @@ func filenameFromURL(rawURL string) string {
 	}
 
 	return base
+}
+
+func encodeDataURI(contentType string, data []byte) (string, error) {
+	contentType = normalizeContentType(contentType)
+	if contentType == "" {
+		return "", fmt.Errorf("missing content type for data URI")
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("missing content for data URI")
+	}
+
+	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+func decodeDataURI(raw string) (string, []byte, error) {
+	if !strings.HasPrefix(raw, "data:") {
+		return "", nil, fmt.Errorf("unsupported data URI")
+	}
+
+	comma := strings.IndexByte(raw, ',')
+	if comma < 0 {
+		return "", nil, fmt.Errorf("invalid data URI")
+	}
+
+	metadata := strings.TrimPrefix(raw[:comma], "data:")
+	payload := raw[comma+1:]
+	if !strings.HasSuffix(strings.ToLower(metadata), ";base64") {
+		return "", nil, fmt.Errorf("unsupported data URI encoding")
+	}
+
+	contentType := normalizeContentType(strings.TrimSuffix(metadata, ";base64"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return "", nil, fmt.Errorf("decode data URI: %w", err)
+	}
+	if len(data) == 0 {
+		return "", nil, fmt.Errorf("data URI payload is empty")
+	}
+
+	return contentType, data, nil
 }
 
 func detectDocumentFormat(filename, contentType string) string {

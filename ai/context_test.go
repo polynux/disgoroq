@@ -1,7 +1,12 @@
 package ai
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/gif"
+	"strings"
 	"testing"
 
 	"github.com/disgoorg/disgo/bot"
@@ -42,7 +47,7 @@ func TestNewContextBuilder(t *testing.T) {
 }
 
 func TestGetImagesToProcess_NoImages(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		{
@@ -57,7 +62,7 @@ func TestGetImagesToProcess_NoImages(t *testing.T) {
 }
 
 func TestGetImagesToProcess_ValidImage(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "Check this image", []discord.Attachment{
@@ -68,7 +73,8 @@ func TestGetImagesToProcess_ValidImage(t *testing.T) {
 	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 1)
 	assert.Equal(t, "1", images[0].id)
-	assert.Equal(t, "https://example.com/image.jpg", images[0].url)
+	assert.True(t, strings.HasPrefix(images[0].url, "data:image/jpeg;base64,"))
+	assert.Equal(t, "https://example.com/image.jpg", images[0].sourceURL)
 	assert.Equal(t, "image/jpeg", images[0].contentType)
 	assert.Equal(t, 800, images[0].width)
 	assert.Equal(t, 600, images[0].height)
@@ -76,7 +82,7 @@ func TestGetImagesToProcess_ValidImage(t *testing.T) {
 }
 
 func TestGetImagesToProcess_NonImageAttachment(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "Here's a file", []discord.Attachment{
@@ -89,7 +95,7 @@ func TestGetImagesToProcess_NonImageAttachment(t *testing.T) {
 }
 
 func TestGetImagesToProcess_UnsupportedImageType(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "Here's an image", []discord.Attachment{
@@ -102,7 +108,7 @@ func TestGetImagesToProcess_UnsupportedImageType(t *testing.T) {
 }
 
 func TestGetImagesToProcess_ImageTooLarge(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "Here's a large image", []discord.Attachment{
@@ -115,7 +121,7 @@ func TestGetImagesToProcess_ImageTooLarge(t *testing.T) {
 }
 
 func TestGetImagesToProcess_ImageResolutionTooHigh(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "Here's a high res image", []discord.Attachment{
@@ -128,7 +134,7 @@ func TestGetImagesToProcess_ImageResolutionTooHigh(t *testing.T) {
 }
 
 func TestGetImagesToProcess_MultipleImages(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "First message", []discord.Attachment{
@@ -139,12 +145,12 @@ func TestGetImagesToProcess_MultipleImages(t *testing.T) {
 
 	images := cb.getImagesToProcess(context.Background(), messages)
 	require.Len(t, images, 2)
-	assert.Equal(t, "https://example.com/image1.jpg", images[0].url)
-	assert.Equal(t, "https://example.com/image2.png", images[1].url)
+	assert.True(t, strings.HasPrefix(images[0].url, "data:image/jpeg;base64,"))
+	assert.True(t, strings.HasPrefix(images[1].url, "data:image/png;base64,"))
 }
 
 func TestGetImagesToProcess_LimitToSixImages(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	attachments := make([]discord.Attachment, 0, 7)
 	for i := 1; i <= 7; i++ {
@@ -167,7 +173,7 @@ func TestGetImagesToProcess_LimitToSixImages(t *testing.T) {
 }
 
 func TestGetImagesToProcess_ReversedOrder(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 
 	messages := []discord.Message{
 		newMessageWithAttachments(1, "First", []discord.Attachment{
@@ -184,8 +190,48 @@ func TestGetImagesToProcess_ReversedOrder(t *testing.T) {
 	assert.Equal(t, "1", images[1].id, "Should process images in reverse order")
 }
 
+func TestGetImagesToProcess_SkipsFailedMaterialization(t *testing.T) {
+	cb := newTestContextBuilder()
+	cb.download = func(ctx context.Context, rawURL string, maxBytes int64) (*remoteContent, error) {
+		return nil, assert.AnError
+	}
+
+	messages := []discord.Message{
+		newMessageWithAttachments(1, "Check this image", []discord.Attachment{
+			newAttachment(1, "https://example.com/image.jpg", "image/jpeg", 800, 600, 1000000),
+		}),
+	}
+
+	images := cb.getImagesToProcess(context.Background(), messages)
+	require.Len(t, images, 0)
+}
+
+func TestGetImagesToProcess_SingleFrameGIFFallsBackToStaticDataURI(t *testing.T) {
+	cb := newTestContextBuilder()
+	cb.download = func(ctx context.Context, rawURL string, maxBytes int64) (*remoteContent, error) {
+		return &remoteContent{
+			SourceURL:   rawURL,
+			FinalURL:    rawURL,
+			ContentType: "image/gif",
+			Data:        singleFrameGIFData(t),
+		}, nil
+	}
+
+	messages := []discord.Message{
+		newMessageWithAttachments(1, "Check this gif", []discord.Attachment{
+			newAttachment(1, "https://example.com/image.gif", "image/gif", 800, 600, 1000000),
+		}),
+	}
+
+	images := cb.getImagesToProcess(context.Background(), messages)
+	require.Len(t, images, 1)
+	assert.True(t, strings.HasPrefix(images[0].url, "data:image/gif;base64,"))
+	assert.Equal(t, "image/gif", images[0].contentType)
+	assert.Equal(t, "https://example.com/image.gif", images[0].sourceURL)
+}
+
 func TestBuildContext_NormalizesDiscordEmojiMarkup(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 	webhookID := snowflake.ID(9999)
 	botID := snowflake.ID(42)
 
@@ -220,7 +266,7 @@ func TestBuildContext_NormalizesDiscordEmojiMarkup(t *testing.T) {
 }
 
 func TestBuildContext_PreservesImageRefsWithoutDescriptions(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 	webhookID := snowflake.ID(9999)
 	botID := snowflake.ID(42)
 
@@ -250,10 +296,12 @@ func TestBuildContext_PreservesImageRefsWithoutDescriptions(t *testing.T) {
 	assert.NotContains(t, processed.Messages[0].Content, "<IMAGE_DESC>")
 	assert.Equal(t, "1", processed.Images[0].MessageID)
 	assert.Equal(t, "1", processed.Images[1].MessageID)
+	assert.True(t, strings.HasPrefix(processed.Images[0].URL, "data:image/jpeg;base64,"))
+	assert.Equal(t, "https://example.com/image1.jpg", processed.Images[0].SourceURL)
 }
 
 func TestBuildContext_KeepsImageOnlyMessages(t *testing.T) {
-	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb := newTestContextBuilder()
 	webhookID := snowflake.ID(9999)
 	botID := snowflake.ID(42)
 
@@ -278,6 +326,37 @@ func TestBuildContext_KeepsImageOnlyMessages(t *testing.T) {
 	require.Len(t, processed.Images, 1)
 	assert.Equal(t, []int{0}, processed.Messages[0].ImageRefs)
 	assert.NotContains(t, processed.Messages[0].Content, "<IMAGE_DESC>")
+}
+
+func TestBuildContext_StripsAttachmentURLsFromMessageContent(t *testing.T) {
+	cb := newTestContextBuilder()
+	webhookID := snowflake.ID(9999)
+	botID := snowflake.ID(42)
+	attachmentURL := "https://example.com/image.jpg"
+
+	messages := []discord.Message{
+		{
+			ID:        snowflake.ID(1),
+			Content:   "regarde " + attachmentURL,
+			WebhookID: &webhookID,
+			Attachments: []discord.Attachment{
+				newAttachment(1, attachmentURL, "image/jpeg", 800, 600, 1000000),
+			},
+			Author: discord.User{
+				ID:       snowflake.ID(1),
+				Username: "alice",
+			},
+		},
+	}
+
+	processed, err := cb.BuildContext(context.Background(), messages, snowflake.ID(100), botID)
+
+	require.NoError(t, err)
+	require.Len(t, processed.Messages, 1)
+	assert.Contains(t, processed.Messages[0].Content, "regarde")
+	assert.NotContains(t, processed.Messages[0].Content, attachmentURL)
+	require.Len(t, processed.Images, 1)
+	assert.Equal(t, attachmentURL, processed.Images[0].SourceURL)
 }
 
 func newMessageWithAttachments(id snowflake.ID, content string, attachments []discord.Attachment) discord.Message {
@@ -310,4 +389,43 @@ func newAttachment(id snowflake.ID, url, contentType string, width, height, size
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func newTestContextBuilder() *ContextBuilder {
+	cb := NewContextBuilder(nil, &mockProviderForTest{})
+	cb.download = func(ctx context.Context, rawURL string, maxBytes int64) (*remoteContent, error) {
+		return &remoteContent{
+			SourceURL:   rawURL,
+			FinalURL:    rawURL,
+			ContentType: inferImageContentType(rawURL),
+			Data:        []byte("image-bytes"),
+		}, nil
+	}
+	return cb
+}
+
+func inferImageContentType(rawURL string) string {
+	switch {
+	case strings.HasSuffix(rawURL, ".png"):
+		return "image/png"
+	case strings.HasSuffix(rawURL, ".gif"):
+		return "image/gif"
+	case strings.HasSuffix(rawURL, ".webp"):
+		return "image/webp"
+	default:
+		return "image/jpeg"
+	}
+}
+
+func singleFrameGIFData(t *testing.T) []byte {
+	t.Helper()
+
+	palette := color.Palette{color.Black, color.White}
+	img := image.NewPaletted(image.Rect(0, 0, 1, 1), palette)
+	img.SetColorIndex(0, 0, 1)
+
+	var buf bytes.Buffer
+	err := gif.Encode(&buf, img, nil)
+	require.NoError(t, err)
+	return buf.Bytes()
 }
