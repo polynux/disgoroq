@@ -108,6 +108,33 @@ func TestProviderChainChatSuccessFirstProvider(t *testing.T) {
 	mockProvider1.AssertExpectations(t)
 }
 
+func TestProviderChainChatKeepsFirstProviderForDiscordStyleUnicodeResponse(t *testing.T) {
+	mockProvider1 := new(MockProvider)
+	mockProvider2 := new(MockProvider)
+
+	expectedResponse := &ChatResponse{
+		Content:      ":criminel3: cancel squad en route 🏃‍♂️💨 darky & may sur la sellette, j'vais préparer les pitchforks et les hashtags 🔥",
+		Model:        "test-model",
+		TokensUsed:   10,
+		FinishReason: "stop",
+	}
+
+	mockProvider1.On("Name").Return("groq")
+	mockProvider1.On("Chat", mock.Anything, mock.Anything).Return(expectedResponse, nil)
+
+	chain := NewProviderChain(mockProvider1, mockProvider2)
+	response, err := chain.Chat(context.Background(), &ChatRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse.Content, response.Content)
+	assert.Equal(t, "groq", response.Provider)
+	mockProvider2.AssertNotCalled(t, "Chat")
+	mockProvider1.AssertExpectations(t)
+}
+
 func TestProviderChainChatFallbackOnError(t *testing.T) {
 	mockProvider1 := new(MockProvider)
 	mockProvider2 := new(MockProvider)

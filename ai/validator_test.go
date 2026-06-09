@@ -220,6 +220,15 @@ func TestValidateChatResponse(t *testing.T) {
 			reason:  "content is valid",
 		},
 		{
+			name: "discord style emoji sequence",
+			response: &ChatResponse{
+				Content: ":criminel3: cancel squad en route 🏃‍♂️💨 darky & may sur la sellette, j'vais préparer les pitchforks et les hashtags 🔥",
+			},
+			options: []ResponseValidatorOption{},
+			valid:   true,
+			reason:  "content is valid",
+		},
+		{
 			name: "mixed content with whitespace",
 			response: &ChatResponse{
 				Content: "  Hello, world!  How are you?  ",
@@ -463,6 +472,16 @@ func TestUnicodeValidation(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "emoji zwj sequence",
+			content:  "🏃‍♂️💨",
+			expected: true,
+		},
+		{
+			name:     "combining mark text",
+			content:  "Cafe\u0301 du matin",
+			expected: true,
+		},
+		{
 			name:     "mixed with symbols",
 			content:  "Test @#$%^&*()_+",
 			expected: true,
@@ -475,6 +494,16 @@ func TestUnicodeValidation(t *testing.T) {
 		{
 			name:     "replacement chars only",
 			content:  "���",
+			expected: false,
+		},
+		{
+			name:     "control characters mixed with text",
+			content:  "hello\x07world",
+			expected: false,
+		},
+		{
+			name:     "format characters only",
+			content:  "\u200d\u200d",
 			expected: false,
 		},
 	}

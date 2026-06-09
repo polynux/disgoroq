@@ -122,6 +122,30 @@ func TestRetryWrapperChatSuccessFirstAttempt(t *testing.T) {
 	mockProvider.AssertExpectations(t)
 }
 
+func TestRetryWrapperChatAcceptsDiscordStyleUnicodeResponse(t *testing.T) {
+	mockProvider := new(MockProvider)
+	expectedResponse := &ChatResponse{
+		Content:      ":criminel3: cancel squad en route 🏃‍♂️💨 darky & may sur la sellette, j'vais préparer les pitchforks et les hashtags 🔥",
+		Model:        "test-model",
+		TokensUsed:   42,
+		FinishReason: "stop",
+	}
+
+	mockProvider.On("Name").Return("test-provider")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(expectedResponse, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, DefaultRetryConfig(), 1, "test-chat-model", "test-vision-model", nil)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Model:    "test-model",
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedResponse.Content, response.Content)
+	assert.Equal(t, "test-provider", response.Provider)
+	mockProvider.AssertExpectations(t)
+}
+
 func TestRetryWrapperChatAnnotatesModelWhenProviderLeavesItEmpty(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockProvider.On("Name").Return("test-provider")

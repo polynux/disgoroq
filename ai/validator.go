@@ -3,6 +3,7 @@ package ai
 import (
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 // ValidationResult contains the validation result with details
@@ -154,11 +155,13 @@ func (v *ResponseValidator) validateContent(content string) *ValidationResult {
 	}
 
 	// Check Unicode if enabled
-	if v.checkUnicode && !v.hasValidUnicode(trimmed) {
-		return &ValidationResult{
-			IsValid: false,
-			Reason:  "content contains only invalid Unicode",
-			Details: details,
+	if v.checkUnicode {
+		if reason := v.unicodeValidationFailure(trimmed); reason != "" {
+			return &ValidationResult{
+				IsValid: false,
+				Reason:  reason,
+				Details: details,
+			}
 		}
 	}
 
@@ -172,28 +175,42 @@ func (v *ResponseValidator) validateContent(content string) *ValidationResult {
 	}
 }
 
-// hasValidUnicode checks if the string contains valid, printable Unicode characters
-func (v *ResponseValidator) hasValidUnicode(s string) bool {
+// unicodeValidationFailure returns a validation failure reason for malformed or unusable Unicode content.
+func (v *ResponseValidator) unicodeValidationFailure(s string) string {
+	if !utf8.ValidString(s) {
+		return "content is not valid UTF-8"
+	}
+
 	hasVisibleContent := false
 
 	for _, r := range s {
-		// Check if character is printable (not control character)
-		if !unicode.IsPrint(r) && !unicode.IsSpace(r) {
-			return false
-		}
-
 		// Ignore replacement characters instead of rejecting the whole response.
 		// Some models occasionally emit them alongside otherwise valid text.
 		if r == unicode.ReplacementChar {
 			continue
 		}
 
-		if unicode.IsPrint(r) && !unicode.IsSpace(r) {
-			hasVisibleContent = true
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return "content contains unsupported control characters"
 		}
+
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			hasVisibleContent = true
+			continue
+		}
+
+		if unicode.IsMark(r) || unicode.Is(unicode.Cf, r) || unicode.IsSpace(r) {
+			continue
+		}
+
+		return "content contains unsupported Unicode code points"
 	}
 
-	return hasVisibleContent
+	if !hasVisibleContent {
+		return "content contains no visible text"
+	}
+
+	return ""
 }
 
 // IsEmptyResponse is a convenience method specifically for empty response detection
