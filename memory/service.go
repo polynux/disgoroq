@@ -479,6 +479,11 @@ func (s *MemoryService) GetUserSummaries(ctx context.Context, userID, guildID st
 	return s.repo.GetSummariesByUserGuild(ctx, userID, guildID)
 }
 
+// GetLatestSummary retrieves the most recent summary for a user in a guild
+func (s *MemoryService) GetLatestSummary(ctx context.Context, userID, guildID string) (*ConversationSummary, error) {
+	return s.repo.GetLatestSummary(ctx, userID, guildID)
+}
+
 // VectorSearch performs vector similarity search on conversation summaries
 func (s *MemoryService) VectorSearch(ctx context.Context, request *VectorSearchRequest) ([]VectorSearchResult, error) {
 	if s.embeddings == nil {

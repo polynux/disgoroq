@@ -138,6 +138,7 @@ type Service interface {
 	// Management
 	ClearUserMemory(ctx context.Context, userID, guildID string) error
 	GetUserSummaries(ctx context.Context, userID, guildID string) ([]*ConversationSummary, error)
+	GetLatestSummary(ctx context.Context, userID, guildID string) (*ConversationSummary, error)
 	GetGuildSettings(ctx context.Context, guildID string) (*GuildMemorySettings, error)
 	UpdateGuildSettings(ctx context.Context, settings *GuildMemorySettings) error
 
