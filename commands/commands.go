@@ -256,6 +256,22 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 			},
 			forceSummaryHandler(memoryService),
 		)
+
+		registry.AddCommand(
+			discord.SlashCommandCreate{
+				Name:                     "usermemory",
+				Description:              "Show the latest memory summary for a user",
+				DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionUser{
+						Name:        "user",
+						Description: "The user whose latest summary you want to view",
+						Required:    true,
+					},
+				},
+			},
+			userMemoryHandler(memoryService),
+		)
 	}
 
 	registry.AddCommand(
