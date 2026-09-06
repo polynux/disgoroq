@@ -214,8 +214,12 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 			targetAuthor = *m.Member.Nick
 		}
 		targetContent := emoji.NormalizeDiscordEmojiShortcodes(m.Content)
-		instructions += fmt.Sprintf("\n\nMESSAGE CIBLE (réponds uniquement à ce message, ignore le reste du salon) : %s : %s", targetAuthor, targetContent)
-		instructions += "\n\nRÈGLES DE RÉPONSE : une seule réponse, sur UN SEUL sujet. PAS de liste à puces, PAS de titres, PAS de saut de ligne. Varie la longueur : parfois 3-4 mots, parfois une phrase courte, rarement deux phrases. Ne couvre jamais plusieurs idées à la suite."
+		instructions += fmt.Sprintf("\n\nMESSAGE CIBLE (réponds uniquement à ce message) : %s : %s", targetAuthor, targetContent)
+		instructions += "\n\nRÈGLES DE RÉPONSE (obligatoires) :"
+		instructions += "\n- Tu réponds UNIQUEMENT au message ci-dessus, à son seul auteur. Tout le reste de l'historique est du BRUIT DE FOND : ne le mentionne JAMAIS, ne résume pas le salon, ne raconte pas ce que les autres ont fait ou dit."
+		instructions += "\n- Interdiction de citer d'autres personnes que l'auteur du message cible."
+		instructions += "\n- Une seule réponse, UN SEUL sujet : pas de liste à puces, pas de titres, pas de saut de ligne, jamais plusieurs idées à la suite."
+		instructions += "\n- Varie la longueur : parfois 3-4 mots, parfois une phrase courte, rarement deux phrases."
 	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
