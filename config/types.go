@@ -171,7 +171,8 @@ type MemoryConfig struct {
 	SummaryModel       string        `yaml:"summary_model"`
 	SummaryAPIKey      string        `yaml:"summary_api_key"`
 	BufferThreshold    int           `yaml:"buffer_threshold"`
-	SummaryInterval    time.Duration `yaml:"-"` // Set from SummaryIntervalSeconds after parsing
+	RetentionDays      int           `yaml:"retention_days"` // 0 = disabled
+	SummaryInterval    time.Duration `yaml:"-"`              // Set from SummaryIntervalSeconds after parsing
 	MaxContextMessages int           `yaml:"max_context_messages"`
 	MaxSummaryContext  int           `yaml:"max_summary_context"`
 
@@ -292,6 +293,7 @@ func DefaultConfig() *Config {
 			SummaryProvider:        "ollama",
 			SummaryModel:           "llama3-8b-8192",
 			BufferThreshold:        10,
+			RetentionDays:          0,
 			SummaryInterval:        1 * time.Hour,
 			MaxContextMessages:     5,
 			MaxSummaryContext:      3,

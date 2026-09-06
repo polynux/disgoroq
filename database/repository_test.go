@@ -19,6 +19,13 @@ import (
 )
 
 func setupTestDB(t *testing.T) *Repository {
+	return setupTestDBWithHandle(t).repo
+}
+
+func setupTestDBWithHandle(t *testing.T) struct {
+	repo *Repository
+	dh   *sql.DB
+} {
 	t.Helper()
 
 	tmpDir := t.TempDir()
@@ -49,15 +56,17 @@ func setupTestDB(t *testing.T) *Repository {
 	}
 
 	queries := db.New(database)
-	repo := NewRepository()
-
+	repo := NewRepositoryWithDB(database)
 	repo.queries = queries
 
 	t.Cleanup(func() {
 		database.Close()
 	})
 
-	return repo
+	return struct {
+		repo *Repository
+		dh   *sql.DB
+	}{repo: repo, dh: database}
 }
 
 func TestRepository_GetThreshold_Default(t *testing.T) {
@@ -570,4 +579,137 @@ func TestRepository_DiscordMessageHistoryExhaustedState(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func TestRepository_DeleteMessageBufferOlderThan(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	now := time.Now().Unix()
+	old, recent := now-1000, now-10
+
+	// Insert one old and one recent buffered message
+	err := repo.queries.InsertMessageBuffer(ctx, db.InsertMessageBufferParams{
+		GuildID:    "g1",
+		ChannelID:  "c1",
+		MessageID:  "old-msg",
+		UserID:     "u1",
+		AuthorNick: "old",
+		Content:    "old content",
+		HasImage:   sql.NullBool{Bool: false, Valid: true},
+		Timestamp:  old,
+		Processed:  sql.NullBool{Bool: false, Valid: true},
+	})
+	require.NoError(t, err)
+	err = repo.queries.InsertMessageBuffer(ctx, db.InsertMessageBufferParams{
+		GuildID:    "g1",
+		ChannelID:  "c1",
+		MessageID:  "recent-msg",
+		UserID:     "u1",
+		AuthorNick: "recent",
+		Content:    "recent content",
+		HasImage:   sql.NullBool{Bool: false, Valid: true},
+		Timestamp:  recent,
+		Processed:  sql.NullBool{Bool: false, Valid: true},
+	})
+	require.NoError(t, err)
+
+	deleted, err := repo.DeleteMessageBufferOlderThan(ctx, now-500)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	// The old row is gone, the recent one remains
+	count, err := repo.queries.GetUnprocessedMessageCount(ctx, db.GetUnprocessedMessageCountParams{
+		GuildID: "g1",
+		UserID:  "u1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestRepository_DeleteDiscordMessagesOlderThan(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	now := time.Now().Unix()
+
+	err := repo.queries.UpsertDiscordMessage(ctx, db.UpsertDiscordMessageParams{
+		MessageID:      "old-dm",
+		ChannelID:      "c1",
+		GuildID:        "g1",
+		AuthorID:       "u1",
+		AuthorUsername: "u1",
+		Content:        "old",
+		MessageJson:    "{}",
+		CreatedAt:      now - 1000,
+	})
+	require.NoError(t, err)
+	err = repo.queries.UpsertDiscordMessage(ctx, db.UpsertDiscordMessageParams{
+		MessageID:      "recent-dm",
+		ChannelID:      "c1",
+		GuildID:        "g1",
+		AuthorID:       "u1",
+		AuthorUsername: "u1",
+		Content:        "recent",
+		MessageJson:    "{}",
+		CreatedAt:      now - 10,
+	})
+	require.NoError(t, err)
+
+	deleted, err := repo.DeleteDiscordMessagesOlderThan(ctx, now-500)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
+
+	// Verify only the recent row remains
+	rows, err := repo.queries.GetRecentDiscordMessagesByChannel(ctx, db.GetRecentDiscordMessagesByChannelParams{
+		ChannelID: "c1",
+		Limit:     10,
+	})
+	require.NoError(t, err)
+	assert.Len(t, rows, 1)
+	assert.Equal(t, "recent-dm", rows[0].MessageID)
+}
+
+func TestRepository_DeleteAttachmentCacheOlderThan(t *testing.T) {
+	ctx := context.Background()
+	setup := setupTestDBWithHandle(t)
+	repo, dh := setup.repo, setup.dh
+
+	now := time.Now().Unix()
+
+	err := repo.queries.UpsertAttachmentCacheEntry(ctx, db.UpsertAttachmentCacheEntryParams{
+		CacheKind:          "image",
+		AttachmentKey:      "old-key",
+		SourceUrl:          "https://example.com/old",
+		Filename:           "old.png",
+		ContentType:        "image/png",
+		SizeBytes:          10,
+		Provider:           "groq",
+		Model:              "m",
+		InstructionVersion: "v1",
+		Content:            "old",
+	})
+	require.NoError(t, err)
+	err = repo.queries.UpsertAttachmentCacheEntry(ctx, db.UpsertAttachmentCacheEntryParams{
+		CacheKind:          "image",
+		AttachmentKey:      "recent-key",
+		SourceUrl:          "https://example.com/recent",
+		Filename:           "recent.png",
+		ContentType:        "image/png",
+		SizeBytes:          10,
+		Provider:           "groq",
+		Model:              "m",
+		InstructionVersion: "v1",
+		Content:            "recent",
+	})
+	require.NoError(t, err)
+
+	// Backdate the old row's created_at (Upsert uses strftime('%s','now'))
+	if _, err := dh.Exec("UPDATE attachment_cache SET created_at = ? WHERE attachment_key = 'old-key'", now-1000); err != nil {
+		require.NoError(t, err)
+	}
+
+	deleted, err := repo.DeleteAttachmentCacheOlderThan(ctx, now-500)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), deleted)
 }

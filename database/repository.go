@@ -496,3 +496,21 @@ func (r *Repository) DeleteVoiceConfig(ctx context.Context, guildID string) erro
 	}
 	return nil
 }
+
+// DeleteMessageBufferOlderThan removes buffered messages older than the
+// given cutoff timestamp (unix seconds) and returns the number of rows deleted.
+func (r *Repository) DeleteMessageBufferOlderThan(ctx context.Context, cutoff int64) (int64, error) {
+	return r.queries.DeleteMessageBufferOlderThan(ctx, cutoff)
+}
+
+// DeleteDiscordMessagesOlderThan removes cached Discord messages older than
+// the given cutoff timestamp (unix seconds) and returns the number of rows deleted.
+func (r *Repository) DeleteDiscordMessagesOlderThan(ctx context.Context, cutoff int64) (int64, error) {
+	return r.queries.DeleteDiscordMessagesOlderThan(ctx, cutoff)
+}
+
+// DeleteAttachmentCacheOlderThan removes attachment cache entries older than
+// the given cutoff timestamp (unix seconds) and returns the number of rows deleted.
+func (r *Repository) DeleteAttachmentCacheOlderThan(ctx context.Context, cutoff int64) (int64, error) {
+	return r.queries.DeleteAttachmentCacheOlderThan(ctx, cutoff)
+}

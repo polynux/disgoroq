@@ -369,7 +369,7 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt)
+	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Memory)
 	sched.Start()
 	defer sched.Shutdown()
 

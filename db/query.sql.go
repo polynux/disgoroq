@@ -10,6 +10,32 @@ import (
 	"database/sql"
 )
 
+const deleteAttachmentCacheOlderThan = `-- name: DeleteAttachmentCacheOlderThan :execrows
+DELETE FROM attachment_cache
+WHERE created_at < ?
+`
+
+func (q *Queries) DeleteAttachmentCacheOlderThan(ctx context.Context, createdAt int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAttachmentCacheOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteDiscordMessagesOlderThan = `-- name: DeleteDiscordMessagesOlderThan :execrows
+DELETE FROM discord_messages
+WHERE created_at < ?
+`
+
+func (q *Queries) DeleteDiscordMessagesOlderThan(ctx context.Context, createdAt int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteDiscordMessagesOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteGuildSetting = `-- name: DeleteGuildSetting :exec
 DELETE FROM guild_settings WHERE guild_id = ? AND name = ?
 `
@@ -32,6 +58,21 @@ WHERE id = ?
 func (q *Queries) DeleteMessageBufferEntry(ctx context.Context, id int64) error {
 	_, err := q.db.ExecContext(ctx, deleteMessageBufferEntry, id)
 	return err
+}
+
+const deleteMessageBufferOlderThan = `-- name: DeleteMessageBufferOlderThan :execrows
+
+DELETE FROM message_buffer
+WHERE timestamp < ?
+`
+
+// Retention Queries
+func (q *Queries) DeleteMessageBufferOlderThan(ctx context.Context, timestamp int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteMessageBufferOlderThan, timestamp)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteOldEvents = `-- name: DeleteOldEvents :exec

@@ -28,9 +28,10 @@ type Scheduler struct {
 	horoscopeCfg    config.HoroscopeConfig
 	reengageService *reengage.Service
 	reengageCfg     config.ReengageConfig
+	memoryCfg       config.MemoryConfig
 }
 
-func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string) *Scheduler {
+func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string, memoryCfg config.MemoryConfig) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -50,6 +51,7 @@ func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, e
 		horoscopeCfg:    horoscopeCfg,
 		reengageService: reengageService,
 		reengageCfg:     reengageCfg,
+		memoryCfg:       memoryCfg,
 	}
 }
 
@@ -84,6 +86,16 @@ func (s *Scheduler) Start() {
 		}
 	}
 
+	if s.memoryCfg.RetentionDays > 0 {
+		_, err = s.scheduler.NewJob(
+			gocron.DailyJob(1, gocron.NewAtTimes(gocron.NewAtTime(3, 30, 0))),
+			gocron.NewTask(s.CleanupMemoryRetention),
+		)
+		if err != nil {
+			logger.Error("Failed to create memory retention job", zap.Error(err))
+		}
+	}
+
 	s.scheduler.Start()
 	logger.Info("Scheduler started")
 }
@@ -106,6 +118,53 @@ func (s *Scheduler) CleanupOldEvents() {
 		logger.Info("Event cleanup completed successfully",
 			zap.Int("retention_days", retentionDays),
 		)
+	}
+}
+
+// CleanupMemoryRetention deletes buffered messages, cached Discord messages,
+// and attachment cache entries older than the configured retention period.
+// Conversation summaries are intentionally never deleted.
+func (s *Scheduler) CleanupMemoryRetention() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	cutoff := time.Now().AddDate(0, 0, -s.memoryCfg.RetentionDays).Unix()
+
+	logger.Info("Starting memory retention cleanup",
+		zap.Int("retention_days", s.memoryCfg.RetentionDays),
+	)
+
+	bufferDeleted, err := s.repo.DeleteMessageBufferOlderThan(ctx, cutoff)
+	if err != nil {
+		logger.Error("Failed to cleanup old message buffer entries",
+			zap.Error(err),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
+	} else {
+		logger.Info("Memory buffer retention cleanup done",
+			zap.Int64("rows_deleted", bufferDeleted),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
+	}
+
+	messagesDeleted, err := s.repo.DeleteDiscordMessagesOlderThan(ctx, cutoff)
+	if err != nil {
+		logger.Error("Failed to cleanup old Discord messages",
+			zap.Error(err),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
+	} else {
+		logger.Info("Discord messages retention cleanup done",
+			zap.Int64("rows_deleted", messagesDeleted),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
+	}
+
+	cacheDeleted, err := s.repo.DeleteAttachmentCacheOlderThan(ctx, cutoff)
+	if err != nil {
+		logger.Error("Failed to cleanup old attachment cache entries",
+			zap.Error(err),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
+	} else {
+		logger.Info("Attachment cache retention cleanup done",
+			zap.Int64("rows_deleted", cacheDeleted),
+			zap.Int("retention_days", s.memoryCfg.RetentionDays))
 	}
 }
 

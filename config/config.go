@@ -68,6 +68,7 @@ func GetMemoryConfigDefaults() MemoryConfig {
 		SummaryProvider:    "ollama",
 		SummaryModel:       "llama3-8b-8192",
 		BufferThreshold:    10,
+		RetentionDays:      0,
 		SummaryInterval:    1 * time.Hour,
 		MaxContextMessages: 5,
 		MaxSummaryContext:  3,

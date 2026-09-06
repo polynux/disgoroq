@@ -147,6 +147,20 @@ ON CONFLICT(channel_id) DO UPDATE SET
 DELETE FROM message_buffer
 WHERE id = ?;
 
+-- Retention Queries
+
+-- name: DeleteMessageBufferOlderThan :execrows
+DELETE FROM message_buffer
+WHERE timestamp < ?;
+
+-- name: DeleteDiscordMessagesOlderThan :execrows
+DELETE FROM discord_messages
+WHERE created_at < ?;
+
+-- name: DeleteAttachmentCacheOlderThan :execrows
+DELETE FROM attachment_cache
+WHERE created_at < ?;
+
 -- Summary Queries
 
 -- name: InsertSummary :exec
