@@ -206,6 +206,17 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		instructions += h.emojiManager.GuildEmojiPrompt(m.GuildID.String(), 50)
 	}
 
+	// Mark the exact message the bot must answer so it does not respond to
+	// every topic present in the channel history.
+	{
+		targetAuthor := m.Author.Username
+		if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
+			targetAuthor = *m.Member.Nick
+		}
+		targetContent := emoji.NormalizeDiscordEmojiShortcodes(m.Content)
+		instructions += fmt.Sprintf("\n\nMESSAGE CIBLE (réponds uniquement à ce message, ignore le reste du salon) : %s : %s", targetAuthor, targetContent)
+	}
+
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
 	// Start AI call with comprehensive logging and retry/fallback support
