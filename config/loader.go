@@ -133,6 +133,11 @@ func convertDurations(config *Config) {
 		// Use default
 		config.Memory.SummaryInterval = 1 * time.Hour
 	}
+
+	// Default memory summary provider
+	if config.Memory.SummaryProvider == "" {
+		config.Memory.SummaryProvider = SummaryProviderOllama
+	}
 }
 
 // MustLoad is like Load but panics on error.

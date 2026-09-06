@@ -65,6 +65,7 @@ func GetMemoryConfigDefaults() MemoryConfig {
 		Enabled:            true,
 		OllamaURL:          "http://localhost:11434",
 		EmbeddingModel:     "nomic-embed-text",
+		SummaryProvider:    "ollama",
 		SummaryModel:       "llama3-8b-8192",
 		BufferThreshold:    10,
 		SummaryInterval:    1 * time.Hour,

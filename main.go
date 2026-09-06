@@ -218,39 +218,66 @@ func main() {
 				zap.String("ollama_url", cfg.Memory.OllamaURL))
 			memoryService = nil
 		} else {
-			// Create AI service adapter for memory system
-			memoryAIService := &aiServiceAdapter{service: aiService}
-
-			// Create AI summarizer using the existing AI service
-			summarizer := memory.NewSummarizer(memoryAIService, cfg.Memory.SummaryModel)
-
-			// Configure memory service from central config
-			memoryServiceConfig := memory.ServiceConfig{
-				BufferThreshold:    cfg.Memory.BufferThreshold,
-				SummaryInterval:    cfg.Memory.SummaryInterval,
-				MaxContextMessages: cfg.Memory.MaxContextMessages,
-				MaxSummaryContext:  cfg.Memory.MaxSummaryContext,
+			// Build a dedicated summarization provider honoring
+			// memory.summary_provider / memory.summary_model instead of the
+			// chat provider chain (which overrides the requested model).
+			summaryProviderCfg := ai.SummaryProviderConfig{
+				Provider:  cfg.Memory.SummaryProvider,
+				Model:     cfg.Memory.SummaryModel,
+				OllamaURL: cfg.Memory.OllamaURL,
+				APIKey:    cfg.Memory.SummaryAPIKey,
+			}
+			if summaryProviderCfg.APIKey == "" {
+				// Fall back to the provider keys from the main AI config.
+				switch cfg.Memory.SummaryProvider {
+				case "groq":
+					summaryProviderCfg.APIKey = cfg.AI.Groq.APIKey
+				case "openrouter":
+					summaryProviderCfg.APIKey = cfg.AI.Openrouter.APIKey
+				}
 			}
 
-			memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryServiceConfig)
-
-			// Test memory service health
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			if err := embeddingProvider.HealthCheck(ctx); err != nil {
-				logger.Warn("Memory service embedding provider unavailable, continuing without memory",
+			summaryProvider, err := ai.NewSummaryProvider(summaryProviderCfg)
+			if err != nil {
+				logger.Warn("Failed to create summary provider, continuing without memory",
 					zap.Error(err),
-					zap.String("ollama_url", cfg.Memory.OllamaURL),
-					zap.String("embedding_model", cfg.Memory.EmbeddingModel))
+					zap.String("summary_provider", cfg.Memory.SummaryProvider),
+					zap.String("summary_model", cfg.Memory.SummaryModel))
 				memoryService = nil
 			} else {
-				logger.Info("Memory service initialized",
-					zap.String("ollama_url", cfg.Memory.OllamaURL),
-					zap.String("embedding_model", cfg.Memory.EmbeddingModel),
-					zap.String("summary_model", cfg.Memory.SummaryModel),
-					zap.Int("buffer_threshold", memoryServiceConfig.BufferThreshold),
-					zap.Duration("summary_interval", memoryServiceConfig.SummaryInterval))
+				// Create AI summarizer backed by the dedicated summary provider
+				memoryAIService := &aiServiceAdapter{service: summaryProvider}
+				summarizer := memory.NewSummarizer(memoryAIService, cfg.Memory.SummaryModel)
+
+				// Configure memory service from central config
+				memoryServiceConfig := memory.ServiceConfig{
+					BufferThreshold:    cfg.Memory.BufferThreshold,
+					SummaryInterval:    cfg.Memory.SummaryInterval,
+					MaxContextMessages: cfg.Memory.MaxContextMessages,
+					MaxSummaryContext:  cfg.Memory.MaxSummaryContext,
+				}
+
+				memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryServiceConfig)
+
+				// Test memory service health
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				if err := embeddingProvider.HealthCheck(ctx); err != nil {
+					logger.Warn("Memory service embedding provider unavailable, continuing without memory",
+						zap.Error(err),
+						zap.String("ollama_url", cfg.Memory.OllamaURL),
+						zap.String("embedding_model", cfg.Memory.EmbeddingModel))
+					memoryService = nil
+				} else {
+					logger.Info("Memory service initialized",
+						zap.String("ollama_url", cfg.Memory.OllamaURL),
+						zap.String("embedding_model", cfg.Memory.EmbeddingModel),
+						zap.String("summary_provider", cfg.Memory.SummaryProvider),
+						zap.String("summary_model", cfg.Memory.SummaryModel),
+						zap.Int("buffer_threshold", memoryServiceConfig.BufferThreshold),
+						zap.Duration("summary_interval", memoryServiceConfig.SummaryInterval))
+				}
 			}
 		}
 	} else {
@@ -367,13 +394,10 @@ func main() {
 	}
 }
 
-// aiServiceAdapter adapts the existing ai.Service to memory.AIService interface
-type chatService interface {
-	Chat(ctx context.Context, req *ai.ChatRequest) (*ai.ChatResponse, error)
-}
-
+// aiServiceAdapter adapts an ai.Provider to the memory.AIService interface.
+// The provider (built by ai.NewSummaryProvider) honors the requested model.
 type aiServiceAdapter struct {
-	service chatService
+	service ai.Provider
 }
 
 // Chat implements the memory.AIService interface

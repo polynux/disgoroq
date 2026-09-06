@@ -152,6 +152,14 @@ type LoggingConfig struct {
 	DBLogLevel          string `yaml:"db_log_level"`
 }
 
+// Memory provider names for the summarization provider.
+const (
+	SummaryProviderOllama     = "ollama"
+	SummaryProviderGroq       = "groq"
+	SummaryProviderOpenrouter = "openrouter"
+	SummaryProviderOpencode   = "opencode"
+)
+
 // MemoryConfig contains memory service configuration.
 // Note: SummaryInterval is stored as a duration internally but parsed from
 // seconds in YAML (summary_interval_seconds).
@@ -159,7 +167,9 @@ type MemoryConfig struct {
 	Enabled            bool          `yaml:"enabled"`
 	OllamaURL          string        `yaml:"ollama_url"`
 	EmbeddingModel     string        `yaml:"embedding_model"`
+	SummaryProvider    string        `yaml:"summary_provider"`
 	SummaryModel       string        `yaml:"summary_model"`
+	SummaryAPIKey      string        `yaml:"summary_api_key"`
 	BufferThreshold    int           `yaml:"buffer_threshold"`
 	SummaryInterval    time.Duration `yaml:"-"` // Set from SummaryIntervalSeconds after parsing
 	MaxContextMessages int           `yaml:"max_context_messages"`
@@ -279,6 +289,7 @@ func DefaultConfig() *Config {
 			Enabled:                true,
 			OllamaURL:              "http://localhost:11434",
 			EmbeddingModel:         "nomic-embed-text",
+			SummaryProvider:        "ollama",
 			SummaryModel:           "llama3-8b-8192",
 			BufferThreshold:        10,
 			SummaryInterval:        1 * time.Hour,

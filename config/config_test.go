@@ -302,6 +302,7 @@ func TestValidation(t *testing.T) {
 				Memory: MemoryConfig{
 					OllamaURL:              "http://localhost",
 					EmbeddingModel:         "model",
+					SummaryProvider:        SummaryProviderOllama,
 					SummaryModel:           "model",
 					BufferThreshold:        10,
 					SummaryInterval:        1 * time.Hour,
@@ -615,6 +616,118 @@ func TestValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMemorySummaryProviderValidation(t *testing.T) {
+	validAI := AIConfig{
+		PrimaryProvider: AIProviderGroq,
+		Groq:            GroqConfig{APIKey: "test-key", Model: "model", VisionModel: "vision"},
+		Ollama:          OllamaConfig{Enabled: false},
+		Retry: RetryConfig{
+			MaxRetries:     2,
+			InitialDelay:   500 * time.Millisecond,
+			MaxDelay:       5 * time.Second,
+			BackoffFactor:  2.0,
+			InitialDelayMs: 500,
+			MaxDelayMs:     5000,
+		},
+		MinResponseLength: 1,
+	}
+	validMemory := func(provider string) MemoryConfig {
+		return MemoryConfig{
+			Enabled:                true,
+			OllamaURL:              "http://localhost:11434",
+			EmbeddingModel:         "nomic-embed-text",
+			SummaryProvider:        provider,
+			SummaryModel:           "model",
+			BufferThreshold:        10,
+			SummaryInterval:        1 * time.Hour,
+			SummaryIntervalSeconds: 3600,
+			MaxContextMessages:     5,
+			MaxSummaryContext:      3,
+		}
+	}
+
+	tests := []struct {
+		name     string
+		memory   MemoryConfig
+		ai       AIConfig
+		wantErr  bool
+		errParts []string
+	}{
+		{
+			name:    "ollama provider valid",
+			memory:  validMemory(SummaryProviderOllama),
+			ai:      validAI,
+			wantErr: false,
+		},
+		{
+			name:    "groq provider with ai key",
+			memory:  validMemory(SummaryProviderGroq),
+			ai:      validAI,
+			wantErr: false,
+		},
+		{
+			name:     "groq provider without any key",
+			memory:   validMemory(SummaryProviderGroq),
+			ai:       AIConfig{PrimaryProvider: AIProviderGroq, Ollama: OllamaConfig{Enabled: false}},
+			wantErr:  true,
+			errParts: []string{"memory.summary_api_key"},
+		},
+		{
+			name:     "unknown provider",
+			memory:   validMemory("bananaprovider"),
+			ai:       validAI,
+			wantErr:  true,
+			errParts: []string{"memory.summary_provider"},
+		},
+		{
+			name:     "empty provider",
+			memory:   validMemory(""),
+			ai:       validAI,
+			wantErr:  true,
+			errParts: []string{"memory.summary_provider"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				Discord:  DiscordConfig{Token: "test-token", DevGuildIDs: []string{"123456789012345678"}},
+				Database: DatabaseConfig{URL: "http://localhost", Token: "test-token", Local: false},
+				AI:       tt.ai,
+				Logging:  LoggingConfig{Level: "info", Encoding: "json", RetentionDays: 7, DBLogLevel: "info"},
+				Memory:   tt.memory,
+				Emoji:    EmojiConfig{CacheTTLMinutes: 60},
+			}
+
+			err := cfg.Memory.validate(&cfg.AI)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validate() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil && tt.errParts != nil {
+				for _, part := range tt.errParts {
+					if !contains(err.Error(), part) {
+						t.Errorf("validate() error %q does not contain %q", err.Error(), part)
+					}
+				}
+			}
+		})
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(substr) == 0 || (len(s) >= len(substr) && indexOf(s, substr) >= 0)
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestDurationConversion(t *testing.T) {

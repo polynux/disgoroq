@@ -29,7 +29,7 @@ func (c *Config) Validate() error {
 		errors = append(errors, err.Error())
 	}
 
-	if err := c.Memory.validate(); err != nil {
+	if err := c.Memory.validate(&c.AI); err != nil {
 		errors = append(errors, err.Error())
 	}
 
@@ -382,7 +382,7 @@ func (c *LoggingConfig) validate() error {
 	return nil
 }
 
-func (c *MemoryConfig) validate() error {
+func (c *MemoryConfig) validate(ai *AIConfig) error {
 	// Memory is optional, only validate if enabled
 	if !c.Enabled {
 		return nil
@@ -393,6 +393,24 @@ func (c *MemoryConfig) validate() error {
 	}
 	if c.EmbeddingModel == "" {
 		return fmt.Errorf("memory.embedding_model cannot be empty when memory is enabled")
+	}
+	switch c.SummaryProvider {
+	case SummaryProviderOllama:
+		// Uses memory.ollama_url; nothing more to check.
+	case SummaryProviderGroq:
+		if c.SummaryAPIKey == "" && ai.Groq.APIKey == "" {
+			return fmt.Errorf("memory.summary_api_key is required when memory.summary_provider is %q and ai.groq.api_key is not set", SummaryProviderGroq)
+		}
+	case SummaryProviderOpenrouter:
+		if c.SummaryAPIKey == "" && ai.Openrouter.APIKey == "" {
+			return fmt.Errorf("memory.summary_api_key is required when memory.summary_provider is %q and ai.openrouter.api_key is not set", SummaryProviderOpenrouter)
+		}
+	case SummaryProviderOpencode:
+		// Local opencode service; nothing more to check.
+	case "":
+		return fmt.Errorf("memory.summary_provider cannot be empty when memory is enabled")
+	default:
+		return fmt.Errorf("memory.summary_provider must be one of %q, %q, %q, or %q, got %q", SummaryProviderOllama, SummaryProviderGroq, SummaryProviderOpenrouter, SummaryProviderOpencode, c.SummaryProvider)
 	}
 	if c.SummaryModel == "" {
 		return fmt.Errorf("memory.summary_model cannot be empty when memory is enabled")
