@@ -421,9 +421,6 @@ func (c *MemoryConfig) validate(ai *AIConfig) error {
 	if c.SummaryInterval < time.Minute {
 		return fmt.Errorf("memory.summary_interval_seconds must be at least 60 seconds (1 minute)")
 	}
-	if c.MaxContextMessages < 1 {
-		return fmt.Errorf("memory.max_context_messages must be at least 1, got: %d", c.MaxContextMessages)
-	}
 	if c.MaxSummaryContext < 1 {
 		return fmt.Errorf("memory.max_summary_context must be at least 1, got: %d", c.MaxSummaryContext)
 	}

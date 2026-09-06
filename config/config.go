@@ -62,16 +62,15 @@ func GetRetryConfigDefaults() RetryConfig {
 // This is useful for components that need memory settings but don't need full config.
 func GetMemoryConfigDefaults() MemoryConfig {
 	return MemoryConfig{
-		Enabled:            true,
-		OllamaURL:          "http://localhost:11434",
-		EmbeddingModel:     "nomic-embed-text",
-		SummaryProvider:    "ollama",
-		SummaryModel:       "llama3-8b-8192",
-		BufferThreshold:    10,
-		RetentionDays:      0,
-		SummaryInterval:    1 * time.Hour,
-		MaxContextMessages: 5,
-		MaxSummaryContext:  3,
+		Enabled:           true,
+		OllamaURL:         "http://localhost:11434",
+		EmbeddingModel:    "nomic-embed-text",
+		SummaryProvider:   "ollama",
+		SummaryModel:      "llama3-8b-8192",
+		BufferThreshold:   10,
+		RetentionDays:     0,
+		SummaryInterval:   1 * time.Hour,
+		MaxSummaryContext: 3,
 	}
 }
 
@@ -154,14 +153,13 @@ const (
 	EnvDBLogLevel          = "DB_LOG_LEVEL"
 
 	// Memory
-	EnvMemoryEnabled            = "MEMORY_ENABLED"
-	EnvMemoryOllamaURL          = "MEMORY_OLLAMA_URL"
-	EnvMemoryEmbeddingModel     = "MEMORY_EMBEDDING_MODEL"
-	EnvMemorySummaryModel       = "MEMORY_SUMMARY_MODEL"
-	EnvMemoryBufferThreshold    = "MEMORY_BUFFER_THRESHOLD"
-	EnvMemorySummaryInterval    = "MEMORY_SUMMARY_INTERVAL"
-	EnvMemoryMaxContextMessages = "MEMORY_MAX_CONTEXT_MESSAGES"
-	EnvMemoryMaxSummaryContext  = "MEMORY_MAX_SUMMARY_CONTEXT"
+	EnvMemoryEnabled           = "MEMORY_ENABLED"
+	EnvMemoryOllamaURL         = "MEMORY_OLLAMA_URL"
+	EnvMemoryEmbeddingModel    = "MEMORY_EMBEDDING_MODEL"
+	EnvMemorySummaryModel      = "MEMORY_SUMMARY_MODEL"
+	EnvMemoryBufferThreshold   = "MEMORY_BUFFER_THRESHOLD"
+	EnvMemorySummaryInterval   = "MEMORY_SUMMARY_INTERVAL"
+	EnvMemoryMaxSummaryContext = "MEMORY_MAX_SUMMARY_CONTEXT"
 
 	// Emoji
 	EnvEmojiCacheTTLMinutes = "EMOJI_CACHE_TTL_MINUTES"

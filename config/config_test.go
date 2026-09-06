@@ -307,7 +307,6 @@ func TestValidation(t *testing.T) {
 					BufferThreshold:        10,
 					SummaryInterval:        1 * time.Hour,
 					SummaryIntervalSeconds: 3600,
-					MaxContextMessages:     5,
 					MaxSummaryContext:      3,
 				},
 				Emoji:     EmojiConfig{CacheTTLMinutes: 60},
@@ -643,7 +642,6 @@ func TestMemorySummaryProviderValidation(t *testing.T) {
 			BufferThreshold:        10,
 			SummaryInterval:        1 * time.Hour,
 			SummaryIntervalSeconds: 3600,
-			MaxContextMessages:     5,
 			MaxSummaryContext:      3,
 		}
 	}
@@ -941,4 +939,16 @@ ai:
 
 func containsString(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || (len(s) > 0 && containsString(s[1:], substr)) || s[:len(substr)] == substr)
+}
+
+func TestMemoryConfigNoMaxContextMessages(t *testing.T) {
+	// max_context_messages was removed; loading a config that still contains
+	// the key must not fail (unknown YAML keys are ignored), and the parsed
+	// MemoryConfig must have no MaxContextMessages field to populate.
+	cfg := &Config{}
+	if err := cfg.Memory.validate(&cfg.AI); err != nil {
+		t.Fatalf("disabled memory should pass validation: %v", err)
+	}
+	// Compile-time proof the field no longer exists:
+	// cfg.Memory.MaxContextMessages would fail to compile.
 }

@@ -42,7 +42,6 @@ type MemoryService struct {
 type ServiceConfig struct {
 	BufferThreshold        int
 	SummaryInterval        time.Duration
-	MaxContextMessages     int
 	MaxSummaryContext      int
 	MaxConcurrentSummaries int           // Max simultaneous summarizations (default 2)
 	SummarizationTimeout   time.Duration // Per-summarization timeout (default 60s)
@@ -53,7 +52,6 @@ func DefaultServiceConfig() ServiceConfig {
 	return ServiceConfig{
 		BufferThreshold:        10,            // Summarize after 10 messages
 		SummaryInterval:        1 * time.Hour, // Minimum 1 hour between summaries
-		MaxContextMessages:     5,             // Include last 5 messages in context
 		MaxSummaryContext:      3,             // Include top 3 relevant summaries
 		MaxConcurrentSummaries: 2,
 		SummarizationTimeout:   60 * time.Second,
@@ -70,9 +68,6 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 	}
 	if config.SummaryInterval <= 0 {
 		config.SummaryInterval = DefaultServiceConfig().SummaryInterval
-	}
-	if config.MaxContextMessages <= 0 {
-		config.MaxContextMessages = DefaultServiceConfig().MaxContextMessages
 	}
 	if config.MaxSummaryContext <= 0 {
 		config.MaxSummaryContext = DefaultServiceConfig().MaxSummaryContext
@@ -92,7 +87,6 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 		summarizer:           summarizer,
 		bufferThreshold:      config.BufferThreshold,
 		summaryInterval:      config.SummaryInterval,
-		maxContextMessages:   config.MaxContextMessages,
 		maxSummaryContext:    config.MaxSummaryContext,
 		semaphore:            make(chan struct{}, config.MaxConcurrentSummaries),
 		closeCtx:             closeCtx,
@@ -425,7 +419,6 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 
 	context := &MemoryContext{
 		Summaries:       []SummaryContext{},
-		RecentMessages:  []string{},
 		ConfidenceScore: 0.0,
 	}
 
@@ -469,11 +462,13 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 						zap.String("guild_id", guildID),
 						zap.Error(err))
 				}
-			} else if logger.IsDebugMode() {
-				logger.Debug("Memory vector search completed",
-					zap.String("user_id", userID),
-					zap.String("guild_id", guildID),
-					zap.Int("summary_count", len(summaries)))
+			} else {
+				if logger.IsDebugMode() {
+					logger.Debug("Memory vector search completed",
+						zap.String("user_id", userID),
+						zap.String("guild_id", guildID),
+						zap.Int("summary_count", len(summaries)))
+				}
 				for _, summary := range summaries {
 					context.Summaries = append(context.Summaries, SummaryContext{
 						Content:   summary.Content,
@@ -505,14 +500,6 @@ func (s *MemoryService) GetMemoryContext(ctx context.Context, userID, guildID, c
 				CreatedAt: mostRecent.CreatedAt,
 				Relevance: 0.5, // Default relevance for fallback
 			})
-		}
-	}
-
-	// Get recent messages
-	recentMessages, err := s.repo.GetRecentMessages(ctx, userID, guildID, s.maxContextMessages)
-	if err == nil {
-		for _, msg := range recentMessages {
-			context.RecentMessages = append(context.RecentMessages, emoji.NormalizeDiscordEmojiShortcodes(msg.Content))
 		}
 	}
 

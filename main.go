@@ -251,10 +251,9 @@ func main() {
 
 				// Configure memory service from central config
 				memoryServiceConfig := memory.ServiceConfig{
-					BufferThreshold:    cfg.Memory.BufferThreshold,
-					SummaryInterval:    cfg.Memory.SummaryInterval,
-					MaxContextMessages: cfg.Memory.MaxContextMessages,
-					MaxSummaryContext:  cfg.Memory.MaxSummaryContext,
+					BufferThreshold:   cfg.Memory.BufferThreshold,
+					SummaryInterval:   cfg.Memory.SummaryInterval,
+					MaxSummaryContext: cfg.Memory.MaxSummaryContext,
 				}
 
 				memoryService = memory.NewService(memoryRepo, embeddingProvider, summarizer, memoryServiceConfig)

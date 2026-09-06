@@ -164,17 +164,16 @@ const (
 // Note: SummaryInterval is stored as a duration internally but parsed from
 // seconds in YAML (summary_interval_seconds).
 type MemoryConfig struct {
-	Enabled            bool          `yaml:"enabled"`
-	OllamaURL          string        `yaml:"ollama_url"`
-	EmbeddingModel     string        `yaml:"embedding_model"`
-	SummaryProvider    string        `yaml:"summary_provider"`
-	SummaryModel       string        `yaml:"summary_model"`
-	SummaryAPIKey      string        `yaml:"summary_api_key"`
-	BufferThreshold    int           `yaml:"buffer_threshold"`
-	RetentionDays      int           `yaml:"retention_days"` // 0 = disabled
-	SummaryInterval    time.Duration `yaml:"-"`              // Set from SummaryIntervalSeconds after parsing
-	MaxContextMessages int           `yaml:"max_context_messages"`
-	MaxSummaryContext  int           `yaml:"max_summary_context"`
+	Enabled           bool          `yaml:"enabled"`
+	OllamaURL         string        `yaml:"ollama_url"`
+	EmbeddingModel    string        `yaml:"embedding_model"`
+	SummaryProvider   string        `yaml:"summary_provider"`
+	SummaryModel      string        `yaml:"summary_model"`
+	SummaryAPIKey     string        `yaml:"summary_api_key"`
+	BufferThreshold   int           `yaml:"buffer_threshold"`
+	RetentionDays     int           `yaml:"retention_days"` // 0 = disabled
+	SummaryInterval   time.Duration `yaml:"-"`              // Set from SummaryIntervalSeconds after parsing
+	MaxSummaryContext int           `yaml:"max_summary_context"`
 
 	// YAML field for duration value (seconds)
 	SummaryIntervalSeconds int `yaml:"summary_interval_seconds"`
@@ -295,7 +294,6 @@ func DefaultConfig() *Config {
 			BufferThreshold:        10,
 			RetentionDays:          0,
 			SummaryInterval:        1 * time.Hour,
-			MaxContextMessages:     5,
 			MaxSummaryContext:      3,
 			SummaryIntervalSeconds: 3600, // 1 hour
 		},

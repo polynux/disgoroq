@@ -126,10 +126,9 @@ type GuildMemorySettings struct {
 	SummaryInterval time.Duration
 }
 
-// MemoryContext contains summaries and recent messages for AI context
+// MemoryContext contains summaries for AI context
 type MemoryContext struct {
 	Summaries       []SummaryContext
-	RecentMessages  []string
 	ConfidenceScore float64
 }
 

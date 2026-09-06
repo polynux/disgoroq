@@ -430,10 +430,9 @@ func TestService_BufferMessage_RealIDs(t *testing.T) {
 
 func TestService_SummarizationTrigger(t *testing.T) {
 	config := ServiceConfig{
-		BufferThreshold:    3, // Trigger after 3 messages
-		SummaryInterval:    1 * time.Hour,
-		MaxContextMessages: 5,
-		MaxSummaryContext:  3,
+		BufferThreshold:   3, // Trigger after 3 messages
+		SummaryInterval:   1 * time.Hour,
+		MaxSummaryContext: 3,
 	}
 
 	repo := newMockRepository()
@@ -532,13 +531,9 @@ func TestService_GetMemoryContext(t *testing.T) {
 		t.Fatal("expected memory context, got nil")
 	}
 
-	// Should have summaries and recent messages
+	// Should have summaries
 	if len(context.Summaries) == 0 {
 		t.Error("expected at least one summary in context")
-	}
-
-	if len(context.RecentMessages) == 0 {
-		t.Error("expected recent messages in context")
 	}
 
 	if context.ConfidenceScore < 0 || context.ConfidenceScore > 1 {
@@ -573,20 +568,13 @@ func TestService_GetMemoryContext_NormalizesLegacyEmojiMarkup(t *testing.T) {
 	if memoryContext.Summaries[0].Content != "Résumé avec :criminel:" {
 		t.Fatalf("Expected normalized summary content, got %q", memoryContext.Summaries[0].Content)
 	}
-	if len(memoryContext.RecentMessages) != 1 {
-		t.Fatalf("Expected 1 recent message, got %d", len(memoryContext.RecentMessages))
-	}
-	if memoryContext.RecentMessages[0] != "Ancien :dance: message" {
-		t.Fatalf("Expected normalized recent message, got %q", memoryContext.RecentMessages[0])
-	}
 }
 
 func TestService_ConcurrentSummarization(t *testing.T) {
 	config := ServiceConfig{
-		BufferThreshold:    2,
-		SummaryInterval:    100 * time.Millisecond, // Short interval for testing
-		MaxContextMessages: 5,
-		MaxSummaryContext:  3,
+		BufferThreshold:   2,
+		SummaryInterval:   100 * time.Millisecond, // Short interval for testing
+		MaxSummaryContext: 3,
 	}
 
 	repo := newMockRepository()
@@ -744,10 +732,9 @@ func TestService_ClearUserMemory(t *testing.T) {
 
 func TestService_SummaryInterval(t *testing.T) {
 	config := ServiceConfig{
-		BufferThreshold:    2,
-		SummaryInterval:    1 * time.Second, // 1 second interval for testing
-		MaxContextMessages: 5,
-		MaxSummaryContext:  3,
+		BufferThreshold:   2,
+		SummaryInterval:   1 * time.Second, // 1 second interval for testing
+		MaxSummaryContext: 3,
 	}
 
 	repo := newMockRepository()
@@ -1070,4 +1057,42 @@ func (m *countingAIService) Chat(ctx context.Context, messages []Message, model 
 		m.onChatEnd()
 	}
 	return "summary text", nil
+}
+
+// TestService_GetMemoryContext_VectorUsedWithoutDebug verifies that vector
+// search results populate the context even when debug logging is off (the
+// results were previously appended only inside a debug branch).
+func TestService_GetMemoryContext_VectorUsedWithoutDebug(t *testing.T) {
+	config := DefaultServiceConfig()
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := newMockSummarizer()
+	service := NewService(repo, embeddings, summarizer, config)
+
+	ctx := context.Background()
+	userID := "user123"
+	guildID := "guild456"
+
+	// Two summaries with valid 768-dim embeddings so the vector path runs
+	for i := 0; i < 2; i++ {
+		repo.CreateSummary(ctx, &ConversationSummary{
+			UserID:    userID,
+			GuildID:   guildID,
+			Content:   fmt.Sprintf("Summary %d", i),
+			Embedding: make([]float32, 768),
+			CreatedAt: time.Now().Add(-time.Duration(i) * time.Hour),
+		})
+	}
+
+	// mockRepository.FindRelevantSummaries returns embedded summaries
+	memoryCtx, err := service.GetMemoryContext(ctx, userID, guildID, "query about things")
+	if err != nil {
+		t.Fatalf("GetMemoryContext: %v", err)
+	}
+	if memoryCtx == nil {
+		t.Fatal("expected memory context, got nil")
+	}
+	if len(memoryCtx.Summaries) == 0 {
+		t.Fatal("expected summaries in context from vector/fallback path")
+	}
 }
