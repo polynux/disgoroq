@@ -272,6 +272,32 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 			},
 			userMemoryHandler(memoryService),
 		)
+
+		registry.AddCommand(
+			discord.SlashCommandCreate{
+				Name:                     "memory",
+				Description:              "Manage conversation memory for this guild (admin only)",
+				DefaultMemberPermissions: omit.NewPtr(defaultMemberPermissions),
+				Options: []discord.ApplicationCommandOption{
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "toggle",
+						Description: "Enable or disable conversation memory for this guild",
+					},
+					discord.ApplicationCommandOptionSubCommand{
+						Name:        "forget",
+						Description: "Clear all stored memory for a user in this guild",
+						Options: []discord.ApplicationCommandOption{
+							discord.ApplicationCommandOptionUser{
+								Name:        "user",
+								Description: "The user whose memory should be cleared",
+								Required:    true,
+							},
+						},
+					},
+				},
+			},
+			memoryCommandHandler(repo, memoryService),
+		)
 	}
 
 	registry.AddCommand(
@@ -852,4 +878,63 @@ func getDefaultPrompt(botNick string) string {
 		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
 	}
 	return result.String()
+}
+
+func memoryCommandHandler(repo *database.Repository, memoryService memory.Service) func(e *events.ApplicationCommandInteractionCreate) {
+	return func(e *events.ApplicationCommandInteractionCreate) {
+		data := e.SlashCommandInteractionData()
+		subcommandName := ""
+		if data.SubCommandName != nil {
+			subcommandName = *data.SubCommandName
+		}
+
+		guildID := getGuildID(e)
+		if guildID == "" {
+			_ = e.CreateMessage(discord.MessageCreate{Content: "❌ This command must be used in a server."})
+			return
+		}
+
+		switch subcommandName {
+		case "toggle":
+			handleMemoryToggle(e, repo, guildID)
+		case "forget":
+			handleMemoryForget(e, memoryService, guildID)
+		default:
+			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand. Use `/memory toggle` or `/memory forget`."})
+		}
+	}
+}
+
+func handleMemoryToggle(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
+	ctx := stdcontext.Background()
+	current := repo.GetMemoryEnabled(ctx, guildID)
+	newValue := !current
+	if err := repo.SetMemoryEnabled(ctx, guildID, newValue); err != nil {
+		_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(),
+			discord.MessageCreate{Content: fmt.Sprintf("❌ Failed to update memory setting: %v", err)})
+		return
+	}
+	state := "disabled"
+	if newValue {
+		state = "enabled"
+	}
+	_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("🧠 Conversation memory is now **%s** for this server.", state)})
+}
+
+func handleMemoryForget(e *events.ApplicationCommandInteractionCreate, memoryService memory.Service, guildID string) {
+	data := e.SlashCommandInteractionData()
+	userOpt, ok := data.Option("user")
+	if !ok {
+		_ = e.CreateMessage(discord.MessageCreate{Content: "Please specify a user to forget!"})
+		return
+	}
+
+	userID := userOpt.Snowflake()
+	ctx := stdcontext.Background()
+	if err := memoryService.ClearUserMemory(ctx, userID.String(), guildID); err != nil {
+		_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(),
+			discord.MessageCreate{Content: fmt.Sprintf("❌ Failed to clear memory for <@%s>: %v", userID, err)})
+		return
+	}
+	_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("🧹 Cleared all stored memory for <@%s>.", userID)})
 }

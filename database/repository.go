@@ -514,3 +514,29 @@ func (r *Repository) DeleteDiscordMessagesOlderThan(ctx context.Context, cutoff 
 func (r *Repository) DeleteAttachmentCacheOlderThan(ctx context.Context, cutoff int64) (int64, error) {
 	return r.queries.DeleteAttachmentCacheOlderThan(ctx, cutoff)
 }
+
+// GetMemoryEnabled returns whether conversation memory is enabled for a guild.
+// Defaults to true when the setting is absent.
+func (r *Repository) GetMemoryEnabled(ctx context.Context, guildID string) bool {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    "memory_enabled",
+		GuildID: guildID,
+	})
+	if err != nil {
+		return true // Default to enabled
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+// SetMemoryEnabled sets whether conversation memory is enabled for a guild.
+func (r *Repository) SetMemoryEnabled(ctx context.Context, guildID string, enabled bool) error {
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "memory_enabled",
+		Value:   strconv.FormatBool(enabled),
+	})
+}

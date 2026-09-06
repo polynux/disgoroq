@@ -713,3 +713,37 @@ func TestRepository_DeleteAttachmentCacheOlderThan(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), deleted)
 }
+
+func TestRepository_MemoryEnabled_Default(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	// Default is enabled when the key is absent
+	if !repo.GetMemoryEnabled(ctx, "guild-x") {
+		t.Error("expected memory to default to enabled")
+	}
+}
+
+func TestRepository_MemoryEnabled_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	if err := repo.SetMemoryEnabled(ctx, "guild-y", false); err != nil {
+		t.Fatalf("SetMemoryEnabled: %v", err)
+	}
+	if repo.GetMemoryEnabled(ctx, "guild-y") {
+		t.Error("expected memory to be disabled after SetMemoryEnabled(false)")
+	}
+
+	if err := repo.SetMemoryEnabled(ctx, "guild-y", true); err != nil {
+		t.Fatalf("SetMemoryEnabled: %v", err)
+	}
+	if !repo.GetMemoryEnabled(ctx, "guild-y") {
+		t.Error("expected memory to be enabled after SetMemoryEnabled(true)")
+	}
+
+	// Other guilds unaffected
+	if !repo.GetMemoryEnabled(ctx, "guild-z") {
+		t.Error("expected other guilds to keep default enabled")
+	}
+}

@@ -67,6 +67,10 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	if h.memoryService != nil && m.GuildID != nil {
 		go func() {
 			ctx := context.Background()
+			// Respect per-guild memory opt-out
+			if !h.repo.GetMemoryEnabled(ctx, m.GuildID.String()) {
+				return
+			}
 			authorName := m.Author.Username
 			if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
 				authorName = *m.Member.Nick
@@ -157,7 +161,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	// Build memory context if available
 	var memoryContext string
-	if h.memoryService != nil {
+	if h.memoryService != nil && h.repo.GetMemoryEnabled(ctx, m.GuildID.String()) {
 		memoryCtx, err := h.memoryService.GetMemoryContext(ctx, m.Author.ID.String(), m.GuildID.String(), m.Content)
 		if err == nil && memoryCtx != nil && len(memoryCtx.Summaries) > 0 {
 			memoryContext = "\n\n**Contexte de conversation:**\n"
