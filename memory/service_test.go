@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -136,11 +137,15 @@ func (m *mockRepository) UpdateSummary(ctx context.Context, summary *Summary) er
 	for i, s := range m.summaries {
 		if s.ID == summary.ID {
 			m.summaries[i] = &ConversationSummary{
-				ID:        summary.ID,
-				UserID:    summary.UserID,
-				GuildID:   summary.GuildID,
-				Content:   summary.SummaryText,
-				CreatedAt: summary.CreatedAt,
+				ID:             summary.ID,
+				UserID:         summary.UserID,
+				GuildID:        summary.GuildID,
+				Content:        summary.SummaryText,
+				MessageCount:   summary.MessageCount,
+				StartMessageID: summary.StartMessageID,
+				EndMessageID:   summary.EndMessageID,
+				Embedding:      summary.Embedding,
+				CreatedAt:      summary.CreatedAt,
 			}
 		}
 	}
@@ -777,9 +782,114 @@ func TestService_SummaryInterval(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond) // Wait for third summarization
 
-	// Should now have 2 summaries
+	// Incremental summarization updates the existing row in place, so still
+	// only 1 summary — but with a cumulative message count (2 + 2).
 	summaries3, _ := repo.GetSummariesByUserGuild(ctx, userID, guildID)
-	if len(summaries3) != 2 {
-		t.Errorf("expected 2 summaries after interval passed, got %d", len(summaries3))
+	if len(summaries3) != 1 {
+		t.Errorf("expected 1 summary (updated in place), got %d", len(summaries3))
+	}
+	if summaries3[0].MessageCount != 4 {
+		t.Errorf("expected cumulative message_count 4, got %d", summaries3[0].MessageCount)
+	}
+}
+
+// TestService_SummaryMetadata verifies that summaries store the real
+// message count and ID range (TASK-002), and that incremental
+// summarization updates the existing row in place.
+func TestService_SummaryMetadata(t *testing.T) {
+	config := ServiceConfig{
+		BufferThreshold:   3,
+		SummaryInterval:   1 * time.Millisecond, // Effectively no restriction (0 resets to default)
+		MaxSummaryContext: 3,
+	}
+
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := newMockSummarizer()
+	service := NewService(repo, embeddings, summarizer, config)
+
+	ctx := context.Background()
+	userID := "user123"
+	guildID := "guild456"
+
+	// Buffer 3 messages with distinct Discord message IDs
+	for i := 0; i < 3; i++ {
+		err := service.BufferMessage(ctx, BufferMessageInput{
+			UserID:           userID,
+			GuildID:          guildID,
+			DiscordMessageID: fmt.Sprintf("discord_msg_%d", i+1),
+			Content:          "Message " + string(rune('A'+i)),
+			Timestamp:        time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("failed to buffer message %d: %v", i, err)
+		}
+	}
+
+	// Wait for async summarization
+	deadline := time.Now().Add(2 * time.Second)
+	var first *ConversationSummary
+	for time.Now().Before(deadline) {
+		summaries, _ := repo.GetSummariesByUserGuild(ctx, userID, guildID)
+		if len(summaries) == 1 {
+			first = summaries[0]
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if first == nil {
+		t.Fatal("expected 1 summary after first batch")
+	}
+	if first.MessageCount != 3 {
+		t.Errorf("expected message_count 3, got %d", first.MessageCount)
+	}
+	if first.StartMessageID != "discord_msg_1" {
+		t.Errorf("expected start_message_id discord_msg_1, got %q", first.StartMessageID)
+	}
+	if first.EndMessageID != "discord_msg_3" {
+		t.Errorf("expected end_message_id discord_msg_3, got %q", first.EndMessageID)
+	}
+
+	// Wait for the summary interval (1ms in test config) to elapse before
+	// buffering the second batch, otherwise the interval check skips it.
+	time.Sleep(5 * time.Millisecond)
+
+	// Buffer 3 more messages (to reach the threshold again): incremental
+	// summarization should update the same row with a cumulative count.
+	for i := 0; i < 3; i++ {
+		err := service.BufferMessage(ctx, BufferMessageInput{
+			UserID:           userID,
+			GuildID:          guildID,
+			DiscordMessageID: fmt.Sprintf("discord_msg_%d", i+4),
+			Content:          "More " + string(rune('A'+i)),
+			Timestamp:        time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("failed to buffer message %d: %v", i+4, err)
+		}
+	}
+
+	deadline = time.Now().Add(2 * time.Second)
+	var updated *ConversationSummary
+	for time.Now().Before(deadline) {
+		summaries, _ := repo.GetSummariesByUserGuild(ctx, userID, guildID)
+		if len(summaries) == 1 && summaries[0].MessageCount == 6 {
+			updated = summaries[0]
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if updated == nil {
+		t.Fatal("expected summary to be incrementally updated with cumulative count 6")
+	}
+	if updated.ID != first.ID {
+		t.Errorf("expected same summary row (ID %d) to be updated, got ID %d", first.ID, updated.ID)
+	}
+	if updated.MessageCount != 6 {
+		t.Errorf("expected cumulative message_count 6, got %d", updated.MessageCount)
+	}
+	if updated.EndMessageID != "discord_msg_6" {
+		t.Errorf("expected end_message_id discord_msg_6, got %q", updated.EndMessageID)
 	}
 }

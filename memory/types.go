@@ -100,13 +100,16 @@ type BufferMessageInput struct {
 
 // ConversationSummary represents a conversation summary with embedding
 type ConversationSummary struct {
-	ID        int64
-	UserID    string
-	GuildID   string
-	Content   string
-	Embedding []float32
-	Quality   float64
-	CreatedAt time.Time
+	ID             int64
+	UserID         string
+	GuildID        string
+	Content        string
+	MessageCount   int64
+	StartMessageID string
+	EndMessageID   string
+	Embedding      []float32
+	Quality        float64
+	CreatedAt      time.Time
 }
 
 // RelevantSummary contains a summary with similarity score

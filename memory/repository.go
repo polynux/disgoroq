@@ -346,13 +346,18 @@ func (r *repository) GetRecentMessages(ctx context.Context, userID, guildID stri
 
 func (r *repository) CreateSummary(ctx context.Context, summary *ConversationSummary) error {
 	s := &Summary{
-		GuildID:      summary.GuildID,
-		UserID:       summary.UserID,
-		SummaryText:  summary.Content,
-		CreatedAt:    summary.CreatedAt,
-		UpdatedAt:    summary.CreatedAt,
-		Embedding:    summary.Embedding,
-		MessageCount: 1,
+		GuildID:        summary.GuildID,
+		UserID:         summary.UserID,
+		SummaryText:    summary.Content,
+		MessageCount:   summary.MessageCount,
+		StartMessageID: summary.StartMessageID,
+		EndMessageID:   summary.EndMessageID,
+		CreatedAt:      summary.CreatedAt,
+		UpdatedAt:      time.Now(),
+		Embedding:      summary.Embedding,
+	}
+	if s.MessageCount <= 0 {
+		s.MessageCount = 1
 	}
 	return r.InsertSummary(ctx, s)
 }
@@ -364,12 +369,15 @@ func (r *repository) GetLatestSummary(ctx context.Context, userID, guildID strin
 	}
 
 	return &ConversationSummary{
-		ID:        summary.ID,
-		UserID:    summary.UserID,
-		GuildID:   summary.GuildID,
-		Content:   summary.SummaryText,
-		Embedding: summary.Embedding,
-		CreatedAt: summary.CreatedAt,
+		ID:             summary.ID,
+		UserID:         summary.UserID,
+		GuildID:        summary.GuildID,
+		Content:        summary.SummaryText,
+		MessageCount:   summary.MessageCount,
+		StartMessageID: summary.StartMessageID,
+		EndMessageID:   summary.EndMessageID,
+		Embedding:      summary.Embedding,
+		CreatedAt:      summary.CreatedAt,
 	}, nil
 }
 
@@ -383,12 +391,15 @@ func (r *repository) GetSummariesByUserGuild(ctx context.Context, userID, guildI
 	for _, s := range summaries {
 		if s.UserID == userID {
 			result = append(result, &ConversationSummary{
-				ID:        s.ID,
-				UserID:    s.UserID,
-				GuildID:   s.GuildID,
-				Content:   s.SummaryText,
-				Embedding: s.Embedding,
-				CreatedAt: s.CreatedAt,
+				ID:             s.ID,
+				UserID:         s.UserID,
+				GuildID:        s.GuildID,
+				Content:        s.SummaryText,
+				MessageCount:   s.MessageCount,
+				StartMessageID: s.StartMessageID,
+				EndMessageID:   s.EndMessageID,
+				Embedding:      s.Embedding,
+				CreatedAt:      s.CreatedAt,
 			})
 		}
 	}
@@ -435,12 +446,15 @@ func (r *repository) FindRelevantSummaries(ctx context.Context, userID, guildID 
 	for i, result := range results {
 		summaries[i] = &RelevantSummary{
 			ConversationSummary: &ConversationSummary{
-				ID:        result.Summary.ID,
-				UserID:    result.Summary.UserID,
-				GuildID:   result.Summary.GuildID,
-				Content:   result.Summary.SummaryText,
-				Embedding: result.Summary.Embedding,
-				CreatedAt: result.Summary.CreatedAt,
+				ID:             result.Summary.ID,
+				UserID:         result.Summary.UserID,
+				GuildID:        result.Summary.GuildID,
+				Content:        result.Summary.SummaryText,
+				MessageCount:   result.Summary.MessageCount,
+				StartMessageID: result.Summary.StartMessageID,
+				EndMessageID:   result.Summary.EndMessageID,
+				Embedding:      result.Summary.Embedding,
+				CreatedAt:      result.Summary.CreatedAt,
 			},
 			Similarity: float64(2.0 - result.Distance),
 		}

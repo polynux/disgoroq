@@ -255,15 +255,24 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 
 	// Store the summary
 	summary := &ConversationSummary{
-		UserID:    userID,
-		GuildID:   guildID,
-		Content:   result.Summary.SummaryText,
-		Embedding: summaryEmbedding,
-		Quality:   0.8, // Default quality score
-		CreatedAt: time.Now(),
+		UserID:         userID,
+		GuildID:        guildID,
+		Content:        result.Summary.SummaryText,
+		MessageCount:   result.Summary.MessageCount,
+		StartMessageID: result.Summary.StartMessageID,
+		EndMessageID:   result.Summary.EndMessageID,
+		Embedding:      summaryEmbedding,
+		Quality:        0.8, // Default quality score
+		CreatedAt:      result.Summary.CreatedAt,
 	}
 
-	if err := s.repo.CreateSummary(ctx, summary); err != nil {
+	if existingSummary != nil {
+		// Update the existing summary row in place (incremental summarization)
+		summary.ID = existingSummary.ID
+		if err := s.repo.UpdateSummary(ctx, conversationSummaryToSummary(summary)); err != nil {
+			return fmt.Errorf("failed to update summary: %w", err)
+		}
+	} else if err := s.repo.CreateSummary(ctx, summary); err != nil {
 		return fmt.Errorf("failed to store summary: %w", err)
 	}
 
@@ -313,13 +322,16 @@ func conversationSummaryToSummary(summary *ConversationSummary) *Summary {
 		return nil
 	}
 	return &Summary{
-		ID:          summary.ID,
-		GuildID:     summary.GuildID,
-		UserID:      summary.UserID,
-		SummaryText: summary.Content,
-		CreatedAt:   summary.CreatedAt,
-		UpdatedAt:   summary.CreatedAt,
-		Embedding:   summary.Embedding,
+		ID:             summary.ID,
+		GuildID:        summary.GuildID,
+		UserID:         summary.UserID,
+		SummaryText:    summary.Content,
+		MessageCount:   summary.MessageCount,
+		StartMessageID: summary.StartMessageID,
+		EndMessageID:   summary.EndMessageID,
+		CreatedAt:      summary.CreatedAt,
+		UpdatedAt:      time.Now(),
+		Embedding:      summary.Embedding,
 	}
 }
 
@@ -557,12 +569,15 @@ func (s *MemoryService) ForceSummarize(ctx context.Context, userID, guildID stri
 
 	// Store the summary
 	summary := &ConversationSummary{
-		UserID:    userID,
-		GuildID:   guildID,
-		Content:   result.Summary.SummaryText,
-		Embedding: summaryEmbedding,
-		Quality:   0.8,
-		CreatedAt: time.Now(),
+		UserID:         userID,
+		GuildID:        guildID,
+		Content:        result.Summary.SummaryText,
+		MessageCount:   result.Summary.MessageCount,
+		StartMessageID: result.Summary.StartMessageID,
+		EndMessageID:   result.Summary.EndMessageID,
+		Embedding:      summaryEmbedding,
+		Quality:        0.8,
+		CreatedAt:      result.Summary.CreatedAt,
 	}
 
 	if err := s.repo.CreateSummary(ctx, summary); err != nil {
