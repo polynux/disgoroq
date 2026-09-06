@@ -209,23 +209,31 @@ memory:
   # Enable conversation memory service
   enabled: true
 
-  # Ollama URL for embeddings
+  # Ollama URL for embeddings (and summarization when summary_provider is ollama)
   ollama_url: "http://localhost:11434"
 
   # Embedding model for vector search
   embedding_model: "nomic-embed-text"
 
-  # Model for summarization
+  # Provider used for summarization: ollama, groq, openrouter, or opencode.
+  # The provider chain used for chat replies overrides the requested model,
+  # so summarization uses this dedicated provider to honor summary_model.
+  # For groq/openrouter, an api key is taken from summary_api_key or the
+  # matching ai.<provider>.api_key.
+  summary_provider: "ollama"
+
+  # Model for summarization (passed as-is to summary_provider)
   summary_model: "llama3-8b-8192"
+
+  # Number of days to retain message_buffer, discord_messages and
+  # attachment_cache rows. Summaries are never deleted. 0 disables cleanup.
+  retention_days: 0
 
   # Number of messages to buffer before summarizing
   buffer_threshold: 10
 
   # Minimum interval between summaries in seconds
   summary_interval_seconds: 3600
-
-  # Maximum recent messages to include in context
-  max_context_messages: 5
 
   # Maximum number of summaries to include in context
   max_summary_context: 3
