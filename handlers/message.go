@@ -67,7 +67,20 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	if h.memoryService != nil && m.GuildID != nil {
 		go func() {
 			ctx := context.Background()
-			if err := h.memoryService.BufferMessage(ctx, m.Author.ID.String(), m.GuildID.String(), m.Content); err != nil {
+			authorName := m.Author.Username
+			if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
+				authorName = *m.Member.Nick
+			}
+			input := memory.BufferMessageInput{
+				UserID:           m.Author.ID.String(),
+				GuildID:          m.GuildID.String(),
+				ChannelID:        m.ChannelID.String(),
+				DiscordMessageID: m.ID.String(),
+				AuthorName:       authorName,
+				Content:          m.Content,
+				Timestamp:        m.CreatedAt,
+			}
+			if err := h.memoryService.BufferMessage(ctx, input); err != nil {
 				logger.Warn("Failed to buffer message for memory",
 					zap.String("user_id", m.Author.ID.String()),
 					zap.String("guild_id", m.GuildID.String()),

@@ -76,13 +76,26 @@ type MemoryStats struct {
 
 // MessageBufferEntry represents a message waiting to be summarized
 type MessageBufferEntry struct {
-	ID        int64
-	UserID    string
-	GuildID   string
-	Content   string
-	Embedding []float32
-	CreatedAt time.Time
-	MessageID string // Optional: unique identifier for the message (auto-generated if empty)
+	ID         int64
+	UserID     string
+	GuildID    string
+	ChannelID  string
+	AuthorNick string
+	Content    string
+	Embedding  []float32
+	CreatedAt  time.Time
+	MessageID  string // Optional: unique identifier for the message (auto-generated if empty)
+}
+
+// BufferMessageInput carries everything needed to buffer a Discord message
+type BufferMessageInput struct {
+	UserID           string
+	GuildID          string
+	ChannelID        string
+	DiscordMessageID string
+	AuthorName       string
+	Content          string
+	Timestamp        time.Time
 }
 
 // ConversationSummary represents a conversation summary with embedding
@@ -127,7 +140,7 @@ type SummaryContext struct {
 // Service defines the core memory service interface
 type Service interface {
 	// Message buffering
-	BufferMessage(ctx context.Context, userID, guildID, content string) error
+	BufferMessage(ctx context.Context, input BufferMessageInput) error
 
 	// Context building
 	GetMemoryContext(ctx context.Context, userID, guildID, currentMessage string) (*MemoryContext, error)

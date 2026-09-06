@@ -278,7 +278,6 @@ func TestService_BufferMessage(t *testing.T) {
 		userID          string
 		guildID         string
 		content         string
-		embeddingErr    error
 		createBufferErr error
 		expectError     bool
 	}{
@@ -287,13 +286,6 @@ func TestService_BufferMessage(t *testing.T) {
 			userID:  "user123",
 			guildID: "guild456",
 			content: "Hello world",
-		},
-		{
-			name:         "embedding failure continues",
-			userID:       "user123",
-			guildID:      "guild456",
-			content:      "Hello world",
-			embeddingErr: errors.New("embedding failed"),
 		},
 		{
 			name:            "buffer creation failure",
@@ -311,13 +303,16 @@ func TestService_BufferMessage(t *testing.T) {
 			repo.createBufferErr = tt.createBufferErr
 
 			embeddings := newMockEmbeddingProvider()
-			embeddings.generateErr = tt.embeddingErr
-
 			summarizer := newMockSummarizer()
 
 			service := NewService(repo, embeddings, summarizer, DefaultServiceConfig())
 
-			err := service.BufferMessage(context.Background(), tt.userID, tt.guildID, tt.content)
+			err := service.BufferMessage(context.Background(), BufferMessageInput{
+				UserID:    tt.userID,
+				GuildID:   tt.guildID,
+				Content:   tt.content,
+				Timestamp: time.Now(),
+			})
 
 			if tt.expectError && err == nil {
 				t.Errorf("expected error but got none")
@@ -337,13 +332,38 @@ func TestService_BufferMessage(t *testing.T) {
 	}
 }
 
+// TestService_BufferMessage_NoEmbedding verifies that buffering a message
+// does not call the embedding provider (TASK-001: embeddings were computed
+// but discarded).
+func TestService_BufferMessage_NoEmbedding(t *testing.T) {
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := newMockSummarizer()
+	service := NewService(repo, embeddings, summarizer, DefaultServiceConfig())
+
+	err := service.BufferMessage(context.Background(), BufferMessageInput{
+		UserID:    "user123",
+		GuildID:   "guild456",
+		Content:   "Hello world",
+		Timestamp: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+}
+
 func TestService_BufferMessage_NormalizesDiscordEmojiMarkup(t *testing.T) {
 	repo := newMockRepository()
 	embeddings := newMockEmbeddingProvider()
 	summarizer := newMockSummarizer()
 	service := NewService(repo, embeddings, summarizer, DefaultServiceConfig())
 
-	err := service.BufferMessage(context.Background(), "user123", "guild456", "Salut <:criminel:1238422591547637800>!")
+	err := service.BufferMessage(context.Background(), BufferMessageInput{
+		UserID:    "user123",
+		GuildID:   "guild456",
+		Content:   "Salut <:criminel:1238422591547637800>!",
+		Timestamp: time.Now(),
+	})
 
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
@@ -353,6 +373,40 @@ func TestService_BufferMessage_NormalizesDiscordEmojiMarkup(t *testing.T) {
 	}
 	if repo.bufferEntries[0].Content != "Salut :criminel:!" {
 		t.Fatalf("Expected normalized emoji shortcode, got %q", repo.bufferEntries[0].Content)
+	}
+}
+
+// TestService_BufferMessage_RealIDs verifies that real Discord IDs (message,
+// channel) and the author name are persisted instead of synthetic values
+// (TASK-004).
+func TestService_BufferMessage_RealIDs(t *testing.T) {
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := newMockSummarizer()
+	service := NewService(repo, embeddings, summarizer, DefaultServiceConfig())
+
+	err := service.BufferMessage(context.Background(), BufferMessageInput{
+		UserID:           "user123",
+		GuildID:          "guild456",
+		ChannelID:        "chan789",
+		DiscordMessageID: "999888777",
+		AuthorName:       "Polynux",
+		Content:          "Salut !",
+		Timestamp:        time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	entry := repo.bufferEntries[0]
+	if entry.MessageID != "999888777" {
+		t.Errorf("Expected real Discord message ID, got %q", entry.MessageID)
+	}
+	if entry.ChannelID != "chan789" {
+		t.Errorf("Expected channel ID to be stored, got %q", entry.ChannelID)
+	}
+	if entry.AuthorNick != "Polynux" {
+		t.Errorf("Expected author nick to be stored, got %q", entry.AuthorNick)
 	}
 }
 
@@ -375,7 +429,7 @@ func TestService_SummarizationTrigger(t *testing.T) {
 
 	// Buffer first 2 messages - should not trigger summarization
 	for i := 0; i < 2; i++ {
-		err := service.BufferMessage(ctx, userID, guildID, "Message "+string(rune('A'+i)))
+		err := service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Message " + string(rune('A'+i)), Timestamp: time.Now()})
 		if err != nil {
 			t.Fatalf("failed to buffer message %d: %v", i, err)
 		}
@@ -396,7 +450,7 @@ func TestService_SummarizationTrigger(t *testing.T) {
 	}
 
 	// Buffer the 3rd message - should trigger summarization
-	err := service.BufferMessage(ctx, userID, guildID, "Message C")
+	err := service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Message C", Timestamp: time.Now()})
 	if err != nil {
 		t.Fatalf("failed to buffer message: %v", err)
 	}
@@ -532,7 +586,7 @@ func TestService_ConcurrentSummarization(t *testing.T) {
 		wg.Add(1)
 		go func(msgNum int) {
 			defer wg.Done()
-			err := service.BufferMessage(ctx, userID, guildID, "Concurrent message "+string(rune('A'+msgNum)))
+			err := service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Concurrent message " + string(rune('A'+msgNum)), Timestamp: time.Now()})
 			if err != nil {
 				t.Errorf("failed to buffer message %d: %v", msgNum, err)
 			}
@@ -689,7 +743,7 @@ func TestService_SummaryInterval(t *testing.T) {
 
 	// Trigger first summarization
 	for i := 0; i < 2; i++ {
-		service.BufferMessage(ctx, userID, guildID, "Message "+string(rune('A'+i)))
+		service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Message " + string(rune('A'+i)), Timestamp: time.Now()})
 	}
 
 	time.Sleep(200 * time.Millisecond) // Wait for first summarization
@@ -702,7 +756,7 @@ func TestService_SummaryInterval(t *testing.T) {
 
 	// Try to trigger another summarization immediately
 	for i := 0; i < 2; i++ {
-		service.BufferMessage(ctx, userID, guildID, "Message "+string(rune('B'+i)))
+		service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Message " + string(rune('B'+i)), Timestamp: time.Now()})
 	}
 
 	time.Sleep(200 * time.Millisecond) // Wait for potential second summarization
@@ -718,7 +772,7 @@ func TestService_SummaryInterval(t *testing.T) {
 
 	// Try to trigger another summarization
 	for i := 0; i < 2; i++ {
-		service.BufferMessage(ctx, userID, guildID, "Message "+string(rune('C'+i)))
+		service.BufferMessage(ctx, BufferMessageInput{UserID: userID, GuildID: guildID, Content: "Message " + string(rune('C'+i)), Timestamp: time.Now()})
 	}
 
 	time.Sleep(200 * time.Millisecond) // Wait for third summarization

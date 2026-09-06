@@ -79,39 +79,36 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 }
 
 // BufferMessage stores a message in the buffer and triggers summarization if needed
-func (s *MemoryService) BufferMessage(ctx context.Context, userID, guildID, content string) error {
-	content = emoji.NormalizeDiscordEmojiShortcodes(content)
+func (s *MemoryService) BufferMessage(ctx context.Context, input BufferMessageInput) error {
+	content := emoji.NormalizeDiscordEmojiShortcodes(input.Content)
 
 	if logger.IsDebugMode() {
 		logger.Debug("Buffering memory message",
-			zap.String("user_id", userID),
-			zap.String("guild_id", guildID))
+			zap.String("user_id", input.UserID),
+			zap.String("guild_id", input.GuildID),
+			zap.String("channel_id", input.ChannelID))
 	}
 
-	// Create embedding for the message
-	embedding, err := s.embeddings.GenerateEmbedding(ctx, content)
-	if err != nil {
-		// Log error but continue without embedding
-		if logger.IsDebugMode() {
-			logger.Debug("Failed to generate memory embedding for message",
-				zap.Error(err),
-				zap.String("user_id", userID),
-				zap.String("guild_id", guildID))
-		}
-		embedding = nil
+	// Use the real Discord message ID; fall back to a synthetic one only when absent
+	messageID := input.DiscordMessageID
+	if messageID == "" {
+		messageID = fmt.Sprintf("msg_%d_%s_%d", time.Now().UnixNano(), input.UserID, time.Now().Nanosecond())
 	}
 
-	// Generate unique message ID using multiple entropy sources
-	messageID := fmt.Sprintf("msg_%d_%s_%d", time.Now().UnixNano(), userID, time.Now().Nanosecond())
+	timestamp := input.Timestamp
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
 
 	// Store the message in buffer
 	message := &MessageBufferEntry{
-		UserID:    userID,
-		GuildID:   guildID,
-		Content:   content,
-		Embedding: embedding,
-		CreatedAt: time.Now(),
-		MessageID: messageID,
+		UserID:     input.UserID,
+		GuildID:    input.GuildID,
+		Content:    content,
+		CreatedAt:  timestamp,
+		MessageID:  messageID,
+		AuthorNick: input.AuthorName,
+		ChannelID:  input.ChannelID,
 	}
 
 	if err := s.repo.CreateMessageBufferEntry(ctx, message); err != nil {
@@ -120,13 +117,14 @@ func (s *MemoryService) BufferMessage(ctx context.Context, userID, guildID, cont
 
 	if logger.IsDebugMode() {
 		logger.Debug("Buffered memory message",
-			zap.String("user_id", userID),
-			zap.String("guild_id", guildID),
+			zap.String("user_id", input.UserID),
+			zap.String("guild_id", input.GuildID),
+			zap.String("channel_id", input.ChannelID),
 			zap.String("message_id", messageID))
 	}
 
 	// Check if we should trigger summarization
-	go s.checkAndSummarizeAsync(userID, guildID)
+	go s.checkAndSummarizeAsync(input.UserID, input.GuildID)
 
 	return nil
 }
@@ -292,12 +290,19 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 func messagesToBufferedMessages(messages []*MessageBufferEntry) []BufferedMessage {
 	result := make([]BufferedMessage, len(messages))
 	for i, msg := range messages {
+		nick := msg.AuthorNick
+		if nick == "" {
+			nick = msg.UserID
+		}
 		result[i] = BufferedMessage{
-			ID:        msg.ID,
-			GuildID:   msg.GuildID,
-			UserID:    msg.UserID,
-			Content:   emoji.NormalizeDiscordEmojiShortcodes(msg.Content),
-			Timestamp: msg.CreatedAt,
+			ID:         msg.ID,
+			GuildID:    msg.GuildID,
+			ChannelID:  msg.ChannelID,
+			MessageID:  msg.MessageID,
+			UserID:     msg.UserID,
+			AuthorNick: nick,
+			Content:    emoji.NormalizeDiscordEmojiShortcodes(msg.Content),
+			Timestamp:  msg.CreatedAt,
 		}
 	}
 	return result

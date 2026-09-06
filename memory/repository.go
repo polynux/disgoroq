@@ -271,12 +271,14 @@ func (r *repository) CreateMessageBufferEntry(ctx context.Context, entry *Messag
 	}
 
 	message := &BufferedMessage{
-		GuildID:   entry.GuildID,
-		UserID:    entry.UserID,
-		Content:   entry.Content,
-		Timestamp: entry.CreatedAt,
-		Processed: false,
-		MessageID: messageID,
+		GuildID:    entry.GuildID,
+		ChannelID:  entry.ChannelID,
+		UserID:     entry.UserID,
+		AuthorNick: entry.AuthorNick,
+		Content:    entry.Content,
+		Timestamp:  entry.CreatedAt,
+		Processed:  false,
+		MessageID:  messageID,
 	}
 
 	err := r.InsertMessageBuffer(ctx, message)
@@ -311,11 +313,14 @@ func (r *repository) GetMessageBufferByUserGuild(ctx context.Context, userID, gu
 	entries := make([]*MessageBufferEntry, len(messages))
 	for i, msg := range messages {
 		entries[i] = &MessageBufferEntry{
-			ID:        msg.ID,
-			UserID:    msg.UserID,
-			GuildID:   msg.GuildID,
-			Content:   msg.Content,
-			CreatedAt: msg.Timestamp,
+			ID:         msg.ID,
+			UserID:     msg.UserID,
+			GuildID:    msg.GuildID,
+			ChannelID:  msg.ChannelID,
+			AuthorNick: msg.AuthorNick,
+			Content:    msg.Content,
+			CreatedAt:  msg.Timestamp,
+			MessageID:  msg.MessageID,
 		}
 	}
 	return entries, nil

@@ -357,7 +357,14 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 	// Buffer message for memory
 	if o.memoryService != nil {
 		go func() {
-			if err := o.memoryService.BufferMessage(context.Background(), userID, guildID, text); err != nil {
+			input := memory.BufferMessageInput{
+				UserID:     userID,
+				GuildID:    guildID,
+				AuthorName: userID,
+				Content:    text,
+				Timestamp:  time.Now(),
+			}
+			if err := o.memoryService.BufferMessage(context.Background(), input); err != nil {
 				logger.Warn("Failed to buffer voice message", zap.Error(err))
 			}
 		}()
@@ -396,7 +403,14 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 	// Buffer response for memory
 	if o.memoryService != nil {
 		go func() {
-			if err := o.memoryService.BufferMessage(context.Background(), botID, guildID, response.Content); err != nil {
+			input := memory.BufferMessageInput{
+				UserID:     botID,
+				GuildID:    guildID,
+				AuthorName: "Bot",
+				Content:    response.Content,
+				Timestamp:  time.Now(),
+			}
+			if err := o.memoryService.BufferMessage(context.Background(), input); err != nil {
 				logger.Warn("Failed to buffer voice response", zap.Error(err))
 			}
 		}()
