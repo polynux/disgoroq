@@ -207,7 +207,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 
 	// Mark the exact message the bot must answer so it does not respond to
-	// every topic present in the channel history.
+	// every topic present in the channel history, and keep the reply tight.
 	{
 		targetAuthor := m.Author.Username
 		if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
@@ -215,6 +215,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		}
 		targetContent := emoji.NormalizeDiscordEmojiShortcodes(m.Content)
 		instructions += fmt.Sprintf("\n\nMESSAGE CIBLE (réponds uniquement à ce message, ignore le reste du salon) : %s : %s", targetAuthor, targetContent)
+		instructions += "\n\nRÈGLES DE RÉPONSE : une seule réponse, sur UN SEUL sujet. PAS de liste à puces, PAS de titres, PAS de saut de ligne. Varie la longueur : parfois 3-4 mots, parfois une phrase courte, rarement deux phrases. Ne couvre jamais plusieurs idées à la suite."
 	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
