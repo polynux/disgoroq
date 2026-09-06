@@ -24,28 +24,39 @@ type MemoryService struct {
 	maxContextMessages int           // Max recent messages to include in context
 
 	// Concurrency control
-	activeSummaries sync.Map // map[string]*sync.Once (userID+guildID -> summarization control)
+	activeSummaries sync.Map // map[string]context.CancelFunc (userID+guildID -> summarization cancel)
 	summaryMu       sync.RWMutex
+	semaphore       chan struct{} // Bounds concurrent summarizations
+	closeOnce       sync.Once
+	closeCtx        context.Context // Canceled on Close()
+	closeCancel     context.CancelFunc
+	closed          bool
 
 	// Context building
 	maxSummaryContext int // Max number of summaries to include in context
+
+	summarizationTimeout time.Duration
 }
 
 // ServiceConfig holds configuration for the memory service
 type ServiceConfig struct {
-	BufferThreshold    int
-	SummaryInterval    time.Duration
-	MaxContextMessages int
-	MaxSummaryContext  int
+	BufferThreshold        int
+	SummaryInterval        time.Duration
+	MaxContextMessages     int
+	MaxSummaryContext      int
+	MaxConcurrentSummaries int           // Max simultaneous summarizations (default 2)
+	SummarizationTimeout   time.Duration // Per-summarization timeout (default 60s)
 }
 
 // DefaultServiceConfig returns sensible defaults
 func DefaultServiceConfig() ServiceConfig {
 	return ServiceConfig{
-		BufferThreshold:    10,            // Summarize after 10 messages
-		SummaryInterval:    1 * time.Hour, // Minimum 1 hour between summaries
-		MaxContextMessages: 5,             // Include last 5 messages in context
-		MaxSummaryContext:  3,             // Include top 3 relevant summaries
+		BufferThreshold:        10,            // Summarize after 10 messages
+		SummaryInterval:        1 * time.Hour, // Minimum 1 hour between summaries
+		MaxContextMessages:     5,             // Include last 5 messages in context
+		MaxSummaryContext:      3,             // Include top 3 relevant summaries
+		MaxConcurrentSummaries: 2,
+		SummarizationTimeout:   60 * time.Second,
 	}
 }
 
@@ -66,15 +77,27 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 	if config.MaxSummaryContext <= 0 {
 		config.MaxSummaryContext = DefaultServiceConfig().MaxSummaryContext
 	}
+	if config.MaxConcurrentSummaries <= 0 {
+		config.MaxConcurrentSummaries = DefaultServiceConfig().MaxConcurrentSummaries
+	}
+	if config.SummarizationTimeout <= 0 {
+		config.SummarizationTimeout = DefaultServiceConfig().SummarizationTimeout
+	}
+
+	closeCtx, closeCancel := context.WithCancel(context.Background())
 
 	return &MemoryService{
-		repo:               repo,
-		embeddings:         embeddings,
-		summarizer:         summarizer,
-		bufferThreshold:    config.BufferThreshold,
-		summaryInterval:    config.SummaryInterval,
-		maxContextMessages: config.MaxContextMessages,
-		maxSummaryContext:  config.MaxSummaryContext,
+		repo:                 repo,
+		embeddings:           embeddings,
+		summarizer:           summarizer,
+		bufferThreshold:      config.BufferThreshold,
+		summaryInterval:      config.SummaryInterval,
+		maxContextMessages:   config.MaxContextMessages,
+		maxSummaryContext:    config.MaxSummaryContext,
+		semaphore:            make(chan struct{}, config.MaxConcurrentSummaries),
+		closeCtx:             closeCtx,
+		closeCancel:          closeCancel,
+		summarizationTimeout: config.SummarizationTimeout,
 	}
 }
 
@@ -124,7 +147,12 @@ func (s *MemoryService) BufferMessage(ctx context.Context, input BufferMessageIn
 	}
 
 	// Check if we should trigger summarization
-	go s.checkAndSummarizeAsync(input.UserID, input.GuildID)
+	s.summaryMu.RLock()
+	closed := s.closed
+	s.summaryMu.RUnlock()
+	if !closed {
+		go s.checkAndSummarizeAsync(input.UserID, input.GuildID)
+	}
 
 	return nil
 }
@@ -134,7 +162,7 @@ func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 	key := fmt.Sprintf("%s:%s", userID, guildID)
 
 	// Check if summarization is already running for this user/guild
-	if _, loaded := s.activeSummaries.LoadOrStore(key, true); loaded {
+	if _, loaded := s.activeSummaries.LoadOrStore(key, context.CancelFunc(nil)); loaded {
 		if logger.IsDebugMode() {
 			logger.Debug("Memory summarization already running",
 				zap.String("user_id", userID),
@@ -143,24 +171,64 @@ func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 		return
 	}
 
-	// Clean up after summarization completes
+	// Per-summarization context: canceled on Close() or on timeout
+	ctx, cancel := context.WithCancel(s.closeCtx)
+	defer cancel()
+	timer := time.AfterFunc(s.summarizationTimeout, cancel)
+	defer timer.Stop()
+
+	// Register the cancel func so Close() can cancel in-flight work
+	s.activeSummaries.Store(key, context.CancelFunc(cancel))
 	defer s.activeSummaries.Delete(key)
 
 	// Small delay to let main transaction complete
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(100 * time.Millisecond):
+	}
 
-	ctx := context.Background()
 	if logger.IsDebugMode() {
 		logger.Debug("Checking memory summarization eligibility",
 			zap.String("user_id", userID),
 			zap.String("guild_id", guildID))
 	}
+
+	// Bound concurrency with the semaphore
+	select {
+	case s.semaphore <- struct{}{}:
+		defer func() { <-s.semaphore }()
+	case <-ctx.Done():
+		return
+	}
+
 	if err := s.runSummarization(ctx, userID, guildID); err != nil {
 		logger.Warn("Memory summarization failed",
 			zap.String("user_id", userID),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
 	}
+}
+
+// Close cancels all in-flight summarizations and marks the service closed.
+// It waits for in-flight summarization goroutines to release the semaphore.
+func (s *MemoryService) Close() {
+	s.closeOnce.Do(func() {
+		s.summaryMu.Lock()
+		s.closed = true
+		s.summaryMu.Unlock()
+
+		// Cancel the service-level context (stops new work and pending timers)
+		s.closeCancel()
+
+		// Cancel every in-flight summarization
+		s.activeSummaries.Range(func(key, value any) bool {
+			if cancel, ok := value.(context.CancelFunc); ok && cancel != nil {
+				cancel()
+			}
+			return true
+		})
+	})
 }
 
 // runSummarization performs the actual summarization

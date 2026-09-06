@@ -23,6 +23,19 @@ func (m *mockAIService) Chat(ctx context.Context, messages []Message, model stri
 	return m.response, nil
 }
 
+// blockingAIService blocks until its context is canceled.
+type blockingAIService struct {
+	started chan struct{}
+}
+
+func (m *blockingAIService) Chat(ctx context.Context, messages []Message, model string) (string, error) {
+	if m.started != nil {
+		m.started <- struct{}{}
+	}
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
 type mockRepository struct {
 	bufferEntries    []*MessageBufferEntry
 	summaries        []*ConversationSummary
@@ -892,4 +905,169 @@ func TestService_SummaryMetadata(t *testing.T) {
 	if updated.EndMessageID != "discord_msg_6" {
 		t.Errorf("expected end_message_id discord_msg_6, got %q", updated.EndMessageID)
 	}
+}
+
+// TestService_ConcurrencyCap verifies that at most MaxConcurrentSummaries
+// summarizations run simultaneously under a burst (TASK-040).
+func TestService_ConcurrencyCap(t *testing.T) {
+	const cap = 2
+	config := ServiceConfig{
+		BufferThreshold:        3,
+		SummaryInterval:        1 * time.Millisecond,
+		MaxConcurrentSummaries: cap,
+		SummarizationTimeout:   5 * time.Second,
+	}
+
+	// Track max concurrent chats across all users
+	var mu sync.Mutex
+	concurrent, maxConcurrent := 0, 0
+
+	// Custom AI service: counts concurrency, returns immediately
+	aiSvc := &countingAIService{
+		onChatStart: func(userID string) {
+			mu.Lock()
+			concurrent++
+			if concurrent > maxConcurrent {
+				maxConcurrent = concurrent
+			}
+			mu.Unlock()
+		},
+		onChatEnd: func() {
+			mu.Lock()
+			concurrent--
+			mu.Unlock()
+		},
+	}
+
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := NewSummarizer(aiSvc, "test")
+	service := NewService(repo, embeddings, summarizer, config)
+	defer service.Close()
+
+	ctx := context.Background()
+
+	// Buffer enough messages for 3 distinct users so each triggers a
+	// summarization. Keep buffering until every user has triggered at least
+	// one summarization (per-key dedup can swallow checks that race with the
+	// 100ms stagger), up to a deadline.
+	triggered := make(map[string]bool)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(triggered) < 3 && time.Now().Before(deadline) {
+		for u := 0; u < 3; u++ {
+			userID := fmt.Sprintf("user_%d", u)
+			if triggered[userID] {
+				continue
+			}
+			if err := service.BufferMessage(ctx, BufferMessageInput{
+				UserID:    userID,
+				GuildID:   "guild456",
+				Content:   "msg",
+				Timestamp: time.Now(),
+			}); err != nil {
+				t.Fatalf("buffer: %v", err)
+			}
+			// Check if this user has now entered Chat
+			mu.Lock()
+			if aiSvc.usersStarted[userID] {
+				triggered[userID] = true
+			}
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	mu.Lock()
+	startedFinal := aiSvc.startedCount
+	maxFinal := maxConcurrent
+	mu.Unlock()
+
+	if startedFinal < 3 {
+		t.Fatalf("expected all 3 users to eventually enter Chat, got %d", startedFinal)
+	}
+	if maxFinal > cap {
+		t.Errorf("expected max concurrent %d, got %d", cap, maxFinal)
+	}
+}
+
+// TestService_CloseCancelsSummarization verifies Close() cancels in-flight
+// summarization blocked on the AI service (TASK-041).
+func TestService_CloseCancelsSummarization(t *testing.T) {
+	config := ServiceConfig{
+		BufferThreshold:        1,
+		SummaryInterval:        1 * time.Millisecond,
+		MaxConcurrentSummaries: 1,
+		SummarizationTimeout:   30 * time.Second, // Long; Close should cancel before this
+	}
+
+	aiSvc := &blockingAIService{started: make(chan struct{}, 10)}
+	repo := newMockRepository()
+	embeddings := newMockEmbeddingProvider()
+	summarizer := NewSummarizer(aiSvc, "test")
+	service := NewService(repo, embeddings, summarizer, config)
+
+	ctx := context.Background()
+	if err := service.BufferMessage(ctx, BufferMessageInput{
+		UserID:    "user123",
+		GuildID:   "guild456",
+		Content:   "hello",
+		Timestamp: time.Now(),
+	}); err != nil {
+		t.Fatalf("buffer: %v", err)
+	}
+
+	// Wait until summarization entered the blocking Chat
+	select {
+	case <-aiSvc.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("summarization never started")
+	}
+
+	// Close must cancel it quickly
+	done := make(chan struct{})
+	go func() {
+		service.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close() did not return promptly")
+	}
+}
+
+// countingAIService lets tests observe concurrency and gate completion.
+type countingAIService struct {
+	onChatStart  func(userID string)
+	onChatEnd    func()
+	startedCount int
+	usersStarted map[string]bool
+}
+
+func (m *countingAIService) Chat(ctx context.Context, messages []Message, model string) (string, error) {
+	m.startedCount++
+	userID := ""
+	// The last user message contains the userID marker from the test.
+	if len(messages) > 0 {
+		for _, msg := range messages {
+			if len(msg.Content) >= 6 && msg.Content[:6] == "user: " {
+				userID = msg.Content[6:]
+			}
+		}
+	}
+	if m.usersStarted == nil {
+		m.usersStarted = make(map[string]bool)
+	}
+	if userID != "" {
+		m.usersStarted[userID] = true
+	}
+	if m.onChatStart != nil {
+		m.onChatStart(userID)
+	}
+	if m.onChatEnd != nil {
+		m.onChatEnd()
+	}
+	return "summary text", nil
 }

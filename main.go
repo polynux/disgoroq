@@ -386,6 +386,11 @@ func main() {
 
 	logger.Info("Shutting down gracefully")
 
+	// Close memory service (cancels in-flight summarizations)
+	if memoryService != nil {
+		memoryService.Close()
+	}
+
 	// Close voice orchestrator if initialized
 	if voiceOrchestrator != nil {
 		if err := voiceOrchestrator.Close(); err != nil {

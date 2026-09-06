@@ -160,6 +160,9 @@ type Service interface {
 
 	// Force summarization (for testing/admin)
 	ForceSummarize(ctx context.Context, userID, guildID string) error
+
+	// Close cancels in-flight summarizations and stops accepting new work
+	Close()
 }
 
 // EmbeddingProvider defines the interface for generating embeddings
