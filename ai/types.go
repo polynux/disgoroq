@@ -46,6 +46,7 @@ type ChatRequest struct {
 	MaxTokens       int                   // Max response tokens
 	Images          []ImageContext        // Images referenced in messages
 	AttachmentCache *AttachmentCacheInput // Optional detached attachment summary cache key
+	BotName         string                // Bot's display name, the speaker of its lines in completion mode
 }
 
 // Message represents a single message in the conversation

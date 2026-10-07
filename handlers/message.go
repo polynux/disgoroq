@@ -241,6 +241,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		Images:       processedMessage.Images,
 		Temperature:  temperature,
 		MaxTokens:    database.DefaultMaxTokens,
+		BotName:      botNick,
 	})
 
 	reference := &discord.MessageReference{

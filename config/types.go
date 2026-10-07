@@ -72,6 +72,7 @@ type OllamaConfig struct {
 	Model           string `yaml:"model"`
 	VisionModel     string `yaml:"vision_model"`
 	ThinkingEnabled bool   `yaml:"thinking_enabled"`
+	Completion      bool   `yaml:"completion"`
 }
 
 // OpencodeConfig contains configuration for the OpenCode Go AI provider.

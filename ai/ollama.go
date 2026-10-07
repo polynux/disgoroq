@@ -24,6 +24,7 @@ type OllamaProvider struct {
 	baseURL         *url.URL
 	httpClient      *http.Client
 	thinkingEnabled bool
+	completion      bool
 }
 
 type ollamaChatChunk struct {
@@ -72,6 +73,14 @@ func (o *OllamaProvider) SupportsInlineImages(chatModel, visionModel string) boo
 }
 
 func (o *OllamaProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	if o.completion {
+		response, err := o.completionChat(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("error in Ollama completion: %w", err)
+		}
+		return response, nil
+	}
+
 	messages, err := o.buildChatMessages(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("error preparing Ollama chat: %w", err)

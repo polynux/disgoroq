@@ -56,6 +56,11 @@ ai:
     # Enable/disable Ollama's "think" request flag
     thinking_enabled: false
 
+    # Raw chat-log completion for models trained on Discord lines (e.g. discord-v2
+    # from discord-ia-waldo): sends the recent chat as "name: text" lines to
+    # /api/generate and returns one line. Ignores the system prompt and tools.
+    completion: false
+
   opencode:
     # Enable OpenCode Go as a configured provider (required when primary_provider is "opencode")
     enabled: false

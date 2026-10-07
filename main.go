@@ -132,6 +132,7 @@ func main() {
 		OllamaModel:               cfg.AI.Ollama.Model,
 		OllamaVisionModel:         cfg.AI.Ollama.VisionModel,
 		OllamaThinkingEnabled:     cfg.AI.Ollama.ThinkingEnabled,
+		OllamaCompletion:          cfg.AI.Ollama.Completion,
 		OpencodeEnabled:           cfg.AI.Opencode.Enabled,
 		OpencodeBaseURL:           cfg.AI.Opencode.BaseURL,
 		OpencodeAPIKey:            cfg.AI.Opencode.APIKey,

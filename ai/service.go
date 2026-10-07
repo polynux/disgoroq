@@ -33,6 +33,7 @@ type ServiceConfig struct {
 	OllamaModel           string
 	OllamaVisionModel     string
 	OllamaThinkingEnabled bool
+	OllamaCompletion      bool
 
 	OpencodeEnabled         bool
 	OpencodeBaseURL         string
@@ -189,6 +190,7 @@ func NewService(config ServiceConfig) *Service {
 				logger.Warn("Failed to create Ollama provider", zap.Error(err))
 				return
 			}
+			ollamaProvider.SetCompletionMode(config.OllamaCompletion)
 			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,
