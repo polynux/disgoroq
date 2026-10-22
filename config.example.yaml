@@ -173,7 +173,8 @@ ai:
       # Maximum number of characters returned to the model
       max_characters: 12000
 
-      # Allow access to localhost/private network targets
+      # Allow access to localhost/private network targets. When false, HTTP(S)_PROXY
+      # is ignored for web fetch (a proxy would bypass the private-address check).
       allow_private_networks: false
 
     search:

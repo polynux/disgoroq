@@ -281,13 +281,23 @@ type WebFetchTool struct {
 }
 
 func NewWebFetchTool(cfg WebToolConfig) *WebFetchTool {
-	return &WebFetchTool{
-		config: cfg,
-		client: &http.Client{
-			Transport: newWebFetchTransport(cfg.AllowPrivateNetworks),
-			Timeout:   0,
+	tool := &WebFetchTool{config: cfg}
+	tool.client = &http.Client{
+		Transport: newWebFetchTransport(cfg.AllowPrivateNetworks),
+		Timeout:   0,
+		// Redirects dial through the guarded transport; also keep them on the
+		// allowed schemes (e.g. https-only stays https-only).
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if !tool.isAllowedScheme(req.URL.Scheme) {
+				return fmt.Errorf("redirect to unsupported URL scheme %q", req.URL.Scheme)
+			}
+			return nil
 		},
 	}
+	return tool
 }
 
 func (t *WebFetchTool) Definition() ToolDefinition {
@@ -520,7 +530,9 @@ func (r roundTripperWithHeaders) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 func newWebFetchTransport(allowPrivate bool) *http.Transport {
-	return newWebFetchTransportWithDial(allowPrivate, net.DefaultResolver.LookupNetIP, (&net.Dialer{}).DialContext)
+	// A per-address timeout keeps one unreachable address (e.g. a blackholed
+	// IPv6 route) from using the whole fetch deadline before the next is tried.
+	return newWebFetchTransportWithDial(allowPrivate, net.DefaultResolver.LookupNetIP, (&net.Dialer{Timeout: 3 * time.Second}).DialContext)
 }
 
 func newWebFetchTransportWithDial(
@@ -560,13 +572,13 @@ func newWebFetchTransportWithDial(
 
 		var lastErr error
 		for _, ip := range ips {
-			conn, err := dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			conn, err := dialContext(ctx, network, net.JoinHostPort(ip.Unmap().String(), port))
 			if err == nil {
 				return conn, nil
 			}
 			lastErr = err
 		}
-		return nil, lastErr
+		return nil, fmt.Errorf("dial %q: %w", host, lastErr)
 	}
 
 	return transport
@@ -577,15 +589,40 @@ func blockedHostName(host string) bool {
 	return host == "localhost" || strings.HasSuffix(host, ".local")
 }
 
+var (
+	// IPv4 ranges the netip predicates don't cover: "this network",
+	// carrier-grade NAT, and benchmarking (routed to local software by some VPNs).
+	extraPrivateV4 = []netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+	}
+	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
+	nat64Local     = netip.MustParsePrefix("64:ff9b:1::/48")
+	sixToFour      = netip.MustParsePrefix("2002::/16")
+)
+
 func isPrivateIP(addr netip.Addr) bool {
-	addr = addr.Unmap()
-	if addr.Is4() && (addr.As4()[0] == 0 || netip.MustParsePrefix("100.64.0.0/10").Contains(addr)) {
+	if !addr.IsValid() {
 		return true
 	}
-	if nat64Prefix := netip.MustParsePrefix("64:ff9b::/96"); addr.Is6() && nat64Prefix.Contains(addr) {
-		bytes := addr.As16()
-		mapped := netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})
-		return isPrivateIP(mapped)
+	addr = addr.Unmap()
+	if addr.Is4() {
+		for _, prefix := range extraPrivateV4 {
+			if prefix.Contains(addr) {
+				return true
+			}
+		}
+	}
+	// IPv6 forms that embed an IPv4 address: check the embedded address too.
+	bytes := addr.As16()
+	if addr.Is6() && (nat64WellKnown.Contains(addr) || nat64Local.Contains(addr)) &&
+		isPrivateIP(netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})) {
+		return true
+	}
+	if addr.Is6() && sixToFour.Contains(addr) &&
+		isPrivateIP(netip.AddrFrom4([4]byte{bytes[2], bytes[3], bytes[4], bytes[5]})) {
+		return true
 	}
 	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified()
 }
