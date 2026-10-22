@@ -1,12 +1,81 @@
 package handlers
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"polynux/disgoroq/config"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 )
+
+func TestVoteRecountCoalescesTriggersAndAdopt(t *testing.T) {
+	handler := NewVoteHandler(nil, nil, config.VotesConfig{Enabled: true})
+	started := make(chan bool, 2)
+	release := make(chan struct{})
+	var executions atomic.Int32
+	handler.recountFn = func(_, _, _ snowflake.ID, adopt bool) {
+		execution := executions.Add(1)
+		started <- adopt
+		if execution == 1 {
+			<-release
+		}
+	}
+
+	handler.recount(1, 2, 3, false)
+	if adopt := <-started; adopt {
+		t.Fatal("first recount unexpectedly requested adoption")
+	}
+	for i := 0; i < 20; i++ {
+		handler.recount(1, 2, 3, i == 7)
+	}
+	close(release)
+	if adopt := <-started; !adopt {
+		t.Fatal("coalesced recount did not preserve adopt request")
+	}
+	deadline := time.Now().Add(time.Second)
+	for executions.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := executions.Load(); got != 2 {
+		t.Fatalf("recount executions = %d, want 2", got)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		handler.recountMu.Lock()
+		_, exists := handler.recounts[3]
+		handler.recountMu.Unlock()
+		if !exists {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("recount state was not removed")
+}
+
+func TestVoteRecountsForDifferentMessagesRunInParallel(t *testing.T) {
+	handler := NewVoteHandler(nil, nil, config.VotesConfig{Enabled: true})
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	handler.recountFn = func(_, _, _ snowflake.ID, _ bool) {
+		started <- struct{}{}
+		<-release
+	}
+
+	handler.recount(1, 2, 3, false)
+	handler.recount(1, 2, 4, false)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("different message recounts did not run in parallel")
+		}
+	}
+	close(release)
+}
 
 func TestReplyVoteCounts(t *testing.T) {
 	reactions := []discord.MessageReaction{

@@ -22,18 +22,38 @@ import (
 )
 
 type VoteHandler struct {
-	client *bot.Client
-	repo   *database.Repository
-	config config.VotesConfig
-	// recountMu serializes recounts so a slower fetch cannot overwrite newer counts.
-	recountMu sync.Mutex
+	client       *bot.Client
+	repo         *database.Repository
+	config       config.VotesConfig
+	recountMu    sync.Mutex
+	recounts     map[snowflake.ID]*recountState
+	recountSlots chan struct{}
+	recountFn    func(guildID, channelID, messageID snowflake.ID, adopt bool)
 	// notVotable remembers messages ruled out for adoption, so later votes
 	// do not refetch them every time.
 	notVotable sync.Map
 }
 
+type recountState struct {
+	guildID   snowflake.ID
+	channelID snowflake.ID
+	dirty     bool
+	adopt     bool
+}
+
+const (
+	maxConcurrentRecounts = 4
+	recountSlotTimeout    = 10 * time.Second
+)
+
 func NewVoteHandler(client *bot.Client, repo *database.Repository, cfg config.VotesConfig) *VoteHandler {
-	return &VoteHandler{client: client, repo: repo, config: cfg}
+	return &VoteHandler{
+		client:       client,
+		repo:         repo,
+		config:       cfg,
+		recounts:     make(map[snowflake.ID]*recountState),
+		recountSlots: make(chan struct{}, maxConcurrentRecounts),
+	}
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionAdd(e *events.GuildMessageReactionAdd) {
@@ -71,12 +91,68 @@ func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt 
 	if !h.config.Enabled {
 		return
 	}
-	go h.recountNow(guildID, channelID, messageID, adopt)
+	h.recountMu.Lock()
+	if state, ok := h.recounts[messageID]; ok {
+		state.dirty = true
+		state.adopt = state.adopt || adopt
+		h.recountMu.Unlock()
+		return
+	}
+	state := &recountState{guildID: guildID, channelID: channelID, adopt: adopt}
+	h.recounts[messageID] = state
+	h.recountMu.Unlock()
+	go h.runRecount(messageID, state)
+}
+
+func (h *VoteHandler) runRecount(messageID snowflake.ID, state *recountState) {
+	for {
+		timer := time.NewTimer(recountSlotTimeout)
+		select {
+		case h.recountSlots <- struct{}{}:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+			logger.Warn("Dropping vote recount after waiting for a concurrency slot",
+				zap.String("message_id", messageID.String()))
+			h.finishRecount(messageID, state, false)
+			return
+		}
+
+		h.recountMu.Lock()
+		adopt := state.adopt
+		state.adopt = false
+		h.recountMu.Unlock()
+		if h.recountFn != nil {
+			h.recountFn(state.guildID, state.channelID, messageID, adopt)
+		} else {
+			h.recountNow(state.guildID, state.channelID, messageID, adopt)
+		}
+		<-h.recountSlots
+
+		if !h.finishRecount(messageID, state, true) {
+			return
+		}
+	}
+}
+
+// finishRecount removes a completed recount or leaves its state in place for a
+// single coalesced rerun. It returns true when another run is required.
+func (h *VoteHandler) finishRecount(messageID snowflake.ID, state *recountState, completed bool) bool {
+	h.recountMu.Lock()
+	defer h.recountMu.Unlock()
+	if !completed || !state.dirty {
+		delete(h.recounts, messageID)
+		return false
+	}
+	state.dirty = false
+	return true
 }
 
 func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, adopt bool) {
-	h.recountMu.Lock()
-	defer h.recountMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
