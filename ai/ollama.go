@@ -20,11 +20,13 @@ import (
 )
 
 type OllamaProvider struct {
-	client          *api.Client
-	baseURL         *url.URL
-	httpClient      *http.Client
-	thinkingEnabled bool
-	completion      bool
+	client                *api.Client
+	baseURL               *url.URL
+	httpClient            *http.Client
+	thinkingEnabled       bool
+	completion            bool
+	completionSpeaker     string
+	completionPromptChars int
 }
 
 type ollamaChatChunk struct {
@@ -50,10 +52,12 @@ func NewOllamaProvider(baseURL string, thinkingEnabled bool) (*OllamaProvider, e
 	httpClient := &http.Client{}
 	client := api.NewClient(parsedURL, httpClient)
 	return &OllamaProvider{
-		client:          client,
-		baseURL:         parsedURL,
-		httpClient:      httpClient,
-		thinkingEnabled: thinkingEnabled,
+		client:                client,
+		baseURL:               parsedURL,
+		httpClient:            httpClient,
+		thinkingEnabled:       thinkingEnabled,
+		completionSpeaker:     "§bot",
+		completionPromptChars: completionPromptChars,
 	}, nil
 }
 

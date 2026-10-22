@@ -47,19 +47,22 @@ type ChatRequest struct {
 	Images          []ImageContext        // Images referenced in messages
 	AttachmentCache *AttachmentCacheInput // Optional detached attachment summary cache key
 	BotName         string                // Bot's display name, the speaker of its lines in completion mode
+	TargetMessageID string                // Discord message the completion should answer
 }
 
 // Message represents a single message in the conversation
 type Message struct {
-	Role       string     // "user", "assistant", "system", "tool"
-	Content    string     // Text content
-	AuthorID   string     // Discord user ID
-	AuthorNick string     // Display name
-	MessageID  string     // Discord message ID
-	Name       string     // Optional tool/function name
-	ToolCallID string     // Links a tool result to an assistant tool call
-	ToolCalls  []ToolCall // Assistant-requested tool calls
-	ImageRefs  []int      // Indices into ChatRequest.Images
+	Role          string     // "user", "assistant", "system", "tool"
+	Content       string     // Text content
+	AuthorID      string     // Discord user ID
+	AuthorNick    string     // Display name
+	MessageID     string     // Discord message ID
+	Name          string     // Optional tool/function name
+	ToolCallID    string     // Links a tool result to an assistant tool call
+	ToolCalls     []ToolCall // Assistant-requested tool calls
+	ImageRefs     []int      // Indices into ChatRequest.Images
+	AuthorBot     bool       // Author is another bot or webhook
+	CommandOutput bool       // Message is an interaction command response
 }
 
 // ImageContext contains image metadata for vision processing
@@ -118,6 +121,7 @@ type ChatResponse struct {
 	CachedTokens     int    // Prompt tokens served from cache when exposed
 	CacheWriteTokens int    // Prompt tokens written to cache when exposed
 	FinishReason     string // "stop", "length", etc.
+	EmptyCompletion  bool   // Completion-mode empty reply after its one local retry
 }
 
 // VisionResponse contains the image description

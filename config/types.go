@@ -67,12 +67,14 @@ type GroqConfig struct {
 
 // OllamaConfig contains configuration for the Ollama AI provider.
 type OllamaConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	URL             string `yaml:"url"`
-	Model           string `yaml:"model"`
-	VisionModel     string `yaml:"vision_model"`
-	ThinkingEnabled bool   `yaml:"thinking_enabled"`
-	Completion      bool   `yaml:"completion"`
+	Enabled               bool   `yaml:"enabled"`
+	URL                   string `yaml:"url"`
+	Model                 string `yaml:"model"`
+	VisionModel           string `yaml:"vision_model"`
+	ThinkingEnabled       bool   `yaml:"thinking_enabled"`
+	Completion            bool   `yaml:"completion"`
+	CompletionSpeaker     string `yaml:"completion_speaker"`
+	CompletionPromptChars int    `yaml:"completion_prompt_chars"`
 }
 
 // OpencodeConfig contains configuration for the OpenCode Go AI provider.
@@ -218,11 +220,13 @@ func DefaultConfig() *Config {
 				ThinkingEnabled: true,
 			},
 			Ollama: OllamaConfig{
-				Enabled:         false,
-				URL:             "http://localhost:11434",
-				Model:           "dolphin3",
-				VisionModel:     "llava",
-				ThinkingEnabled: false,
+				Enabled:               false,
+				URL:                   "http://localhost:11434",
+				Model:                 "dolphin3",
+				VisionModel:           "llava",
+				ThinkingEnabled:       false,
+				CompletionSpeaker:     "§bot",
+				CompletionPromptChars: 2400,
 			},
 			Opencode: OpencodeConfig{
 				Enabled:         false,

@@ -145,12 +145,14 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 			})
 		} else {
 			formattedMessages = append(formattedMessages, Message{
-				Role:       "user",
-				Content:    content.String(),
-				AuthorID:   messages[idx].Author.ID.String(),
-				AuthorNick: nick,
-				MessageID:  messages[idx].ID.String(),
-				ImageRefs:  imageRefs,
+				Role:          "user",
+				Content:       content.String(),
+				AuthorID:      messages[idx].Author.ID.String(),
+				AuthorNick:    nick,
+				MessageID:     messages[idx].ID.String(),
+				ImageRefs:     imageRefs,
+				AuthorBot:     messages[idx].Author.Bot || messages[idx].WebhookID != nil,
+				CommandOutput: messages[idx].Interaction != nil || messages[idx].InteractionMetadata != nil,
 			})
 		}
 	}

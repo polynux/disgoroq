@@ -133,6 +133,15 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 			continue
 		}
 
+		// A completion model intentionally returns empty after its own single retry.
+		if response.EmptyCompletion {
+			if response.Model == "" {
+				response.Model = preparedRequest.Model
+			}
+			response.Provider = r.provider.Name()
+			return response, nil
+		}
+
 		// Validate the response
 		validation := r.validator.ValidateChatResponse(response)
 

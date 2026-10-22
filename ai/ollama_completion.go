@@ -12,25 +12,25 @@ import (
 	"strings"
 )
 
-// Completion mode serves raw chat-log models (e.g. discord-v2 from
-// discord-ia-waldo): models trained on plain "name: text" Discord lines, not on
+// Completion mode serves raw chat-log models trained on plain "name: text" Discord lines, not on
 // instructions. They cannot follow a system prompt or call tools, so the
 // request becomes the recent chat as lines ending with "<bot name>:", sent to
 // /api/generate with raw=true, and the reply is that one line.
 
 const (
-	// The model's context is 512 tokens; ~1200 characters of French chat is ~400.
-	completionPromptChars = 1200
+	// Luciole has a 1,024-token context; French chat averages about 2.8 chars/token.
+	completionPromptChars = 2400
 	completionLineChars   = 300
 	completionMaxTokens   = 64
 )
 
 var (
-	completionUserMention  = regexp.MustCompile(`<@!?(\d+)>`)
-	completionDiscordEmoji = regexp.MustCompile(`<a?:(\w+):\d+>`)
-	completionURL          = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
-	completionPlaceholder  = regexp.MustCompile(`\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam)\]`)
-	completionReplyMention = regexp.MustCompile(`@\S+`)
+	completionUserMention    = regexp.MustCompile(`<@!?(\d+)>`)
+	completionDiscordEmoji   = regexp.MustCompile(`<a?:(\w+):\d+>`)
+	completionURL            = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
+	completionPlaceholder    = regexp.MustCompile(`\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam)\]`)
+	completionReplyMention   = regexp.MustCompile(`@\S+`)
+	completionLeadingSpeaker = regexp.MustCompile(`^[^:\s]{1,32}: `)
 	// Same URL placeholders as the training data (discord-ia-waldo prep/discord.py).
 	completionURLKinds = []struct {
 		pattern     *regexp.Regexp
@@ -61,39 +61,65 @@ func (o *OllamaProvider) SetCompletionMode(enabled bool) {
 	o.completion = enabled
 }
 
+func (o *OllamaProvider) SetCompletionConfig(speaker string, promptChars int) {
+	o.completionSpeaker = speaker
+	if promptChars > 0 {
+		o.completionPromptChars = promptChars
+	}
+}
+
 func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 || maxTokens > completionMaxTokens {
 		maxTokens = completionMaxTokens
 	}
-	// Sampling defaults (top_k, top_p, repeat_penalty) come from the Modelfile.
-	body, err := json.Marshal(map[string]any{
-		"model":  req.Model,
-		"prompt": buildCompletionPrompt(req.Messages, req.BotName),
-		"raw":    true,
-		"stream": false,
-		"options": map[string]any{
-			"temperature": req.Temperature,
-			"num_predict": maxTokens,
-			"stop":        []string{"\n"},
-		},
-	})
+	prompt := buildCompletionPrompt(req.Messages, req.BotName, req.TargetMessageID, o.completionSpeaker, o.completionPromptChars)
+	for attempt := 0; attempt < 2; attempt++ {
+		generated, err := o.generateCompletion(ctx, req, prompt, maxTokens)
+		if err != nil {
+			return nil, err
+		}
+		model := generated.Model
+		if model == "" {
+			model = req.Model
+		}
+		finishReason := generated.DoneReason
+		if finishReason == "" {
+			finishReason = "stop"
+		}
+		content := cleanCompletionReply(generated.Response, req.BotName)
+		response := &ChatResponse{
+			Content: content, Model: model,
+			TokensUsed:   generated.EvalCount + generated.PromptEvalCount,
+			PromptTokens: generated.PromptEvalCount, CompletionTokens: generated.EvalCount,
+			FinishReason: finishReason, EmptyCompletion: content == "" && attempt == 1,
+		}
+		if content != "" || attempt == 1 {
+			return response, nil
+		}
+	}
+	return &ChatResponse{}, nil
+}
+
+func (o *OllamaProvider) generateCompletion(ctx context.Context, req *ChatRequest, prompt string, maxTokens int) (*ollamaGenerateResponse, error) {
+	options := map[string]any{"num_predict": maxTokens, "stop": []string{"\n"}}
+	if req.Temperature != 0 {
+		options["temperature"] = req.Temperature
+	}
+	body, err := json.Marshal(map[string]any{"model": req.Model, "prompt": prompt, "raw": true, "stream": false, "options": options})
 	if err != nil {
 		return nil, err
 	}
-
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, o.baseURL.JoinPath("/api/generate").String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-
 	httpResp, err := o.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
 	defer httpResp.Body.Close()
-
 	responseBody, err := io.ReadAll(httpResp.Body)
 	if err != nil {
 		return nil, err
@@ -108,29 +134,13 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 	if httpResp.StatusCode >= http.StatusBadRequest {
 		return nil, fmt.Errorf("ollama generate failed: %s", httpResp.Status)
 	}
-
-	model := generated.Model
-	if model == "" {
-		model = req.Model
-	}
-	finishReason := generated.DoneReason
-	if finishReason == "" {
-		finishReason = "stop"
-	}
-	return &ChatResponse{
-		Content:          cleanCompletionReply(generated.Response),
-		Model:            model,
-		TokensUsed:       generated.EvalCount + generated.PromptEvalCount,
-		PromptTokens:     generated.PromptEvalCount,
-		CompletionTokens: generated.EvalCount,
-		FinishReason:     finishReason,
-	}, nil
+	return &generated, nil
 }
 
 // buildCompletionPrompt renders the most recent messages as training-format
 // chat lines that fit the model's context, then the bot's speaker name. There
 // is no space after the colon: the tokenizer attaches it to the next word.
-func buildCompletionPrompt(messages []Message, botName string) string {
+func buildCompletionPrompt(messages []Message, botName, targetMessageID, completionSpeaker string, promptChars int) string {
 	names := make(map[string]string)
 	for _, msg := range messages {
 		if msg.AuthorID != "" && msg.AuthorNick != "" {
@@ -140,17 +150,45 @@ func buildCompletionPrompt(messages []Message, botName string) string {
 	if botName == "" {
 		botName = "bot"
 	}
+	if completionSpeaker == "" {
+		completionSpeaker = botName
+	}
+	if promptChars <= 0 {
+		promptChars = completionPromptChars
+	}
+	ordered := messages
+	if targetMessageID != "" {
+		ordered = make([]Message, 0, len(messages))
+		for _, msg := range messages {
+			if msg.MessageID != targetMessageID {
+				ordered = append(ordered, msg)
+			}
+		}
+		for _, msg := range messages {
+			if msg.MessageID == targetMessageID {
+				ordered = append(ordered, msg)
+				break
+			}
+		}
+	}
 
 	var lines []string
 	size := 0
-	for idx := len(messages) - 1; idx >= 0; idx-- {
-		msg := messages[idx]
+	botLines := 0
+	for idx := len(ordered) - 1; idx >= 0; idx-- {
+		msg := ordered[idx]
+		if msg.AuthorBot || msg.CommandOutput {
+			continue
+		}
 		if msg.Role != RoleUser && msg.Role != RoleAssistant {
 			continue
 		}
 		speaker := msg.AuthorNick
 		if msg.Role == RoleAssistant {
-			speaker = botName
+			if botLines >= 2 || isCompletionError(msg.Content) {
+				continue
+			}
+			speaker = completionSpeaker
 		}
 		if speaker == "" {
 			continue
@@ -160,11 +198,16 @@ func buildCompletionPrompt(messages []Message, botName string) string {
 			continue
 		}
 		line := speaker + ": " + text
-		if size+len(line) > completionPromptChars && len(lines) > 0 {
+		line = normalizeCompletionQuotes(line)
+		isTarget := targetMessageID != "" && msg.MessageID == targetMessageID
+		if size+len(line) > promptChars && len(lines) > 0 && !isTarget {
 			break
 		}
 		lines = append(lines, line)
 		size += len(line) + 1
+		if msg.Role == RoleAssistant {
+			botLines++
+		}
 	}
 
 	var prompt strings.Builder
@@ -172,9 +215,22 @@ func buildCompletionPrompt(messages []Message, botName string) string {
 		prompt.WriteString(lines[idx])
 		prompt.WriteString("\n")
 	}
-	prompt.WriteString(botName)
+	prompt.WriteString(completionSpeaker)
 	prompt.WriteString(":")
 	return prompt.String()
+}
+
+func normalizeCompletionQuotes(text string) string {
+	return strings.NewReplacer("‘", "'", "’", "'", "ʼ", "'", "‛", "'", "“", "\"", "”", "\"", "„", "\"", "‟", "\"").Replace(text)
+}
+
+func isCompletionError(text string) bool {
+	for _, prefix := range []string{"Désolé, j'ai des soucis techniques là", "Désolé, tous mes systèmes sont en rade", "Euh... j'ai perdu mes mots là"} {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // completionText returns a message's text as one training-format line: user
@@ -212,7 +268,12 @@ func completionText(msg Message, names map[string]string) string {
 
 // cleanCompletionReply drops what the bot should not post as text: @mentions
 // (the model learned them from the chat) and URL placeholders.
-func cleanCompletionReply(reply string) string {
+func cleanCompletionReply(reply, botName string) string {
+	reply = completionLeadingSpeaker.ReplaceAllString(reply, "")
+	if botName == "" {
+		botName = "bot"
+	}
+	reply = strings.ReplaceAll(reply, "§bot", botName)
 	reply = completionReplyMention.ReplaceAllString(reply, "")
 	reply = completionPlaceholder.ReplaceAllString(reply, "")
 	return strings.Join(strings.Fields(reply), " ")

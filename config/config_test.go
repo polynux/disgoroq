@@ -49,6 +49,46 @@ ai:
 	if config.AI.Groq.APIKey != "test-groq-key" {
 		t.Errorf("AI.Groq.APIKey = %v, want test-groq-key", config.AI.Groq.APIKey)
 	}
+	if config.AI.Ollama.CompletionSpeaker != "§bot" {
+		t.Errorf("AI.Ollama.CompletionSpeaker = %q, want §bot", config.AI.Ollama.CompletionSpeaker)
+	}
+	if config.AI.Ollama.CompletionPromptChars != 2400 {
+		t.Errorf("AI.Ollama.CompletionPromptChars = %d, want 2400", config.AI.Ollama.CompletionPromptChars)
+	}
+}
+
+func TestLoadOllamaCompletionSpeakerCanBeEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("DB_URL", "http://localhost:8080")
+	t.Setenv("DB_TOKEN", "test-db-token")
+	content := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  url: "${DB_URL}"
+  token: "${DB_TOKEN}"
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+  ollama:
+    completion_speaker: ""
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if config.AI.Ollama.CompletionSpeaker != "" {
+		t.Errorf("explicit empty completion speaker was replaced with %q", config.AI.Ollama.CompletionSpeaker)
+	}
+	if config.AI.Ollama.CompletionPromptChars != 2400 {
+		t.Errorf("AI.Ollama.CompletionPromptChars = %d, want 2400", config.AI.Ollama.CompletionPromptChars)
+	}
 }
 
 func TestLoadWithOllamaPrimary(t *testing.T) {

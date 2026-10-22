@@ -28,12 +28,14 @@ type ServiceConfig struct {
 	GroqThinkingEnabled bool
 
 	// Additional provider configuration
-	OllamaEnabled         bool
-	OllamaURL             string
-	OllamaModel           string
-	OllamaVisionModel     string
-	OllamaThinkingEnabled bool
-	OllamaCompletion      bool
+	OllamaEnabled               bool
+	OllamaURL                   string
+	OllamaModel                 string
+	OllamaVisionModel           string
+	OllamaThinkingEnabled       bool
+	OllamaCompletion            bool
+	OllamaCompletionSpeaker     string
+	OllamaCompletionPromptChars int
 
 	OpencodeEnabled         bool
 	OpencodeBaseURL         string
@@ -191,6 +193,7 @@ func NewService(config ServiceConfig) *Service {
 				return
 			}
 			ollamaProvider.SetCompletionMode(config.OllamaCompletion)
+			ollamaProvider.SetCompletionConfig(config.OllamaCompletionSpeaker, config.OllamaCompletionPromptChars)
 			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,
@@ -367,6 +370,18 @@ func (s *Service) Vision(ctx context.Context, req *VisionRequest) (*VisionRespon
 // Name returns the name of the underlying provider
 func (s *Service) Name() string {
 	return s.provider.Name()
+}
+
+// IsCompletionMode reports whether the response came from Ollama raw completion.
+func (s *Service) IsCompletionMode(response *ChatResponse) bool {
+	if !s.config.OllamaCompletion || response == nil {
+		return false
+	}
+	provider := response.Provider
+	if provider == "" {
+		provider = s.Name()
+	}
+	return provider == ProviderOllama
 }
 
 // AvailableModels returns available models from the underlying provider

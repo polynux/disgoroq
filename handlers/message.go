@@ -236,12 +236,13 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	defer chatCancel()
 
 	response, err := h.aiservice.Chat(chatCtx, &ai.ChatRequest{
-		SystemPrompt: instructions,
-		Messages:     processedMessage.Messages,
-		Images:       processedMessage.Images,
-		Temperature:  temperature,
-		MaxTokens:    database.DefaultMaxTokens,
-		BotName:      botNick,
+		SystemPrompt:    instructions,
+		Messages:        processedMessage.Messages,
+		Images:          processedMessage.Images,
+		Temperature:     temperature,
+		MaxTokens:       database.DefaultMaxTokens,
+		BotName:         botNick,
+		TargetMessageID: m.ID.String(),
 	})
 
 	reference := &discord.MessageReference{
@@ -272,6 +273,12 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	// Validate response before sending
 	if response.Content == "" {
+		if h.aiservice.IsCompletionMode(response) {
+			logger.Info("Ollama completion returned an empty response; staying silent",
+				zap.String("guild_id", m.GuildID.String()),
+				zap.String("user_id", m.Author.ID.String()))
+			return
+		}
 		logger.Error("Received empty response from AI service",
 			zap.String("guild_id", m.GuildID.String()),
 			zap.String("user_id", m.Author.ID.String()))
@@ -291,6 +298,12 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 
 	if response.Content == "" {
+		if h.aiservice.IsCompletionMode(response) {
+			logger.Info("Ollama completion response became empty after post-processing; staying silent",
+				zap.String("guild_id", m.GuildID.String()),
+				zap.String("user_id", m.Author.ID.String()))
+			return
+		}
 		logger.Error("AI response became empty after post-processing",
 			zap.String("guild_id", m.GuildID.String()),
 			zap.String("user_id", m.Author.ID.String()))
