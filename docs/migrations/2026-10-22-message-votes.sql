@@ -1,5 +1,6 @@
 -- One-time migration after the new message_votes table and indexes exist.
-INSERT INTO message_votes (
+-- OR IGNORE: rows adopted by votes since the restart are already there.
+INSERT OR IGNORE INTO message_votes (
     message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
     content, reply_to_message_id, reply_to_content, provider, model,
     good_count, bad_count, message_created_at, created_at, updated_at
