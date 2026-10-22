@@ -38,7 +38,8 @@ type MessageHandler struct {
 	triggerWords   []string
 	votesConfig    config.VotesConfig
 	replySlots     chan struct{}
-	replyLocks     sync.Map
+	replyLocks     sync.Map // per channel: one reply generated at a time
+	rateLimitLocks sync.Map // per guild: the rate-limit check and update are atomic
 }
 
 const maxConcurrentMessageReplies = 4
@@ -109,17 +110,9 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		}()
 	}
 
-	if h.tryAcquireReplySlot() {
-		message := m
-		go func() {
-			defer func() { <-h.replySlots }()
-			h.handleMessageReply(client, message)
-		}()
-		return
-	}
-	logger.Warn("Skipping message reply because all reply workers are busy",
-		zap.String("channel_id", m.ChannelID.String()),
-		zap.String("message_id", m.ID.String()))
+	// Deciding whether to reply is short (DB reads, one REST call); only an
+	// actual reply takes the channel lock and a reply slot.
+	go h.handleMessageReply(client, m)
 }
 
 func (h *MessageHandler) tryAcquireReplySlot() bool {
@@ -132,9 +125,6 @@ func (h *MessageHandler) tryAcquireReplySlot() bool {
 }
 
 func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Message) {
-	channelLock := h.replyLockForChannel(m.ChannelID)
-	channelLock.Lock()
-	defer channelLock.Unlock()
 	ctx, cancel := appcontext.Message()
 	defer cancel()
 
@@ -172,14 +162,20 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		return
 	}
 
-	lastMessageTime := h.repo.GetLastMessage(ctx, m.GuildID.String())
-	if lastMessageTime > 0 && !explicitTrigger {
-		if time.Now().Unix()-lastMessageTime < database.DefaultRateLimit {
-			return
-		}
+	if !h.passRateLimit(ctx, m.GuildID.String(), explicitTrigger) {
+		return
 	}
 
-	_ = h.repo.SetLastMessage(ctx, m.GuildID.String(), time.Now().Unix())
+	channelLock := h.lockFor(&h.replyLocks, m.ChannelID.String())
+	channelLock.Lock()
+	defer channelLock.Unlock()
+	if !h.tryAcquireReplySlot() {
+		logger.Warn("Skipping message reply because all reply workers are busy",
+			zap.String("channel_id", m.ChannelID.String()),
+			zap.String("message_id", m.ID.String()))
+		return
+	}
+	defer func() { <-h.replySlots }()
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
@@ -387,8 +383,23 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 	}
 }
 
-func (h *MessageHandler) replyLockForChannel(channelID snowflake.ID) *sync.Mutex {
-	lock, _ := h.replyLocks.LoadOrStore(channelID, &sync.Mutex{})
+// passRateLimit applies the per-guild reply rate limit (explicit triggers
+// bypass it) and records the reply time, atomically per guild.
+func (h *MessageHandler) passRateLimit(ctx context.Context, guildID string, explicitTrigger bool) bool {
+	lock := h.lockFor(&h.rateLimitLocks, guildID)
+	lock.Lock()
+	defer lock.Unlock()
+	now := time.Now().Unix()
+	lastMessageTime := h.repo.GetLastMessage(ctx, guildID)
+	if lastMessageTime > 0 && !explicitTrigger && now-lastMessageTime < database.DefaultRateLimit {
+		return false
+	}
+	_ = h.repo.SetLastMessage(ctx, guildID, now)
+	return true
+}
+
+func (h *MessageHandler) lockFor(locks *sync.Map, key string) *sync.Mutex {
+	lock, _ := locks.LoadOrStore(key, &sync.Mutex{})
 	return lock.(*sync.Mutex)
 }
 

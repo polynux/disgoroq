@@ -2,8 +2,6 @@ package handlers
 
 import (
 	"testing"
-
-	"github.com/disgoorg/snowflake/v2"
 )
 
 func TestTryAcquireReplySlotIsBounded(t *testing.T) {
@@ -22,14 +20,14 @@ func TestTryAcquireReplySlotIsBounded(t *testing.T) {
 	}
 }
 
-func TestReplyLockForChannelSerializesTheSameChannel(t *testing.T) {
+func TestLockForSharesOneLockPerKey(t *testing.T) {
 	h := &MessageHandler{}
 
-	first := h.replyLockForChannel(snowflake.ID(1))
-	if first != h.replyLockForChannel(snowflake.ID(1)) {
-		t.Fatal("expected the same channel to share a reply lock")
+	first := h.lockFor(&h.replyLocks, "1")
+	if first != h.lockFor(&h.replyLocks, "1") {
+		t.Fatal("expected the same key to share a lock")
 	}
-	if first == h.replyLockForChannel(snowflake.ID(2)) {
-		t.Fatal("expected different channels to use separate reply locks")
+	if first == h.lockFor(&h.replyLocks, "2") {
+		t.Fatal("expected different keys to use separate locks")
 	}
 }
