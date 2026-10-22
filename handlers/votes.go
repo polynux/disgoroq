@@ -112,15 +112,10 @@ func partialEmojiName(name *string) string {
 func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source discord.Message, response *ai.ChatResponse, provider string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	for _, emoji := range []string{h.votesConfig.GoodEmoji, h.votesConfig.BadEmoji} {
-		if err := h.client.Rest.AddReaction(reply.ChannelID, reply.ID, emoji, rest.WithCtx(ctx)); err != nil {
-			logger.Warn("Failed to add reply vote reaction",
-				zap.String("message_id", reply.ID.String()), zap.String("emoji", emoji), zap.Error(err))
-		}
-	}
 	if source.GuildID == nil {
 		return
 	}
+	// Store the record before reacting so the first votes find it.
 	if err := h.repo.InsertBotReplyVote(ctx, database.BotReplyVote{
 		MessageID: reply.ID.String(), GuildID: source.GuildID.String(), ChannelID: reply.ChannelID.String(),
 		Content: response.Content, ReplyToMessageID: source.ID.String(), ReplyToContent: source.Content,
@@ -128,5 +123,12 @@ func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source dis
 	}); err != nil {
 		logger.Warn("Failed to store bot reply vote record",
 			zap.String("message_id", reply.ID.String()), zap.Error(err))
+		return
+	}
+	for _, emoji := range []string{h.votesConfig.GoodEmoji, h.votesConfig.BadEmoji} {
+		if err := h.client.Rest.AddReaction(reply.ChannelID, reply.ID, emoji, rest.WithCtx(ctx)); err != nil {
+			logger.Warn("Failed to add reply vote reaction",
+				zap.String("message_id", reply.ID.String()), zap.String("emoji", emoji), zap.Error(err))
+		}
 	}
 }
