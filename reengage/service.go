@@ -228,7 +228,10 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
 	}
 
-	createdMessage, err := s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{Content: content}, rest.WithCtx(ctx))
+	createdMessage, err := s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	}, rest.WithCtx(ctx))
 	if err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}

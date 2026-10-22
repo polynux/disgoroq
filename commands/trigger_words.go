@@ -62,7 +62,8 @@ func handleTriggerWordsList(e *events.ApplicationCommandInteractionCreate, repo 
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content: fmt.Sprintf("Trigger words (%s): `%s`", source, strings.Join(triggerWords, "`, `")),
+		Content:         fmt.Sprintf("Trigger words (%s): `%s`", source, strings.Join(triggerWords, "`, `")),
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
 
@@ -88,7 +89,8 @@ func handleTriggerWordsAdd(e *events.ApplicationCommandInteractionCreate, repo *
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content: fmt.Sprintf("✅ Trigger word added. Current words: `%s`", strings.Join(triggerwords.NormalizeAll(triggerWords), "`, `")),
+		Content:         fmt.Sprintf("✅ Trigger word added. Current words: `%s`", strings.Join(triggerwords.NormalizeAll(triggerWords), "`, `")),
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
 
@@ -128,7 +130,8 @@ func handleTriggerWordsRemove(e *events.ApplicationCommandInteractionCreate, rep
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content: fmt.Sprintf("✅ Trigger word removed. Current words: `%s`", strings.Join(filtered, "`, `")),
+		Content:         fmt.Sprintf("✅ Trigger word removed. Current words: `%s`", strings.Join(filtered, "`, `")),
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
 
@@ -151,7 +154,8 @@ func handleTriggerWordsSet(e *events.ApplicationCommandInteractionCreate, repo *
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content: fmt.Sprintf("✅ Trigger words set to: `%s`", strings.Join(words, "`, `")),
+		Content:         fmt.Sprintf("✅ Trigger words set to: `%s`", strings.Join(words, "`, `")),
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
 
@@ -169,7 +173,8 @@ func handleTriggerWordsReset(e *events.ApplicationCommandInteractionCreate, repo
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content: fmt.Sprintf("✅ Trigger words reset to defaults: `%s`", strings.Join(defaultTriggerWords, "`, `")),
+		Content:         fmt.Sprintf("✅ Trigger words reset to defaults: `%s`", strings.Join(defaultTriggerWords, "`, `")),
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
 

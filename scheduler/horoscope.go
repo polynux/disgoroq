@@ -102,7 +102,10 @@ func (s *Scheduler) SendHoroscope() {
 			continue
 		}
 		for _, value := range responses {
-			_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{Content: value}, rest.WithCtx(ctx))
+			_, err = s.client.Rest.CreateMessage(snowflake.MustParse(channelID), discord.MessageCreate{
+				Content:         value,
+				AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+			}, rest.WithCtx(ctx))
 			if err != nil {
 				logger.Error("Error sending horoscope content",
 					zap.Error(err),

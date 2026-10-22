@@ -500,7 +500,10 @@ func (vc *VoiceCommands) handleDisable(e *events.ApplicationCommandInteractionCr
 // Helper functions
 
 func (vc *VoiceCommands) respond(e *events.ApplicationCommandInteractionCreate, content string) {
-	err := e.CreateMessage(discord.MessageCreate{Content: content})
+	err := e.CreateMessage(discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 	if err != nil {
 		logger.Error("Failed to respond to interaction", zap.Error(err))
 	}

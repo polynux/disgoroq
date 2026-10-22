@@ -433,7 +433,10 @@ func horoscopeHandler(e *events.ApplicationCommandInteractionCreate) {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "Error getting horoscope"})
 		return
 	}
-	_ = e.CreateMessage(discord.MessageCreate{Content: horo})
+	_ = e.CreateMessage(discord.MessageCreate{
+		Content:         horo,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 }
 
 func horoscopeChannelHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
@@ -650,7 +653,10 @@ func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *dat
 		content = "Error updating prompt: " + err.Error()
 	}
 
-	_ = e.CreateMessage(discord.MessageCreate{Content: content})
+	_ = e.CreateMessage(discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 }
 
 func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
@@ -702,7 +708,10 @@ func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *databa
 	if err != nil {
 		content = "Error setting prompt: " + err.Error()
 	}
-	_ = e.CreateMessage(discord.MessageCreate{Content: content})
+	_ = e.CreateMessage(discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 }
 
 func getDefaultPromptForInteraction(ctx stdcontext.Context, e *events.ApplicationCommandInteractionCreate) (string, error) {
@@ -846,7 +855,10 @@ func handleReengageMessage(e *events.ApplicationCommandInteractionCreate, repo *
 	if err != nil {
 		content = "❌ Error setting reengage message"
 	}
-	_ = e.CreateMessage(discord.MessageCreate{Content: content})
+	_ = e.CreateMessage(discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 }
 
 func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, cfg config.ReengageConfig) {
@@ -881,7 +893,10 @@ func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *d
 	}
 
 	content := fmt.Sprintf("**Reengage Settings for this channel:**\nStatus: %s\nChance: %.2f%%\nThreshold: %d minutes\nMessage: %s", status, chance*100, threshold, messageDisplay)
-	_ = e.CreateMessage(discord.MessageCreate{Content: content})
+	_ = e.CreateMessage(discord.MessageCreate{
+		Content:         content,
+		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+	})
 }
 
 func getDefaultPrompt(botNick string) string {

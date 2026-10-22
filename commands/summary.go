@@ -42,6 +42,9 @@ func userMemoryHandler(memoryService memory.Service) func(e *events.ApplicationC
 
 		content := fmt.Sprintf("📝 Latest summary for <@%s> (created %s):\n```\n%s\n```",
 			userID, summary.CreatedAt.Format("2006-01-02 15:04"), summary.Content)
-		_ = e.CreateMessage(discord.MessageCreate{Content: content})
+		_ = e.CreateMessage(discord.MessageCreate{
+			Content:         content,
+			AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+		})
 	}
 }
