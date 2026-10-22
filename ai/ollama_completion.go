@@ -12,10 +12,12 @@ import (
 	"strings"
 )
 
-// Completion mode serves raw chat-log models trained on plain "name: text" Discord lines, not on
+// Completion mode serves raw chat-log models (e.g. luciole-1b-discord1 from
+// discord-ia-waldo): models trained on plain "name: text" Discord lines, not on
 // instructions. They cannot follow a system prompt or call tools, so the
-// request becomes the recent chat as lines ending with "<bot name>:", sent to
-// /api/generate with raw=true, and the reply is that one line.
+// request becomes the recent chat as lines ending with the bot's speaker tag
+// ("§bot:" for Luciole), sent to /api/generate with raw=true, and the reply is
+// that one line.
 
 const (
 	// Luciole has a 1,024-token context; French chat averages about 2.8 chars/token.
@@ -266,10 +268,11 @@ func completionText(msg Message, names map[string]string) string {
 	return text
 }
 
-// cleanCompletionReply drops what the bot should not post as text: @mentions
-// (the model learned them from the chat) and URL placeholders.
+// cleanCompletionReply drops what the bot should not post as text: a leading
+// "name: " speaker, @mentions (the model learned them from the chat) and URL
+// placeholders, and turns the speaker tag back into the bot's name.
 func cleanCompletionReply(reply, botName string) string {
-	reply = completionLeadingSpeaker.ReplaceAllString(reply, "")
+	reply = completionLeadingSpeaker.ReplaceAllString(strings.TrimSpace(reply), "")
 	if botName == "" {
 		botName = "bot"
 	}

@@ -74,7 +74,7 @@ func TestBuildCompletionPromptExcludesBotsCommandsAndErrorReplies(t *testing.T) 
 	messages := []Message{
 		{Role: RoleUser, Content: "<@1>Alice: human", AuthorID: "1", AuthorNick: "Alice"},
 		{Role: RoleUser, Content: "<@2>OtherBot: bot chatter", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true},
-		{Role: RoleUser, Content: "<@3>Command: done", AuthorID: "3", AuthorNick: "Command", CommandOutput: true},
+		{Role: RoleAssistant, Content: "mémoire désactivée", AuthorNick: "Bot", CommandOutput: true},
 		{Role: RoleAssistant, Content: "Désolé, tous mes systèmes sont en rade... 🤖💀", AuthorNick: "Bot"},
 	}
 	prompt := buildCompletionPrompt(messages, "Bot", "", "§bot", 2400)
@@ -85,6 +85,9 @@ func TestCleanCompletionReply(t *testing.T) {
 	assert.Equal(t, "salut Bot mdr: x", cleanCompletionReply("Alice: salut §bot mdr: x", "Bot"))
 	assert.Equal(t, "ptdr t'es grave", cleanCompletionReply(" @Yu ptdr t'es grave [gif]", "Bot"))
 	assert.Equal(t, "", cleanCompletionReply(" @Deleted", "Bot"))
+	// Raw replies start with a space because the prompt ends with "§bot:".
+	assert.Equal(t, "ouais grave", cleanCompletionReply(" Bob: ouais grave", "Bot"))
+	assert.Equal(t, "ok Bot", cleanCompletionReply(" §bot: ok §bot", "Bot"))
 }
 
 func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {
