@@ -290,11 +290,16 @@ func main() {
 	emojiManager := emoji.NewManager(client, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords)
+	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Votes)
+	voteHandler := handlers.NewVoteHandler(client, repo, cfg.Votes)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
 		bot.NewListenerFunc(messageHandler.HandleMessageUpdate),
 		bot.NewListenerFunc(messageHandler.HandleMessageDelete),
+		bot.NewListenerFunc(voteHandler.HandleGuildMessageReactionAdd),
+		bot.NewListenerFunc(voteHandler.HandleGuildMessageReactionRemove),
+		bot.NewListenerFunc(voteHandler.HandleGuildMessageReactionRemoveEmoji),
+		bot.NewListenerFunc(voteHandler.HandleGuildMessageReactionRemoveAll),
 		bot.NewListenerFunc(handlers.HandleGuildJoin),
 		bot.NewListenerFunc(handlers.HandleGuildLeave),
 	)

@@ -1,6 +1,22 @@
 -- name: GetGuildSettings :many
 SELECT * FROM guild_settings WHERE id = ?;
 
+-- name: InsertBotReplyVote :exec
+INSERT INTO bot_reply_votes (
+    message_id, guild_id, channel_id, content, reply_to_message_id,
+    reply_to_content, provider, model
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetBotReplyVote :one
+SELECT message_id, guild_id, channel_id, content, reply_to_message_id,
+       reply_to_content, provider, model, good_count, bad_count, created_at, updated_at
+FROM bot_reply_votes WHERE message_id = ?;
+
+-- name: UpdateBotReplyVoteCounts :exec
+UPDATE bot_reply_votes
+SET good_count = ?, bad_count = ?, updated_at = strftime('%s', 'now')
+WHERE message_id = ?;
+
 -- name: GetGuildSetting :one
 SELECT value FROM guild_settings WHERE guild_id = ? AND name = ?;
 

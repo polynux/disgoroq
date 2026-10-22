@@ -37,6 +37,21 @@ type BotEvent struct {
 	Error      sql.NullString
 }
 
+type BotReplyVote struct {
+	MessageID        string
+	GuildID          string
+	ChannelID        string
+	Content          string
+	ReplyToMessageID string
+	ReplyToContent   string
+	Provider         string
+	Model            string
+	GoodCount        int64
+	BadCount         int64
+	CreatedAt        int64
+	UpdatedAt        int64
+}
+
 type ConversationSummary struct {
 	ID             int64
 	GuildID        string

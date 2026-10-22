@@ -79,6 +79,37 @@ func TestRepository_GetThreshold_Default(t *testing.T) {
 	}
 }
 
+func TestRepository_BotReplyVoteCRUD(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+	want := BotReplyVote{
+		MessageID: "reply-1", GuildID: "guild-1", ChannelID: "channel-1", Content: "AI answer",
+		ReplyToMessageID: "source-1", ReplyToContent: "question", Provider: "groq", Model: "model-1",
+	}
+	if err := repo.InsertBotReplyVote(ctx, want); err != nil {
+		t.Fatalf("InsertBotReplyVote() error = %v", err)
+	}
+	got, err := repo.GetBotReplyVote(ctx, want.MessageID)
+	if err != nil {
+		t.Fatalf("GetBotReplyVote() error = %v", err)
+	}
+	if got.MessageID != want.MessageID || got.GuildID != want.GuildID || got.ChannelID != want.ChannelID ||
+		got.Content != want.Content || got.ReplyToMessageID != want.ReplyToMessageID ||
+		got.ReplyToContent != want.ReplyToContent || got.Provider != want.Provider || got.Model != want.Model {
+		t.Fatalf("GetBotReplyVote() = %+v, want stored fields from %+v", got, want)
+	}
+	if err := repo.UpdateBotReplyVoteCounts(ctx, want.MessageID, 3, 2); err != nil {
+		t.Fatalf("UpdateBotReplyVoteCounts() error = %v", err)
+	}
+	got, err = repo.GetBotReplyVote(ctx, want.MessageID)
+	if err != nil {
+		t.Fatalf("GetBotReplyVote() after update error = %v", err)
+	}
+	if got.GoodCount != 3 || got.BadCount != 2 {
+		t.Fatalf("updated counts = (%d, %d), want (3, 2)", got.GoodCount, got.BadCount)
+	}
+}
+
 func TestRepository_GetThreshold_WithValue(t *testing.T) {
 	ctx := context.Background()
 	repo := setupTestDB(t)

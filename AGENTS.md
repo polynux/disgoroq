@@ -41,6 +41,7 @@ DisgoroQ is a Go Discord bot with:
 - Reengage activity is tracked from all non-bot guild messages, not only when the bot replies.
 - Voice join now respects per-guild `voice_enabled`.
 - Voice playback uses configured default voice, text fallback policy, max text length, stream buffer size, and frame timing.
+- AI replies may receive configured vote reactions; counts and reply text are stored in `bot_reply_votes`.
 
 ## Conventions
 

@@ -142,3 +142,21 @@ CREATE TABLE IF NOT EXISTS voice_settings (
 
 CREATE INDEX IF NOT EXISTS idx_voice_settings_guild_id
 ON voice_settings(guild_id);
+
+CREATE TABLE IF NOT EXISTS bot_reply_votes (
+    message_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    reply_to_message_id TEXT NOT NULL DEFAULT '',
+    reply_to_content TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    good_count INTEGER NOT NULL DEFAULT 0,
+    bad_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_bot_reply_votes_guild_created
+ON bot_reply_votes(guild_id, created_at DESC);

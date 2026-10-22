@@ -182,6 +182,32 @@ func (q *Queries) GetAttachmentCacheEntry(ctx context.Context, arg GetAttachment
 	return i, err
 }
 
+const getBotReplyVote = `-- name: GetBotReplyVote :one
+SELECT message_id, guild_id, channel_id, content, reply_to_message_id,
+       reply_to_content, provider, model, good_count, bad_count, created_at, updated_at
+FROM bot_reply_votes WHERE message_id = ?
+`
+
+func (q *Queries) GetBotReplyVote(ctx context.Context, messageID string) (BotReplyVote, error) {
+	row := q.db.QueryRowContext(ctx, getBotReplyVote, messageID)
+	var i BotReplyVote
+	err := row.Scan(
+		&i.MessageID,
+		&i.GuildID,
+		&i.ChannelID,
+		&i.Content,
+		&i.ReplyToMessageID,
+		&i.ReplyToContent,
+		&i.Provider,
+		&i.Model,
+		&i.GoodCount,
+		&i.BadCount,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getDiscordMessageCacheState = `-- name: GetDiscordMessageCacheState :one
 SELECT history_exhausted
 FROM discord_message_cache_state
@@ -739,6 +765,38 @@ func (q *Queries) GetVoiceSettings(ctx context.Context, guildID string) (GetVoic
 	return i, err
 }
 
+const insertBotReplyVote = `-- name: InsertBotReplyVote :exec
+INSERT INTO bot_reply_votes (
+    message_id, guild_id, channel_id, content, reply_to_message_id,
+    reply_to_content, provider, model
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertBotReplyVoteParams struct {
+	MessageID        string
+	GuildID          string
+	ChannelID        string
+	Content          string
+	ReplyToMessageID string
+	ReplyToContent   string
+	Provider         string
+	Model            string
+}
+
+func (q *Queries) InsertBotReplyVote(ctx context.Context, arg InsertBotReplyVoteParams) error {
+	_, err := q.db.ExecContext(ctx, insertBotReplyVote,
+		arg.MessageID,
+		arg.GuildID,
+		arg.ChannelID,
+		arg.Content,
+		arg.ReplyToMessageID,
+		arg.ReplyToContent,
+		arg.Provider,
+		arg.Model,
+	)
+	return err
+}
+
 const insertEvent = `-- name: InsertEvent :exec
 INSERT INTO bot_events (timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -932,6 +990,23 @@ func (q *Queries) SetVoiceSettings(ctx context.Context, arg SetVoiceSettingsPara
 		arg.AutoJoinChannel,
 		arg.VoiceEnabled,
 	)
+	return err
+}
+
+const updateBotReplyVoteCounts = `-- name: UpdateBotReplyVoteCounts :exec
+UPDATE bot_reply_votes
+SET good_count = ?, bad_count = ?, updated_at = strftime('%s', 'now')
+WHERE message_id = ?
+`
+
+type UpdateBotReplyVoteCountsParams struct {
+	GoodCount int64
+	BadCount  int64
+	MessageID string
+}
+
+func (q *Queries) UpdateBotReplyVoteCounts(ctx context.Context, arg UpdateBotReplyVoteCountsParams) error {
+	_, err := q.db.ExecContext(ctx, updateBotReplyVoteCounts, arg.GoodCount, arg.BadCount, arg.MessageID)
 	return err
 }
 

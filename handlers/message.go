@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 
 	"polynux/disgoroq/ai"
+	"polynux/disgoroq/config"
 	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
@@ -34,9 +35,10 @@ type MessageHandler struct {
 	emojiManager   *emoji.Manager
 	defaultPrompt  string
 	triggerWords   []string
+	votesConfig    config.VotesConfig
 }
 
-func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string) *MessageHandler {
+func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string, votesConfig config.VotesConfig) *MessageHandler {
 	return &MessageHandler{
 		client:         client,
 		aiservice:      aiService,
@@ -46,6 +48,7 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 		emojiManager:   emojiManager,
 		defaultPrompt:  defaultPrompt,
 		triggerWords:   triggerwords.NormalizeAll(triggerWords),
+		votesConfig:    votesConfig,
 	}
 }
 
@@ -327,16 +330,21 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		zap.Int("response_length", len(response.Content)),
 		zap.Int("tokens_used", response.TokensUsed))
 
-	if err := h.createMessage(m.ChannelID, discord.MessageCreate{
+	createdMessage, err := h.createMessageWithResult(m.ChannelID, discord.MessageCreate{
 		Content:          response.Content,
 		MessageReference: reference,
 		AllowedMentions:  &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
-	}); err != nil {
+	})
+	if err != nil {
 		logger.Error("Failed to send AI response",
 			zap.String("guild_id", m.GuildID.String()),
 			zap.String("user_id", m.Author.ID.String()),
 			zap.String("provider", providerName),
 			zap.Error(err))
+		return
+	}
+	if h.votesConfig.Enabled && rand.Float64() < h.votesConfig.Probability && m.GuildID != nil && createdMessage != nil {
+		go h.addReplyVoteReactions(*createdMessage, m, response, providerName)
 	}
 }
 
@@ -366,18 +374,23 @@ func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
 }
 
 func (h *MessageHandler) createMessage(channelID snowflake.ID, message discord.MessageCreate) error {
+	_, err := h.createMessageWithResult(channelID, message)
+	return err
+}
+
+func (h *MessageHandler) createMessageWithResult(channelID snowflake.ID, message discord.MessageCreate) (*discord.Message, error) {
 	sendCtx, sendCancel := appcontext.Message()
 	defer sendCancel()
 
 	createdMessage, err := h.client.Rest.CreateMessage(channelID, message, rest.WithCtx(sendCtx))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if createdMessage != nil {
 		h.cacheMessage(context.Background(), *createdMessage)
 	}
-	return err
+	return createdMessage, nil
 }
 
 func (h *MessageHandler) botMentioned(m *discord.Message, botID snowflake.ID) bool {

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -644,6 +645,9 @@ func TestValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.config.Votes == (VotesConfig{}) {
+				tt.config.Votes = DefaultConfig().Votes
+			}
 			err := tt.config.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
@@ -941,6 +945,18 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if len(config.Bot.TriggerWords) != 2 || config.Bot.TriggerWords[0] != "feun" || config.Bot.TriggerWords[1] != "feunboy" {
 		t.Errorf("Default Bot.TriggerWords = %v, want [feun feunboy]", config.Bot.TriggerWords)
+	}
+}
+
+func TestVotesConfigDefaultsAndValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.Votes.Enabled || cfg.Votes.Probability != 0.25 || cfg.Votes.GoodEmoji != "😂" || cfg.Votes.BadEmoji != "🗑️" {
+		t.Fatalf("unexpected vote defaults: %+v", cfg.Votes)
+	}
+
+	cfg.Votes.Probability = 1.1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "votes.probability") {
+		t.Fatalf("Validate() error = %v, want votes.probability range error", err)
 	}
 }
 

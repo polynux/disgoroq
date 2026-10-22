@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -42,6 +43,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.Reengage.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
+	if err := c.Votes.validate(); err != nil {
 		errors = append(errors, err.Error())
 	}
 
@@ -449,6 +454,21 @@ func (c *ReengageConfig) validate() error {
 	}
 	if c.DefaultChance < 0 || c.DefaultChance > 1 {
 		return fmt.Errorf("reengage.default_chance must be between 0 and 1")
+	}
+	return nil
+}
+
+func (c *VotesConfig) validate() error {
+	if math.IsNaN(c.Probability) || c.Probability < 0 || c.Probability > 1 {
+		return fmt.Errorf("votes.probability must be between 0 and 1")
+	}
+	if strings.TrimSpace(c.GoodEmoji) == "" || strings.TrimSpace(c.BadEmoji) == "" {
+		return fmt.Errorf("votes emojis cannot be empty")
+	}
+	goodEmoji := strings.ReplaceAll(strings.TrimSpace(c.GoodEmoji), "\uFE0F", "")
+	badEmoji := strings.ReplaceAll(strings.TrimSpace(c.BadEmoji), "\uFE0F", "")
+	if goodEmoji == badEmoji {
+		return fmt.Errorf("votes.good_emoji and votes.bad_emoji must be different")
 	}
 	return nil
 }
