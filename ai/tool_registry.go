@@ -520,14 +520,23 @@ func (r roundTripperWithHeaders) RoundTrip(req *http.Request) (*http.Response, e
 }
 
 func newWebFetchTransport(allowPrivate bool) *http.Transport {
+	return newWebFetchTransportWithDial(allowPrivate, net.DefaultResolver.LookupNetIP, (&net.Dialer{}).DialContext)
+}
+
+func newWebFetchTransportWithDial(
+	allowPrivate bool,
+	lookupNetIP func(context.Context, string, string) ([]netip.Addr, error),
+	dialContext func(context.Context, string, string) (net.Conn, error),
+) *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if allowPrivate {
 		return transport
 	}
 
-	dialer := &net.Dialer{}
+	transport.Proxy = nil
+	transport.DialTLSContext = nil
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(address)
+		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, err
 		}
@@ -536,16 +545,28 @@ func newWebFetchTransport(allowPrivate bool) *http.Transport {
 			return nil, fmt.Errorf("blocked private host %q", host)
 		}
 
-		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if err == nil {
-			for _, ip := range ips {
-				if isPrivateIP(ip) {
-					return nil, fmt.Errorf("blocked private address %s", ip.String())
-				}
+		ips, err := lookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve host %q: %w", host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("resolve host %q: no addresses", host)
+		}
+		for _, ip := range ips {
+			if isPrivateIP(ip) {
+				return nil, fmt.Errorf("blocked private address %s", ip.String())
 			}
 		}
 
-		return dialer.DialContext(ctx, network, address)
+		var lastErr error
+		for _, ip := range ips {
+			conn, err := dialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			lastErr = err
+		}
+		return nil, lastErr
 	}
 
 	return transport
@@ -557,5 +578,14 @@ func blockedHostName(host string) bool {
 }
 
 func isPrivateIP(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	if addr.Is4() && (addr.As4()[0] == 0 || netip.MustParsePrefix("100.64.0.0/10").Contains(addr)) {
+		return true
+	}
+	if nat64Prefix := netip.MustParsePrefix("64:ff9b::/96"); addr.Is6() && nat64Prefix.Contains(addr) {
+		bytes := addr.As16()
+		mapped := netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})
+		return isPrivateIP(mapped)
+	}
 	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified()
 }
