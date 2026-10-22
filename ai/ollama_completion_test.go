@@ -88,6 +88,7 @@ func TestCleanCompletionReply(t *testing.T) {
 	// Raw replies start with a space because the prompt ends with "§bot:".
 	assert.Equal(t, "ouais grave", cleanCompletionReply(" Bob: ouais grave", "Bot"))
 	assert.Equal(t, "ok Bot", cleanCompletionReply(" §bot: ok §bot", "Bot"))
+	assert.Equal(t, "", cleanCompletionReply(" §bot:", "Bot"))
 }
 
 func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {

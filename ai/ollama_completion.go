@@ -32,7 +32,7 @@ var (
 	completionURL            = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
 	completionPlaceholder    = regexp.MustCompile(`\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam)\]`)
 	completionReplyMention   = regexp.MustCompile(`@\S+`)
-	completionLeadingSpeaker = regexp.MustCompile(`^[^:\s]{1,32}: `)
+	completionLeadingSpeaker = regexp.MustCompile(`^[^:\s]{1,32}:(?:\s|$)`)
 	// Same URL placeholders as the training data (discord-ia-waldo prep/discord.py).
 	completionURLKinds = []struct {
 		pattern     *regexp.Regexp

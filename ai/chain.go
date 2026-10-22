@@ -99,6 +99,14 @@ func (c *ProviderChain) Chat(ctx context.Context, req *ChatRequest) (*ChatRespon
 			return nil, fmt.Errorf("all providers exhausted: %v", errors)
 		}
 
+		// A completion model's empty reply means "stay silent", not a failure.
+		if response.EmptyCompletion {
+			if response.Provider == "" {
+				response.Provider = provider.Name()
+			}
+			return response, nil
+		}
+
 		// Validate the response
 		validation := c.validator.ValidateChatResponse(response)
 

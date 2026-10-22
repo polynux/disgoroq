@@ -222,6 +222,23 @@ func TestProviderChainChatFallbackOnEmptyResponse(t *testing.T) {
 	mockProvider2.AssertExpectations(t)
 }
 
+func TestProviderChainChatReturnsEmptyCompletionWithoutFallback(t *testing.T) {
+	mockProvider1 := new(MockProvider)
+	mockProvider2 := new(MockProvider)
+
+	mockProvider1.On("Name").Return("ollama")
+	mockProvider1.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{Model: "luciole", EmptyCompletion: true}, nil)
+	mockProvider2.On("Name").Return("groq")
+
+	chain := NewProviderChain(mockProvider1, mockProvider2)
+	response, err := chain.Chat(context.Background(), &ChatRequest{Model: "luciole"})
+
+	assert.NoError(t, err)
+	assert.Equal(t, "", response.Content)
+	assert.Equal(t, "ollama", response.Provider)
+	mockProvider2.AssertNotCalled(t, "Chat", mock.Anything, mock.Anything)
+}
+
 func TestProviderChainChatAllProvidersFail(t *testing.T) {
 	mockProvider1 := new(MockProvider)
 	mockProvider2 := new(MockProvider)
