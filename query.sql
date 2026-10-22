@@ -5,7 +5,9 @@ SELECT * FROM guild_settings WHERE id = ?;
 INSERT INTO bot_reply_votes (
     message_id, guild_id, channel_id, content, reply_to_message_id,
     reply_to_content, provider, model
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET provider = excluded.provider, model = excluded.model
+WHERE excluded.provider != '';
 
 -- name: GetBotReplyVote :one
 SELECT message_id, guild_id, channel_id, content, reply_to_message_id,

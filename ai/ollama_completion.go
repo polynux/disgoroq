@@ -187,7 +187,7 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 		}
 		speaker := msg.AuthorNick
 		if msg.Role == RoleAssistant {
-			if botLines >= 2 || isCompletionError(msg.Content) {
+			if botLines >= 2 || IsErrorReply(msg.Content) {
 				continue
 			}
 			speaker = completionSpeaker
@@ -226,7 +226,8 @@ func normalizeCompletionQuotes(text string) string {
 	return strings.NewReplacer("‘", "'", "’", "'", "ʼ", "'", "‛", "'", "“", "\"", "”", "\"", "„", "\"", "‟", "\"").Replace(text)
 }
 
-func isCompletionError(text string) bool {
+// IsErrorReply reports whether text is one of the bot's own error replies.
+func IsErrorReply(text string) bool {
 	for _, prefix := range []string{"Désolé, j'ai des soucis techniques là", "Désolé, tous mes systèmes sont en rade", "Euh... j'ai perdu mes mots là"} {
 		if strings.HasPrefix(text, prefix) {
 			return true

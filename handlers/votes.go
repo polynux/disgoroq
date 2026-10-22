@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -35,22 +37,25 @@ func (h *VoteHandler) HandleGuildMessageReactionAdd(e *events.GuildMessageReacti
 	if e.UserID == e.Client().ID() || !h.isVoteEmoji(partialEmojiName(e.Emoji.Name)) {
 		return
 	}
-	h.recount(e.ChannelID, e.MessageID)
+	// Votes added by hand on an untracked reply adopt it; skip other authors
+	// before any REST call.
+	adopt := e.MessageAuthorID != nil && *e.MessageAuthorID == e.Client().ID()
+	h.recount(e.GuildID, e.ChannelID, e.MessageID, adopt)
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionRemove(e *events.GuildMessageReactionRemove) {
 	if e.UserID == e.Client().ID() || !h.isVoteEmoji(partialEmojiName(e.Emoji.Name)) {
 		return
 	}
-	h.recount(e.ChannelID, e.MessageID)
+	h.recount(e.GuildID, e.ChannelID, e.MessageID, false)
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionRemoveEmoji(e *events.GuildMessageReactionRemoveEmoji) {
-	h.recount(e.ChannelID, e.MessageID)
+	h.recount(e.GuildID, e.ChannelID, e.MessageID, false)
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionRemoveAll(e *events.GuildMessageReactionRemoveAll) {
-	h.recount(e.ChannelID, e.MessageID)
+	h.recount(e.GuildID, e.ChannelID, e.MessageID, false)
 }
 
 func (h *VoteHandler) isVoteEmoji(emoji string) bool {
@@ -60,21 +65,28 @@ func (h *VoteHandler) isVoteEmoji(emoji string) bool {
 
 // recount runs off the gateway goroutine: disgo dispatches listeners inline,
 // so a slow REST call here would delay every other event.
-func (h *VoteHandler) recount(channelID, messageID snowflake.ID) {
+// When adopt is set, an untracked AI reply is recorded on its first vote.
+func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt bool) {
 	if !h.config.Enabled {
 		return
 	}
-	go h.recountNow(channelID, messageID)
+	go h.recountNow(guildID, channelID, messageID, adopt)
 }
 
-func (h *VoteHandler) recountNow(channelID, messageID snowflake.ID) {
+func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, adopt bool) {
 	h.recountMu.Lock()
 	defer h.recountMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	vote, err := h.repo.GetBotReplyVote(ctx, messageID.String())
-	if err != nil {
+	_, err := h.repo.GetBotReplyVote(ctx, messageID.String())
+	tracked := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		logger.Warn("Failed to look up reply vote record",
+			zap.String("message_id", messageID.String()), zap.Error(err))
+		return
+	}
+	if !tracked && !adopt {
 		return
 	}
 	message, err := h.client.Rest.GetMessage(channelID, messageID, rest.WithCtx(ctx))
@@ -83,11 +95,49 @@ func (h *VoteHandler) recountNow(channelID, messageID snowflake.ID) {
 			zap.String("message_id", messageID.String()), zap.Error(err))
 		return
 	}
+	if !tracked {
+		if !isAIReply(*message, h.client.ID()) {
+			return
+		}
+		if err := h.repo.InsertBotReplyVote(ctx, adoptedReplyVote(*message, guildID)); err != nil {
+			logger.Warn("Failed to store adopted reply vote record",
+				zap.String("message_id", messageID.String()), zap.Error(err))
+			return
+		}
+	}
 	goodCount, badCount := ReplyVoteCounts(message.Reactions, h.config.GoodEmoji, h.config.BadEmoji)
-	if err := h.repo.UpdateBotReplyVoteCounts(ctx, vote.MessageID, goodCount, badCount); err != nil {
+	if err := h.repo.UpdateBotReplyVoteCounts(ctx, messageID.String(), goodCount, badCount); err != nil {
 		logger.Warn("Failed to update reply vote counts",
 			zap.String("message_id", messageID.String()), zap.Error(err))
 	}
+}
+
+// isAIReply tells an AI answer apart from the bot's other messages: AI answers
+// are always posted as a reply, while errors and command outputs are excluded.
+func isAIReply(message discord.Message, botID snowflake.ID) bool {
+	return message.Author.ID == botID &&
+		message.MessageReference != nil &&
+		message.Interaction == nil && message.InteractionMetadata == nil &&
+		strings.TrimSpace(message.Content) != "" &&
+		!ai.IsErrorReply(message.Content)
+}
+
+// adoptedReplyVote records a reply posted before tracking; provider and model
+// are unknown for it.
+func adoptedReplyVote(message discord.Message, guildID snowflake.ID) database.BotReplyVote {
+	vote := database.BotReplyVote{
+		MessageID: message.ID.String(),
+		GuildID:   guildID.String(),
+		ChannelID: message.ChannelID.String(),
+		Content:   message.Content,
+	}
+	if message.MessageReference.MessageID != nil {
+		vote.ReplyToMessageID = message.MessageReference.MessageID.String()
+	}
+	if message.ReferencedMessage != nil {
+		vote.ReplyToContent = message.ReferencedMessage.Content
+	}
+	return vote
 }
 
 // ReplyVoteCounts returns user vote counts, excluding the bot's seed reactions.
