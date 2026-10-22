@@ -740,7 +740,9 @@ func forceSummaryHandler(memoryService memory.Service) func(e *events.Applicatio
 
 		_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("🔄 Creating summary for <@%s>...", userID)})
 
-		ctx, cancel := appcontext.Command()
+		// Summarizing is an LLM call plus an embedding, like the memory
+		// service's own summaries, so it gets the AI budget.
+		ctx, cancel := appcontext.AI()
 		defer cancel()
 		err := memoryService.ForceSummarize(ctx, userID.String(), getGuildID(e))
 

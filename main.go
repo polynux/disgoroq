@@ -353,7 +353,15 @@ func main() {
 	}
 	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
-		go registry.HandleCommand(e)
+		go func() {
+			// disgo only recovers panics in inline listeners.
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Error("Recovered panic in command handler", zap.Any("panic", r))
+				}
+			}()
+			registry.HandleCommand(e)
+		}()
 	}))
 
 	err = client.OpenGateway(context.Background())

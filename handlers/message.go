@@ -112,7 +112,18 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	// Deciding whether to reply is short (DB reads, one REST call); only an
 	// actual reply takes the channel lock and a reply slot.
-	go h.handleMessageReply(client, m)
+	go func() {
+		// disgo only recovers panics in inline listeners.
+		defer recoverListenerPanic("message reply")
+		h.handleMessageReply(client, m)
+	}()
+}
+
+func recoverListenerPanic(what string) {
+	if r := recover(); r != nil {
+		logger.Error("Recovered panic in background handler",
+			zap.String("handler", what), zap.Any("panic", r))
+	}
 }
 
 func (h *MessageHandler) tryAcquireReplySlot() bool {
@@ -125,18 +136,11 @@ func (h *MessageHandler) tryAcquireReplySlot() bool {
 }
 
 func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Message) {
-	ctx, cancel := appcontext.Message()
-	defer cancel()
+	decideCtx, decideCancel := appcontext.Message()
+	defer decideCancel()
+	ctx := decideCtx
 
 	explicitTrigger := h.isExplicitTrigger(ctx, &m, client.ID())
-
-	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
-	if err != nil {
-		logger.Error("Failed to get bot member",
-			zap.String("guild_id", m.GuildID.String()),
-			zap.Error(err))
-		return
-	}
 
 	threshold := h.repo.GetThreshold(ctx, m.GuildID.String())
 	thresholdSexe := h.repo.GetThresholdSexe(ctx, m.GuildID.String())
@@ -162,10 +166,6 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		return
 	}
 
-	if !h.passRateLimit(ctx, m.GuildID.String(), explicitTrigger) {
-		return
-	}
-
 	channelLock := h.lockFor(&h.replyLocks, m.ChannelID.String())
 	channelLock.Lock()
 	defer channelLock.Unlock()
@@ -176,6 +176,24 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		return
 	}
 	defer func() { <-h.replySlots }()
+
+	// The wait for the channel lock must not eat the reply's time budget.
+	replyCtx, replyCancel := appcontext.Message()
+	defer replyCancel()
+	ctx = replyCtx
+
+	// Checked after taking a slot so a dropped reply doesn't use the window.
+	if !h.passRateLimit(ctx, m.GuildID.String(), explicitTrigger) {
+		return
+	}
+
+	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
+	if err != nil {
+		logger.Error("Failed to get bot member",
+			zap.String("guild_id", m.GuildID.String()),
+			zap.Error(err))
+		return
+	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
