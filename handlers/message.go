@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -36,7 +37,12 @@ type MessageHandler struct {
 	defaultPrompt  string
 	triggerWords   []string
 	votesConfig    config.VotesConfig
+	replySlots     chan struct{}
+	replyLocks     sync.Map // per channel: one reply generated at a time
+	rateLimitLocks sync.Map // per guild: the rate-limit check and update are atomic
 }
+
+const maxConcurrentMessageReplies = 4
 
 func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string, votesConfig config.VotesConfig) *MessageHandler {
 	return &MessageHandler{
@@ -49,6 +55,7 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 		defaultPrompt:  defaultPrompt,
 		triggerWords:   triggerwords.NormalizeAll(triggerWords),
 		votesConfig:    votesConfig,
+		replySlots:     make(chan struct{}, maxConcurrentMessageReplies),
 	}
 }
 
@@ -56,36 +63,43 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client := e.Client()
 	m := e.Message
 
-	h.cacheMessage(context.Background(), m)
+	// Cache before reply work starts so a subsequent history fetch can see this
+	// message. Keep this gateway work bounded because the cache write is needed
+	// for message ordering, while REST and AI work are not.
+	cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	h.cacheMessage(cacheCtx, m)
 
 	if m.Author.ID == client.ID() {
+		cacheCancel()
 		return
 	}
 
 	if m.GuildID != nil {
-		_ = h.repo.SetChannelLastMessage(context.Background(), m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
+		_ = h.repo.SetChannelLastMessage(cacheCtx, m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
 	}
+	cacheCancel()
 
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
 	if h.memoryService != nil && m.GuildID != nil {
+		message := m
 		go func() {
 			ctx := context.Background()
 			// Respect per-guild memory opt-out
-			if !h.repo.GetMemoryEnabled(ctx, m.GuildID.String()) {
+			if !h.repo.GetMemoryEnabled(ctx, message.GuildID.String()) {
 				return
 			}
-			authorName := m.Author.Username
-			if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
-				authorName = *m.Member.Nick
+			authorName := message.Author.Username
+			if message.Member != nil && message.Member.Nick != nil && *message.Member.Nick != "" {
+				authorName = *message.Member.Nick
 			}
 			input := memory.BufferMessageInput{
-				UserID:           m.Author.ID.String(),
-				GuildID:          m.GuildID.String(),
-				ChannelID:        m.ChannelID.String(),
-				DiscordMessageID: m.ID.String(),
+				UserID:           message.Author.ID.String(),
+				GuildID:          message.GuildID.String(),
+				ChannelID:        message.ChannelID.String(),
+				DiscordMessageID: message.ID.String(),
 				AuthorName:       authorName,
-				Content:          m.Content,
-				Timestamp:        m.CreatedAt,
+				Content:          message.Content,
+				Timestamp:        message.CreatedAt,
 			}
 			if err := h.memoryService.BufferMessage(ctx, input); err != nil {
 				logger.Warn("Failed to buffer message for memory",
@@ -96,18 +110,37 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		}()
 	}
 
-	ctx, cancel := appcontext.Message()
-	defer cancel()
+	// Deciding whether to reply is short (DB reads, one REST call); only an
+	// actual reply takes the channel lock and a reply slot.
+	go func() {
+		// disgo only recovers panics in inline listeners.
+		defer recoverListenerPanic("message reply")
+		h.handleMessageReply(client, m)
+	}()
+}
+
+func recoverListenerPanic(what string) {
+	if r := recover(); r != nil {
+		logger.Error("Recovered panic in background handler",
+			zap.String("handler", what), zap.Any("panic", r))
+	}
+}
+
+func (h *MessageHandler) tryAcquireReplySlot() bool {
+	select {
+	case h.replySlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Message) {
+	decideCtx, decideCancel := appcontext.Message()
+	defer decideCancel()
+	ctx := decideCtx
 
 	explicitTrigger := h.isExplicitTrigger(ctx, &m, client.ID())
-
-	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
-	if err != nil {
-		logger.Error("Failed to get bot member",
-			zap.String("guild_id", m.GuildID.String()),
-			zap.Error(err))
-		return
-	}
 
 	threshold := h.repo.GetThreshold(ctx, m.GuildID.String())
 	thresholdSexe := h.repo.GetThresholdSexe(ctx, m.GuildID.String())
@@ -133,14 +166,34 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		return
 	}
 
-	lastMessageTime := h.repo.GetLastMessage(ctx, m.GuildID.String())
-	if lastMessageTime > 0 && !explicitTrigger {
-		if time.Now().Unix()-lastMessageTime < database.DefaultRateLimit {
-			return
-		}
+	channelLock := h.lockFor(&h.replyLocks, m.ChannelID.String())
+	channelLock.Lock()
+	defer channelLock.Unlock()
+	if !h.tryAcquireReplySlot() {
+		logger.Warn("Skipping message reply because all reply workers are busy",
+			zap.String("channel_id", m.ChannelID.String()),
+			zap.String("message_id", m.ID.String()))
+		return
+	}
+	defer func() { <-h.replySlots }()
+
+	// The wait for the channel lock must not eat the reply's time budget.
+	replyCtx, replyCancel := appcontext.Message()
+	defer replyCancel()
+	ctx = replyCtx
+
+	// Checked after taking a slot so a dropped reply doesn't use the window.
+	if !h.passRateLimit(ctx, m.GuildID.String(), explicitTrigger) {
+		return
 	}
 
-	_ = h.repo.SetLastMessage(ctx, m.GuildID.String(), time.Now().Unix())
+	botMember, err := client.Rest.GetMember(*m.GuildID, client.ID(), rest.WithCtx(ctx))
+	if err != nil {
+		logger.Error("Failed to get bot member",
+			zap.String("guild_id", m.GuildID.String()),
+			zap.Error(err))
+		return
+	}
 
 	client.Rest.SendTyping(m.ChannelID, rest.WithCtx(ctx))
 
@@ -348,8 +401,30 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 }
 
+// passRateLimit applies the per-guild reply rate limit (explicit triggers
+// bypass it) and records the reply time, atomically per guild.
+func (h *MessageHandler) passRateLimit(ctx context.Context, guildID string, explicitTrigger bool) bool {
+	lock := h.lockFor(&h.rateLimitLocks, guildID)
+	lock.Lock()
+	defer lock.Unlock()
+	now := time.Now().Unix()
+	lastMessageTime := h.repo.GetLastMessage(ctx, guildID)
+	if lastMessageTime > 0 && !explicitTrigger && now-lastMessageTime < database.DefaultRateLimit {
+		return false
+	}
+	_ = h.repo.SetLastMessage(ctx, guildID, now)
+	return true
+}
+
+func (h *MessageHandler) lockFor(locks *sync.Map, key string) *sync.Mutex {
+	lock, _ := locks.LoadOrStore(key, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 func (h *MessageHandler) HandleMessageUpdate(e *events.MessageUpdate) {
-	h.cacheMessage(context.Background(), normalizeEventMessage(e.GenericMessage))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h.cacheMessage(ctx, normalizeEventMessage(e.GenericMessage))
 }
 
 func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
@@ -358,8 +433,10 @@ func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
 		guildID = e.GuildID.String()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	if err := h.repo.MarkDiscordMessageDeleted(
-		context.Background(),
+		ctx,
 		e.MessageID.String(),
 		e.ChannelID.String(),
 		guildID,

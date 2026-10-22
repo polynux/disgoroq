@@ -1,12 +1,12 @@
 package commands
 
 import (
-	stdcontext "context"
 	"fmt"
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/memory"
 )
 
@@ -27,7 +27,8 @@ func userMemoryHandler(memoryService memory.Service) func(e *events.ApplicationC
 
 		userID := userOpt.Snowflake().String()
 
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		summary, err := memoryService.GetLatestSummary(ctx, userID, guildID)
 		if err != nil {
 			_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("❌ Error retrieving summary: %v", err)})

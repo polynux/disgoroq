@@ -955,18 +955,20 @@ func TestService_ConcurrencyCap(t *testing.T) {
 				t.Fatalf("buffer: %v", err)
 			}
 			// Check if this user has now entered Chat
-			mu.Lock()
+			aiSvc.mu.Lock()
 			if aiSvc.usersStarted[userID] {
 				triggered[userID] = true
 			}
-			mu.Unlock()
+			aiSvc.mu.Unlock()
 			time.Sleep(20 * time.Millisecond)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	mu.Lock()
+	aiSvc.mu.Lock()
 	startedFinal := aiSvc.startedCount
+	aiSvc.mu.Unlock()
+	mu.Lock()
 	maxFinal := maxConcurrent
 	mu.Unlock()
 
@@ -1027,6 +1029,7 @@ func TestService_CloseCancelsSummarization(t *testing.T) {
 
 // countingAIService lets tests observe concurrency and gate completion.
 type countingAIService struct {
+	mu           sync.Mutex
 	onChatStart  func(userID string)
 	onChatEnd    func()
 	startedCount int
@@ -1034,6 +1037,7 @@ type countingAIService struct {
 }
 
 func (m *countingAIService) Chat(ctx context.Context, messages []Message, model string) (string, error) {
+	m.mu.Lock()
 	m.startedCount++
 	userID := ""
 	// The last user message contains the userID marker from the test.
@@ -1050,6 +1054,7 @@ func (m *countingAIService) Chat(ctx context.Context, messages []Message, model 
 	if userID != "" {
 		m.usersStarted[userID] = true
 	}
+	m.mu.Unlock()
 	if m.onChatStart != nil {
 		m.onChatStart(userID)
 	}
