@@ -5,6 +5,7 @@ import (
 
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
+	"github.com/disgoorg/snowflake/v2"
 
 	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/memory"
@@ -43,8 +44,9 @@ func userMemoryHandler(memoryService memory.Service) func(e *events.ApplicationC
 		content := fmt.Sprintf("📝 Latest summary for <@%s> (created %s):\n```\n%s\n```",
 			userID, summary.CreatedAt.Format("2006-01-02 15:04"), summary.Content)
 		_ = e.CreateMessage(discord.MessageCreate{
-			Content:         content,
-			AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
+			Content: content,
+			// Only the user the summary is about may be mentioned, not the summary text.
+			AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}, Users: []snowflake.ID{userOpt.Snowflake()}},
 		})
 	}
 }
