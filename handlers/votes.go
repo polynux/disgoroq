@@ -106,37 +106,56 @@ func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt 
 
 func (h *VoteHandler) runRecount(messageID snowflake.ID, state *recountState) {
 	for {
-		timer := time.NewTimer(recountSlotTimeout)
-		select {
-		case h.recountSlots <- struct{}{}:
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-		case <-timer.C:
+		if !h.acquireRecountSlot(state) {
 			logger.Warn("Dropping vote recount after waiting for a concurrency slot",
 				zap.String("message_id", messageID.String()))
 			h.finishRecount(messageID, state, false)
 			return
 		}
 
+		// Votes that arrived while waiting are covered by this fetch, so they
+		// don't need a rerun.
 		h.recountMu.Lock()
 		adopt := state.adopt
 		state.adopt = false
+		state.dirty = false
 		h.recountMu.Unlock()
-		if h.recountFn != nil {
-			h.recountFn(state.guildID, state.channelID, messageID, adopt)
-		} else {
-			h.recountNow(state.guildID, state.channelID, messageID, adopt)
-		}
-		<-h.recountSlots
+		h.recountWithSlot(state.guildID, state.channelID, messageID, adopt)
 
 		if !h.finishRecount(messageID, state, true) {
 			return
 		}
 	}
+}
+
+// acquireRecountSlot waits for a concurrency slot. A recount that would adopt
+// a new message waits one extra round, since dropping it loses that message.
+func (h *VoteHandler) acquireRecountSlot(state *recountState) bool {
+	h.recountMu.Lock()
+	attempts := 1
+	if state.adopt {
+		attempts = 2
+	}
+	h.recountMu.Unlock()
+	for range attempts {
+		timer := time.NewTimer(recountSlotTimeout)
+		select {
+		case h.recountSlots <- struct{}{}:
+			timer.Stop()
+			return true
+		case <-timer.C:
+		}
+	}
+	return false
+}
+
+func (h *VoteHandler) recountWithSlot(guildID, channelID, messageID snowflake.ID, adopt bool) {
+	defer func() { <-h.recountSlots }()
+	if h.recountFn != nil {
+		h.recountFn(guildID, channelID, messageID, adopt)
+		return
+	}
+	h.recountNow(guildID, channelID, messageID, adopt)
 }
 
 // finishRecount removes a completed recount or leaves its state in place for a
