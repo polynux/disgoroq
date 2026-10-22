@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
@@ -22,6 +23,8 @@ type VoteHandler struct {
 	client *bot.Client
 	repo   *database.Repository
 	config config.VotesConfig
+	// recountMu serializes recounts so a slower fetch cannot overwrite newer counts.
+	recountMu sync.Mutex
 }
 
 func NewVoteHandler(client *bot.Client, repo *database.Repository, cfg config.VotesConfig) *VoteHandler {
@@ -55,7 +58,18 @@ func (h *VoteHandler) isVoteEmoji(emoji string) bool {
 		normalizeVoteEmoji(emoji) == normalizeVoteEmoji(h.config.BadEmoji)
 }
 
+// recount runs off the gateway goroutine: disgo dispatches listeners inline,
+// so a slow REST call here would delay every other event.
 func (h *VoteHandler) recount(channelID, messageID snowflake.ID) {
+	if !h.config.Enabled {
+		return
+	}
+	go h.recountNow(channelID, messageID)
+}
+
+func (h *VoteHandler) recountNow(channelID, messageID snowflake.ID) {
+	h.recountMu.Lock()
+	defer h.recountMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -99,7 +113,7 @@ func ReplyVoteCounts(reactions []discord.MessageReaction, goodEmoji, badEmoji st
 }
 
 func normalizeVoteEmoji(emoji string) string {
-	return strings.ReplaceAll(emoji, "\uFE0F", "")
+	return strings.ReplaceAll(strings.TrimSpace(emoji), "\uFE0F", "")
 }
 
 func partialEmojiName(name *string) string {
@@ -112,9 +126,6 @@ func partialEmojiName(name *string) string {
 func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source discord.Message, response *ai.ChatResponse, provider string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if source.GuildID == nil {
-		return
-	}
 	// Store the record before reacting so the first votes find it.
 	if err := h.repo.InsertBotReplyVote(ctx, database.BotReplyVote{
 		MessageID: reply.ID.String(), GuildID: source.GuildID.String(), ChannelID: reply.ChannelID.String(),
@@ -126,7 +137,7 @@ func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source dis
 		return
 	}
 	for _, emoji := range []string{h.votesConfig.GoodEmoji, h.votesConfig.BadEmoji} {
-		if err := h.client.Rest.AddReaction(reply.ChannelID, reply.ID, emoji, rest.WithCtx(ctx)); err != nil {
+		if err := h.client.Rest.AddReaction(reply.ChannelID, reply.ID, strings.TrimSpace(emoji), rest.WithCtx(ctx)); err != nil {
 			logger.Warn("Failed to add reply vote reaction",
 				zap.String("message_id", reply.ID.String()), zap.String("emoji", emoji), zap.Error(err))
 		}
