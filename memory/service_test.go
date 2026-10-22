@@ -135,7 +135,18 @@ func (m *mockRepository) GetLatestSummary(ctx context.Context, userID, guildID s
 	var latest *ConversationSummary
 	for _, summary := range m.summaries {
 		if summary.UserID == userID && summary.GuildID == guildID {
-			if latest == nil || summary.CreatedAt.After(latest.CreatedAt) {
+			latestUpdated := time.Time{}
+			if latest != nil {
+				latestUpdated = latest.UpdatedAt
+				if latestUpdated.IsZero() {
+					latestUpdated = latest.CreatedAt
+				}
+			}
+			summaryUpdated := summary.UpdatedAt
+			if summaryUpdated.IsZero() {
+				summaryUpdated = summary.CreatedAt
+			}
+			if latest == nil || summaryUpdated.After(latestUpdated) {
 				latest = summary
 			}
 		}
@@ -159,10 +170,48 @@ func (m *mockRepository) UpdateSummary(ctx context.Context, summary *Summary) er
 				EndMessageID:   summary.EndMessageID,
 				Embedding:      summary.Embedding,
 				CreatedAt:      summary.CreatedAt,
+				UpdatedAt:      time.Now(),
 			}
 		}
 	}
 	return nil
+}
+
+func TestService_SummaryIntervalUsesUpdatedAt(t *testing.T) {
+	repo := newMockRepository()
+	service := NewService(repo, newMockEmbeddingProvider(), newMockSummarizer(), ServiceConfig{
+		BufferThreshold:   2,
+		SummaryInterval:   time.Hour,
+		MaxSummaryContext: 3,
+	})
+
+	ctx := context.Background()
+	oldSummary := &ConversationSummary{
+		UserID:       "user123",
+		GuildID:      "guild456",
+		Content:      "Existing summary",
+		MessageCount: 5,
+		CreatedAt:    time.Now().Add(-24 * time.Hour),
+		UpdatedAt:    time.Now(),
+	}
+	if err := repo.CreateSummary(ctx, oldSummary); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := service.BufferMessage(ctx, BufferMessageInput{
+			UserID: "user123", GuildID: "guild456", Content: "new message", Timestamp: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+	summaries, err := repo.GetSummariesByUserGuild(ctx, "user123", "guild456")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].MessageCount != 5 {
+		t.Fatalf("summary changed before interval: %#v", summaries)
+	}
 }
 
 func (m *mockRepository) GetSummariesByUserGuild(ctx context.Context, userID, guildID string) ([]*ConversationSummary, error) {

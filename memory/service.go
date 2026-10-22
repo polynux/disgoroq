@@ -236,7 +236,11 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 	// Check if enough time has passed since last summary
 	lastSummary, err := s.repo.GetLatestSummary(ctx, userID, guildID)
 	if err == nil && lastSummary != nil {
-		timeSinceLast := time.Since(lastSummary.CreatedAt)
+		lastUpdated := lastSummary.UpdatedAt
+		if lastUpdated.IsZero() {
+			lastUpdated = lastSummary.CreatedAt
+		}
+		timeSinceLast := time.Since(lastUpdated)
 		if timeSinceLast < s.summaryInterval {
 			if logger.IsDebugMode() {
 				logger.Debug("Skipping memory summarization due to interval",

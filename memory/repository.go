@@ -378,6 +378,7 @@ func (r *repository) GetLatestSummary(ctx context.Context, userID, guildID strin
 		EndMessageID:   summary.EndMessageID,
 		Embedding:      summary.Embedding,
 		CreatedAt:      summary.CreatedAt,
+		UpdatedAt:      summary.UpdatedAt,
 	}, nil
 }
 

@@ -110,6 +110,7 @@ type ConversationSummary struct {
 	Embedding      []float32
 	Quality        float64
 	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // RelevantSummary contains a summary with similarity score
