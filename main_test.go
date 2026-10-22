@@ -17,6 +17,14 @@ func (s *stubChatService) Chat(ctx context.Context, req *ai.ChatRequest) (*ai.Ch
 	return &ai.ChatResponse{Content: "summary"}, nil
 }
 
+func (s *stubChatService) Vision(context.Context, *ai.VisionRequest) (*ai.VisionResponse, error) {
+	return nil, nil
+}
+
+func (s *stubChatService) Name() string { return "stub" }
+
+func (s *stubChatService) AvailableModels() []ai.ModelInfo { return nil }
+
 func TestAIServiceAdapterDisablesToolsForSummaries(t *testing.T) {
 	stub := &stubChatService{}
 	adapter := &aiServiceAdapter{service: stub}
