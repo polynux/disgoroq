@@ -401,6 +401,7 @@ func (r *repository) GetSummariesByUserGuild(ctx context.Context, userID, guildI
 				EndMessageID:   s.EndMessageID,
 				Embedding:      s.Embedding,
 				CreatedAt:      s.CreatedAt,
+				UpdatedAt:      s.UpdatedAt,
 			})
 		}
 	}

@@ -300,6 +300,8 @@ func TestSummaryOperations(t *testing.T) {
 		updated, err := tr.repo.GetLatestSummary(tr.ctx, userID, guildID)
 		assert.NoError(t, err)
 		assert.Equal(t, "Updated summary: User discussed Go programming and shared code examples.", updated.Content)
+		// The interval check relies on the update time coming back.
+		assert.Equal(t, now.Add(time.Hour).Unix(), updated.UpdatedAt.Unix())
 	})
 
 	t.Run("GetLatestSummariesForUsers", func(t *testing.T) {

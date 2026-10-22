@@ -204,7 +204,8 @@ func TestService_SummaryIntervalUsesUpdatedAt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	time.Sleep(100 * time.Millisecond)
+	// The service waits 100 ms before summarizing; leave time for it to run.
+	time.Sleep(600 * time.Millisecond)
 	summaries, err := repo.GetSummariesByUserGuild(ctx, "user123", "guild456")
 	if err != nil {
 		t.Fatal(err)
