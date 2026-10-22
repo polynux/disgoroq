@@ -111,7 +111,7 @@ func TestRepository_BotReplyVoteCRUD(t *testing.T) {
 	}
 }
 
-func TestRepository_BotReplyVoteAdoptionRaces(t *testing.T) {
+func TestRepository_BotReplyVoteInsertOrder(t *testing.T) {
 	ctx := context.Background()
 	repo := setupTestDB(t)
 

@@ -27,6 +27,9 @@ type VoteHandler struct {
 	config config.VotesConfig
 	// recountMu serializes recounts so a slower fetch cannot overwrite newer counts.
 	recountMu sync.Mutex
+	// notAIReplies remembers bot messages ruled out for adoption, so votes on
+	// them (horoscope, scheduled posts...) don't refetch them every time.
+	notAIReplies sync.Map
 }
 
 func NewVoteHandler(client *bot.Client, repo *database.Repository, cfg config.VotesConfig) *VoteHandler {
@@ -86,8 +89,10 @@ func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, ado
 			zap.String("message_id", messageID.String()), zap.Error(err))
 		return
 	}
-	if !tracked && !adopt {
-		return
+	if !tracked {
+		if _, ruledOut := h.notAIReplies.Load(messageID); !adopt || ruledOut {
+			return
+		}
 	}
 	message, err := h.client.Rest.GetMessage(channelID, messageID, rest.WithCtx(ctx))
 	if err != nil {
@@ -97,6 +102,7 @@ func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, ado
 	}
 	if !tracked {
 		if !isAIReply(*message, h.client.ID()) {
+			h.notAIReplies.Store(messageID, struct{}{})
 			return
 		}
 		if err := h.repo.InsertBotReplyVote(ctx, adoptedReplyVote(*message, guildID)); err != nil {
@@ -131,7 +137,7 @@ func adoptedReplyVote(message discord.Message, guildID snowflake.ID) database.Bo
 		ChannelID: message.ChannelID.String(),
 		Content:   message.Content,
 	}
-	if message.MessageReference.MessageID != nil {
+	if message.MessageReference != nil && message.MessageReference.MessageID != nil {
 		vote.ReplyToMessageID = message.MessageReference.MessageID.String()
 	}
 	if message.ReferencedMessage != nil {
