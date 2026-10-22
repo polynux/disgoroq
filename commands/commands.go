@@ -440,7 +440,8 @@ func horoscopeChannelHandler(repo *database.Repository) func(e *events.Applicati
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		channel := data.Channel("channel")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "horoscope_channel", channel.ID.String())
 		content := fmt.Sprintf("Horoscope channel set to <#%s>", channel.ID)
 		if err != nil {
@@ -454,7 +455,8 @@ func fartingFridayChannelHandler(repo *database.Repository) func(e *events.Appli
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		channel := data.Channel("channel")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "farting_friday_channel", channel.ID.String())
 		content := fmt.Sprintf("Farting Friday channel set to <#%s>", channel.ID)
 		if err != nil {
@@ -468,7 +470,8 @@ func temperatureHandler(repo *database.Repository) func(e *events.ApplicationCom
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		temperature := data.Float("temperature")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "temperature", strconv.FormatFloat(temperature, 'f', -1, 32))
 		content := fmt.Sprintf("Temperature set to %v", temperature)
 		if err != nil {
@@ -480,7 +483,8 @@ func temperatureHandler(repo *database.Repository) func(e *events.ApplicationCom
 
 func toggleHandler(repo *database.Repository) func(e *events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		current := repo.GetState(ctx, getGuildID(e))
 		newState := "off"
 		if current == "off" {
@@ -499,7 +503,8 @@ func thresholdHandler(repo *database.Repository) func(e *events.ApplicationComma
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		threshold := data.Float("threshold")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "threshold", strconv.FormatFloat(threshold, 'f', -1, 32))
 		content := fmt.Sprintf("Threshold set to %v", threshold)
 		if err != nil {
@@ -513,7 +518,8 @@ func thresholdSexeHandler(repo *database.Repository) func(e *events.ApplicationC
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		thresholdSexe := data.Float("thresholdsexe")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "thresholdSexe", strconv.FormatFloat(thresholdSexe, 'f', -1, 32))
 		content := fmt.Sprintf("Threshold set to %v", thresholdSexe)
 		if err != nil {
@@ -527,7 +533,8 @@ func messagesCountHandler(repo *database.Repository) func(e *events.ApplicationC
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		messagesCount := data.Int("messagescount")
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := repo.SetGuildSetting(ctx, getGuildID(e), "messagescount", strconv.Itoa(messagesCount))
 		content := fmt.Sprintf("Messages count set to %v", messagesCount)
 		if err != nil {
@@ -598,7 +605,8 @@ func promptHandler(repo *database.Repository) func(e *events.ApplicationCommandI
 }
 
 func handlePromptSee(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	prompt, hasCustom := repo.GetPrompt(ctx, getGuildID(e))
 
 	if !hasCustom {
@@ -619,7 +627,8 @@ func handlePromptSee(e *events.ApplicationCommandInteractionCreate, repo *databa
 }
 
 func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	data := e.SlashCommandInteractionData()
 	textToAppend := data.String("text")
 
@@ -645,7 +654,8 @@ func handlePromptAppend(e *events.ApplicationCommandInteractionCreate, repo *dat
 }
 
 func handlePromptSet(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	data := e.SlashCommandInteractionData()
 
 	subName := ""
@@ -730,7 +740,8 @@ func forceSummaryHandler(memoryService memory.Service) func(e *events.Applicatio
 
 		_ = e.CreateMessage(discord.MessageCreate{Content: fmt.Sprintf("🔄 Creating summary for <@%s>...", userID)})
 
-		ctx := stdcontext.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		err := memoryService.ForceSummarize(ctx, userID.String(), getGuildID(e))
 
 		if err != nil {
@@ -770,7 +781,8 @@ func reengageHandler(repo *database.Repository, cfg config.ReengageConfig) func(
 }
 
 func handleReengageToggle(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	channel := e.Channel()
 	channelID := channel.ID()
 	enabled := repo.GetReengageEnabled(ctx, getGuildID(e), channelID.String())
@@ -793,7 +805,8 @@ func handleReengageToggle(e *events.ApplicationCommandInteractionCreate, repo *d
 }
 
 func handleReengageChance(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	data := e.SlashCommandInteractionData()
 	chance := data.Float("value")
 	channel := e.Channel()
@@ -807,7 +820,8 @@ func handleReengageChance(e *events.ApplicationCommandInteractionCreate, repo *d
 }
 
 func handleReengageThreshold(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	data := e.SlashCommandInteractionData()
 	minutes := data.Int("minutes")
 	channel := e.Channel()
@@ -821,7 +835,8 @@ func handleReengageThreshold(e *events.ApplicationCommandInteractionCreate, repo
 }
 
 func handleReengageMessage(e *events.ApplicationCommandInteractionCreate, repo *database.Repository) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	data := e.SlashCommandInteractionData()
 	message := data.String("text")
 	err := repo.SetReengageMessage(ctx, getGuildID(e), message)
@@ -833,7 +848,8 @@ func handleReengageMessage(e *events.ApplicationCommandInteractionCreate, repo *
 }
 
 func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, cfg config.ReengageConfig) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	channel := e.Channel()
 	channelID := channel.ID()
 	guildID := getGuildID(e)
@@ -906,7 +922,8 @@ func memoryCommandHandler(repo *database.Repository, memoryService memory.Servic
 }
 
 func handleMemoryToggle(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	current := repo.GetMemoryEnabled(ctx, guildID)
 	newValue := !current
 	if err := repo.SetMemoryEnabled(ctx, guildID, newValue); err != nil {
@@ -930,7 +947,8 @@ func handleMemoryForget(e *events.ApplicationCommandInteractionCreate, memorySer
 	}
 
 	userID := userOpt.Snowflake()
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	if err := memoryService.ClearUserMemory(ctx, userID.String(), guildID); err != nil {
 		_, _ = e.Client().Rest.CreateFollowupMessage(e.Client().ID(), e.Token(),
 			discord.MessageCreate{Content: fmt.Sprintf("❌ Failed to clear memory for <@%s>: %v", userID, err)})

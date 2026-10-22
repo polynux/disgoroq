@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -36,7 +37,11 @@ type MessageHandler struct {
 	defaultPrompt  string
 	triggerWords   []string
 	votesConfig    config.VotesConfig
+	replySlots     chan struct{}
+	replyLocks     sync.Map
 }
+
+const maxConcurrentMessageReplies = 4
 
 func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string, votesConfig config.VotesConfig) *MessageHandler {
 	return &MessageHandler{
@@ -49,6 +54,7 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 		defaultPrompt:  defaultPrompt,
 		triggerWords:   triggerwords.NormalizeAll(triggerWords),
 		votesConfig:    votesConfig,
+		replySlots:     make(chan struct{}, maxConcurrentMessageReplies),
 	}
 }
 
@@ -56,36 +62,43 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client := e.Client()
 	m := e.Message
 
-	h.cacheMessage(context.Background(), m)
+	// Cache before reply work starts so a subsequent history fetch can see this
+	// message. Keep this gateway work bounded because the cache write is needed
+	// for message ordering, while REST and AI work are not.
+	cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	h.cacheMessage(cacheCtx, m)
 
 	if m.Author.ID == client.ID() {
+		cacheCancel()
 		return
 	}
 
 	if m.GuildID != nil {
-		_ = h.repo.SetChannelLastMessage(context.Background(), m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
+		_ = h.repo.SetChannelLastMessage(cacheCtx, m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
 	}
+	cacheCancel()
 
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
 	if h.memoryService != nil && m.GuildID != nil {
+		message := m
 		go func() {
 			ctx := context.Background()
 			// Respect per-guild memory opt-out
-			if !h.repo.GetMemoryEnabled(ctx, m.GuildID.String()) {
+			if !h.repo.GetMemoryEnabled(ctx, message.GuildID.String()) {
 				return
 			}
-			authorName := m.Author.Username
-			if m.Member != nil && m.Member.Nick != nil && *m.Member.Nick != "" {
-				authorName = *m.Member.Nick
+			authorName := message.Author.Username
+			if message.Member != nil && message.Member.Nick != nil && *message.Member.Nick != "" {
+				authorName = *message.Member.Nick
 			}
 			input := memory.BufferMessageInput{
-				UserID:           m.Author.ID.String(),
-				GuildID:          m.GuildID.String(),
-				ChannelID:        m.ChannelID.String(),
-				DiscordMessageID: m.ID.String(),
+				UserID:           message.Author.ID.String(),
+				GuildID:          message.GuildID.String(),
+				ChannelID:        message.ChannelID.String(),
+				DiscordMessageID: message.ID.String(),
 				AuthorName:       authorName,
-				Content:          m.Content,
-				Timestamp:        m.CreatedAt,
+				Content:          message.Content,
+				Timestamp:        message.CreatedAt,
 			}
 			if err := h.memoryService.BufferMessage(ctx, input); err != nil {
 				logger.Warn("Failed to buffer message for memory",
@@ -96,6 +109,32 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		}()
 	}
 
+	if h.tryAcquireReplySlot() {
+		message := m
+		go func() {
+			defer func() { <-h.replySlots }()
+			h.handleMessageReply(client, message)
+		}()
+		return
+	}
+	logger.Warn("Skipping message reply because all reply workers are busy",
+		zap.String("channel_id", m.ChannelID.String()),
+		zap.String("message_id", m.ID.String()))
+}
+
+func (h *MessageHandler) tryAcquireReplySlot() bool {
+	select {
+	case h.replySlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Message) {
+	channelLock := h.replyLockForChannel(m.ChannelID)
+	channelLock.Lock()
+	defer channelLock.Unlock()
 	ctx, cancel := appcontext.Message()
 	defer cancel()
 
@@ -348,8 +387,15 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	}
 }
 
+func (h *MessageHandler) replyLockForChannel(channelID snowflake.ID) *sync.Mutex {
+	lock, _ := h.replyLocks.LoadOrStore(channelID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
 func (h *MessageHandler) HandleMessageUpdate(e *events.MessageUpdate) {
-	h.cacheMessage(context.Background(), normalizeEventMessage(e.GenericMessage))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	h.cacheMessage(ctx, normalizeEventMessage(e.GenericMessage))
 }
 
 func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
@@ -358,8 +404,10 @@ func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
 		guildID = e.GuildID.String()
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	if err := h.repo.MarkDiscordMessageDeleted(
-		context.Background(),
+		ctx,
 		e.MessageID.String(),
 		e.ChannelID.String(),
 		guildID,

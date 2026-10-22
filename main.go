@@ -353,7 +353,7 @@ func main() {
 	}
 	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
-		registry.HandleCommand(e)
+		go registry.HandleCommand(e)
 	}))
 
 	err = client.OpenGateway(context.Background())

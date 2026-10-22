@@ -9,6 +9,7 @@ import (
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 
+	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/triggerwords"
 )
@@ -45,7 +46,8 @@ func triggerWordsHandler(repo *database.Repository) func(e *events.ApplicationCo
 }
 
 func handleTriggerWordsList(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	triggerWords, hasCustom := effectiveTriggerWords(ctx, repo, guildID)
 	source := "default"
 	if hasCustom {
@@ -65,7 +67,8 @@ func handleTriggerWordsList(e *events.ApplicationCommandInteractionCreate, repo 
 }
 
 func handleTriggerWordsAdd(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	word := triggerwords.Normalize(e.SlashCommandInteractionData().String("word"))
 	if err := triggerwords.Validate([]string{word}); err != nil {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "Error adding trigger word: " + err.Error()})
@@ -90,7 +93,8 @@ func handleTriggerWordsAdd(e *events.ApplicationCommandInteractionCreate, repo *
 }
 
 func handleTriggerWordsRemove(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	word := triggerwords.Normalize(e.SlashCommandInteractionData().String("word"))
 	if err := triggerwords.Validate([]string{word}); err != nil {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "Error removing trigger word: " + err.Error()})
@@ -129,7 +133,8 @@ func handleTriggerWordsRemove(e *events.ApplicationCommandInteractionCreate, rep
 }
 
 func handleTriggerWordsSet(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	words := triggerwords.Parse(e.SlashCommandInteractionData().String("words"))
 	if len(words) == 0 {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "Error setting trigger words: provide at least one trigger word."})
@@ -151,7 +156,8 @@ func handleTriggerWordsSet(e *events.ApplicationCommandInteractionCreate, repo *
 }
 
 func handleTriggerWordsReset(e *events.ApplicationCommandInteractionCreate, repo *database.Repository, guildID string) {
-	ctx := stdcontext.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	if err := repo.DeleteTriggerWords(ctx, guildID); err != nil {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "Error resetting trigger words: " + err.Error()})
 		return

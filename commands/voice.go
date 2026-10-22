@@ -12,6 +12,7 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/voice"
@@ -219,7 +220,8 @@ func (vc *VoiceCommands) handleJoin(e *events.ApplicationCommandInteractionCreat
 		return
 	}
 	guildIDStr := guildID.String()
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	if !vc.repo.GetVoiceEnabled(ctx, guildIDStr) {
 		vc.respondError(e, "Voice chat is disabled for this server. Use `/voice enable` first.")
 		return
@@ -335,7 +337,8 @@ func (vc *VoiceCommands) handleLeave(e *events.ApplicationCommandInteractionCrea
 
 // handleStatus handles the /voice status command.
 func (vc *VoiceCommands) handleStatus(e *events.ApplicationCommandInteractionCreate) {
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	guildID := e.GuildID()
 	if guildID == nil {
 		vc.respondError(e, "This command can only be used in a guild")
@@ -389,7 +392,8 @@ func (vc *VoiceCommands) handleStatus(e *events.ApplicationCommandInteractionCre
 
 // handleAutojoin handles autojoin subcommands.
 func (vc *VoiceCommands) handleAutojoin(e *events.ApplicationCommandInteractionCreate, subcommand string) {
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	guildID := e.GuildID()
 	if guildID == nil {
 		vc.respondError(e, "This command can only be used in a guild")
@@ -403,7 +407,8 @@ func (vc *VoiceCommands) handleAutojoin(e *events.ApplicationCommandInteractionC
 		data := e.SlashCommandInteractionData()
 		channel := data.Channel("channel")
 
-		ctx := context.Background()
+		ctx, cancel := appcontext.Command()
+		defer cancel()
 		if err := vc.repo.SetVoiceAutoJoin(ctx, guildIDStr, true); err != nil {
 			vc.respondError(e, "Failed to enable auto-join")
 			return
@@ -452,7 +457,8 @@ func (vc *VoiceCommands) handleAutojoin(e *events.ApplicationCommandInteractionC
 
 // handleEnable handles the /voice enable command.
 func (vc *VoiceCommands) handleEnable(e *events.ApplicationCommandInteractionCreate) {
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	guildID := e.GuildID()
 	if guildID == nil {
 		vc.respondError(e, "This command can only be used in a guild")
@@ -469,7 +475,8 @@ func (vc *VoiceCommands) handleEnable(e *events.ApplicationCommandInteractionCre
 
 // handleDisable handles the /voice disable command.
 func (vc *VoiceCommands) handleDisable(e *events.ApplicationCommandInteractionCreate) {
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	guildID := e.GuildID()
 	if guildID == nil {
 		vc.respondError(e, "This command can only be used in a guild")
@@ -533,7 +540,8 @@ func (vc *VoiceCommands) findTextChannel(guildID snowflake.ID) string {
 
 // handlePrompt handles the /voice prompt subcommands.
 func (vc *VoiceCommands) handlePrompt(e *events.ApplicationCommandInteractionCreate, subcommand string) {
-	ctx := context.Background()
+	ctx, cancel := appcontext.Command()
+	defer cancel()
 	guildID := e.GuildID()
 	if guildID == nil {
 		vc.respondError(e, "This command can only be used in a guild")
