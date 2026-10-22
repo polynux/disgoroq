@@ -132,7 +132,8 @@ func isVotable(message discord.Message, botID snowflake.ID) (ok bool, isBotReply
 	if message.Author.ID == botID {
 		return isAIReply(message, botID), true
 	}
-	return !message.Author.Bot && !message.Author.System && message.WebhookID == nil &&
+	isText := message.Type == discord.MessageTypeDefault || message.Type == discord.MessageTypeReply
+	return isText && !message.Author.Bot && !message.Author.System && message.WebhookID == nil &&
 		message.Interaction == nil && message.InteractionMetadata == nil &&
 		strings.TrimSpace(message.Content) != "", false
 }

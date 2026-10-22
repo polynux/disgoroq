@@ -36,6 +36,8 @@ func TestIsVotable(t *testing.T) {
 		{"human text", human, true, false},
 		{"other bot", discord.Message{Author: discord.User{ID: 2, Bot: true}, Content: "hello"}, false, false},
 		{"system", discord.Message{Author: discord.User{ID: 2, System: true}, Content: "hello"}, false, false},
+		{"pin notice", discord.Message{Type: discord.MessageTypeChannelPinnedMessage, Author: discord.User{ID: 2}, Content: "hello"}, false, false},
+		{"human reply", discord.Message{Type: discord.MessageTypeReply, Author: discord.User{ID: 2}, Content: "hello"}, true, false},
 		{"webhook", discord.Message{Author: discord.User{ID: 2}, Content: "hello", WebhookID: ptrSnowflake(4)}, false, false},
 		{"interaction", discord.Message{Author: discord.User{ID: 2}, Content: "hello", Interaction: &discord.MessageInteraction{}}, false, false},
 		{"interaction metadata", discord.Message{Author: discord.User{ID: 2}, Content: "hello", InteractionMetadata: &discord.InteractionMetadata{}}, false, false},
