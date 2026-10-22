@@ -1,21 +1,22 @@
 -- name: GetGuildSettings :many
 SELECT * FROM guild_settings WHERE id = ?;
 
--- name: InsertBotReplyVote :exec
-INSERT INTO bot_reply_votes (
-    message_id, guild_id, channel_id, content, reply_to_message_id,
-    reply_to_content, provider, model
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+-- name: InsertMessageVote :exec
+INSERT INTO message_votes (
+    message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+    content, reply_to_message_id, reply_to_content, provider, model, message_created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(message_id) DO UPDATE SET provider = excluded.provider, model = excluded.model
 WHERE excluded.provider != '';
 
--- name: GetBotReplyVote :one
-SELECT message_id, guild_id, channel_id, content, reply_to_message_id,
-       reply_to_content, provider, model, good_count, bad_count, created_at, updated_at
-FROM bot_reply_votes WHERE message_id = ?;
+-- name: GetMessageVote :one
+SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+       content, reply_to_message_id, reply_to_content, provider, model, good_count,
+       bad_count, message_created_at, created_at, updated_at
+FROM message_votes WHERE message_id = ?;
 
--- name: UpdateBotReplyVoteCounts :exec
-UPDATE bot_reply_votes
+-- name: UpdateMessageVoteCounts :exec
+UPDATE message_votes
 SET good_count = ?, bad_count = ?, updated_at = strftime('%s', 'now')
 WHERE message_id = ?;
 

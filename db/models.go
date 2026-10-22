@@ -37,21 +37,6 @@ type BotEvent struct {
 	Error      sql.NullString
 }
 
-type BotReplyVote struct {
-	MessageID        string
-	GuildID          string
-	ChannelID        string
-	Content          string
-	ReplyToMessageID string
-	ReplyToContent   string
-	Provider         string
-	Model            string
-	GoodCount        int64
-	BadCount         int64
-	CreatedAt        int64
-	UpdatedAt        int64
-}
-
 type ConversationSummary struct {
 	ID             int64
 	GuildID        string
@@ -105,6 +90,25 @@ type MessageBuffer struct {
 	ImageDescription sql.NullString
 	Timestamp        int64
 	Processed        sql.NullBool
+}
+
+type MessageVote struct {
+	MessageID        string
+	GuildID          string
+	ChannelID        string
+	AuthorID         string
+	AuthorName       string
+	IsBotReply       int64
+	Content          string
+	ReplyToMessageID string
+	ReplyToContent   string
+	Provider         string
+	Model            string
+	GoodCount        int64
+	BadCount         int64
+	MessageCreatedAt int64
+	CreatedAt        int64
+	UpdatedAt        int64
 }
 
 type VoiceSetting struct {

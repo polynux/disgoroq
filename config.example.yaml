@@ -23,6 +23,7 @@ database:
   local: false
 
 # Randomly collect good/bad reactions on AI replies. Emojis are Unicode only.
+# Votes are recorded for human text messages and AI replies; random AI replies get seeded reactions.
 votes:
   enabled: true
   probability: 0.25

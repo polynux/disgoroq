@@ -27,9 +27,9 @@ type VoteHandler struct {
 	config config.VotesConfig
 	// recountMu serializes recounts so a slower fetch cannot overwrite newer counts.
 	recountMu sync.Mutex
-	// notAIReplies remembers bot messages ruled out for adoption, so votes on
-	// them (horoscope, scheduled posts...) don't refetch them every time.
-	notAIReplies sync.Map
+	// notVotable remembers messages ruled out for adoption, so later votes
+	// do not refetch them every time.
+	notVotable sync.Map
 }
 
 func NewVoteHandler(client *bot.Client, repo *database.Repository, cfg config.VotesConfig) *VoteHandler {
@@ -40,10 +40,8 @@ func (h *VoteHandler) HandleGuildMessageReactionAdd(e *events.GuildMessageReacti
 	if e.UserID == e.Client().ID() || !h.isVoteEmoji(partialEmojiName(e.Emoji.Name)) {
 		return
 	}
-	// Votes added by hand on an untracked reply adopt it; skip other authors
-	// before any REST call.
-	adopt := e.MessageAuthorID != nil && *e.MessageAuthorID == e.Client().ID()
-	h.recount(e.GuildID, e.ChannelID, e.MessageID, adopt)
+	// A hand-added vote can adopt any eligible message after fetching it.
+	h.recount(e.GuildID, e.ChannelID, e.MessageID, true)
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionRemove(e *events.GuildMessageReactionRemove) {
@@ -68,7 +66,7 @@ func (h *VoteHandler) isVoteEmoji(emoji string) bool {
 
 // recount runs off the gateway goroutine: disgo dispatches listeners inline,
 // so a slow REST call here would delay every other event.
-// When adopt is set, an untracked AI reply is recorded on its first vote.
+// When adopt is set, an untracked eligible message is recorded on its first vote.
 func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt bool) {
 	if !h.config.Enabled {
 		return
@@ -82,38 +80,39 @@ func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, ado
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := h.repo.GetBotReplyVote(ctx, messageID.String())
+	_, err := h.repo.GetMessageVote(ctx, messageID.String())
 	tracked := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		logger.Warn("Failed to look up reply vote record",
+		logger.Warn("Failed to look up message vote record",
 			zap.String("message_id", messageID.String()), zap.Error(err))
 		return
 	}
 	if !tracked {
-		if _, ruledOut := h.notAIReplies.Load(messageID); !adopt || ruledOut {
+		if _, ruledOut := h.notVotable.Load(messageID); !adopt || ruledOut {
 			return
 		}
 	}
 	message, err := h.client.Rest.GetMessage(channelID, messageID, rest.WithCtx(ctx))
 	if err != nil {
-		logger.Warn("Failed to fetch message for reply vote recount",
+		logger.Warn("Failed to fetch message for vote recount",
 			zap.String("message_id", messageID.String()), zap.Error(err))
 		return
 	}
 	if !tracked {
-		if !isAIReply(*message, h.client.ID()) {
-			h.notAIReplies.Store(messageID, struct{}{})
+		votable, isBotReply := isVotable(*message, h.client.ID())
+		if !votable {
+			h.notVotable.Store(messageID, struct{}{})
 			return
 		}
-		if err := h.repo.InsertBotReplyVote(ctx, adoptedReplyVote(*message, guildID)); err != nil {
-			logger.Warn("Failed to store adopted reply vote record",
+		if err := h.repo.InsertMessageVote(ctx, messageVoteFromDiscord(*message, guildID, isBotReply)); err != nil {
+			logger.Warn("Failed to store adopted message vote record",
 				zap.String("message_id", messageID.String()), zap.Error(err))
 			return
 		}
 	}
 	goodCount, badCount := ReplyVoteCounts(message.Reactions, h.config.GoodEmoji, h.config.BadEmoji)
-	if err := h.repo.UpdateBotReplyVoteCounts(ctx, messageID.String(), goodCount, badCount); err != nil {
-		logger.Warn("Failed to update reply vote counts",
+	if err := h.repo.UpdateMessageVoteCounts(ctx, messageID.String(), goodCount, badCount); err != nil {
+		logger.Warn("Failed to update message vote counts",
 			zap.String("message_id", messageID.String()), zap.Error(err))
 	}
 }
@@ -128,14 +127,38 @@ func isAIReply(message discord.Message, botID snowflake.ID) bool {
 		!ai.IsErrorReply(message.Content)
 }
 
-// adoptedReplyVote records a reply posted before tracking; provider and model
-// are unknown for it.
-func adoptedReplyVote(message discord.Message, guildID snowflake.ID) database.BotReplyVote {
-	vote := database.BotReplyVote{
+// isVotable accepts the bot's AI replies and human text messages only.
+func isVotable(message discord.Message, botID snowflake.ID) (ok bool, isBotReply bool) {
+	if message.Author.ID == botID {
+		return isAIReply(message, botID), true
+	}
+	return !message.Author.Bot && !message.Author.System && message.WebhookID == nil &&
+		message.Interaction == nil && message.InteractionMetadata == nil &&
+		strings.TrimSpace(message.Content) != "", false
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func messageCreatedAt(message discord.Message) int64 {
+	if !message.CreatedAt.IsZero() {
+		return message.CreatedAt.Unix()
+	}
+	return int64((uint64(message.ID)>>22)+1420070400000) / 1000
+}
+
+func messageVoteFromDiscord(message discord.Message, guildID snowflake.ID, isBotReply bool) database.MessageVote {
+	vote := database.MessageVote{
 		MessageID: message.ID.String(),
 		GuildID:   guildID.String(),
 		ChannelID: message.ChannelID.String(),
-		Content:   message.Content,
+		AuthorID:  message.Author.ID.String(), AuthorName: message.Author.EffectiveName(),
+		IsBotReply: boolToInt64(isBotReply), Content: message.Content,
+		MessageCreatedAt: messageCreatedAt(message),
 	}
 	if message.MessageReference != nil && message.MessageReference.MessageID != nil {
 		vote.ReplyToMessageID = message.MessageReference.MessageID.String()
@@ -183,10 +206,11 @@ func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source dis
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Store the record before reacting so the first votes find it.
-	if err := h.repo.InsertBotReplyVote(ctx, database.BotReplyVote{
+	if err := h.repo.InsertMessageVote(ctx, database.MessageVote{
 		MessageID: reply.ID.String(), GuildID: source.GuildID.String(), ChannelID: reply.ChannelID.String(),
-		Content: response.Content, ReplyToMessageID: source.ID.String(), ReplyToContent: source.Content,
-		Provider: provider, Model: response.Model,
+		AuthorID: reply.Author.ID.String(), AuthorName: reply.Author.EffectiveName(), IsBotReply: 1,
+		Content: response.Content, MessageCreatedAt: messageCreatedAt(reply),
+		ReplyToMessageID: source.ID.String(), ReplyToContent: source.Content, Provider: provider, Model: response.Model,
 	}); err != nil {
 		logger.Warn("Failed to store bot reply vote record",
 			zap.String("message_id", reply.ID.String()), zap.Error(err))

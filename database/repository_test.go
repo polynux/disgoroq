@@ -80,73 +80,74 @@ func TestRepository_GetThreshold_Default(t *testing.T) {
 	}
 }
 
-func TestRepository_BotReplyVoteCRUD(t *testing.T) {
+func TestRepository_MessageVoteCRUD(t *testing.T) {
 	ctx := context.Background()
 	repo := setupTestDB(t)
-	want := BotReplyVote{
-		MessageID: "reply-1", GuildID: "guild-1", ChannelID: "channel-1", Content: "AI answer",
+	want := MessageVote{
+		MessageID: "reply-1", GuildID: "guild-1", ChannelID: "channel-1", AuthorID: "bot-1", AuthorName: "Bot", IsBotReply: 1, Content: "AI answer", MessageCreatedAt: 1700000000,
 		ReplyToMessageID: "source-1", ReplyToContent: "question", Provider: "groq", Model: "model-1",
 	}
-	if err := repo.InsertBotReplyVote(ctx, want); err != nil {
-		t.Fatalf("InsertBotReplyVote() error = %v", err)
+	if err := repo.InsertMessageVote(ctx, want); err != nil {
+		t.Fatalf("InsertMessageVote() error = %v", err)
 	}
-	got, err := repo.GetBotReplyVote(ctx, want.MessageID)
+	got, err := repo.GetMessageVote(ctx, want.MessageID)
 	if err != nil {
-		t.Fatalf("GetBotReplyVote() error = %v", err)
+		t.Fatalf("GetMessageVote() error = %v", err)
 	}
 	if got.MessageID != want.MessageID || got.GuildID != want.GuildID || got.ChannelID != want.ChannelID ||
-		got.Content != want.Content || got.ReplyToMessageID != want.ReplyToMessageID ||
+		got.AuthorID != want.AuthorID || got.AuthorName != want.AuthorName || got.IsBotReply != want.IsBotReply ||
+		got.MessageCreatedAt != want.MessageCreatedAt || got.Content != want.Content || got.ReplyToMessageID != want.ReplyToMessageID ||
 		got.ReplyToContent != want.ReplyToContent || got.Provider != want.Provider || got.Model != want.Model {
-		t.Fatalf("GetBotReplyVote() = %+v, want stored fields from %+v", got, want)
+		t.Fatalf("GetMessageVote() = %+v, want stored fields from %+v", got, want)
 	}
-	if err := repo.UpdateBotReplyVoteCounts(ctx, want.MessageID, 3, 2); err != nil {
-		t.Fatalf("UpdateBotReplyVoteCounts() error = %v", err)
+	if err := repo.UpdateMessageVoteCounts(ctx, want.MessageID, 3, 2); err != nil {
+		t.Fatalf("UpdateMessageVoteCounts() error = %v", err)
 	}
-	got, err = repo.GetBotReplyVote(ctx, want.MessageID)
+	got, err = repo.GetMessageVote(ctx, want.MessageID)
 	if err != nil {
-		t.Fatalf("GetBotReplyVote() after update error = %v", err)
+		t.Fatalf("GetMessageVote() after update error = %v", err)
 	}
 	if got.GoodCount != 3 || got.BadCount != 2 {
 		t.Fatalf("updated counts = (%d, %d), want (3, 2)", got.GoodCount, got.BadCount)
 	}
 }
 
-func TestRepository_BotReplyVoteInsertOrder(t *testing.T) {
+func TestRepository_MessageVoteInsertOrder(t *testing.T) {
 	ctx := context.Background()
 	repo := setupTestDB(t)
 
-	if _, err := repo.GetBotReplyVote(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("GetBotReplyVote(missing) error = %v, want sql.ErrNoRows", err)
+	if _, err := repo.GetMessageVote(ctx, "missing"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("GetMessageVote(missing) error = %v, want sql.ErrNoRows", err)
 	}
 
 	// A hand vote adopts the reply first, then the seeded insert fills provider/model.
-	adopted := BotReplyVote{MessageID: "reply-a", GuildID: "g", ChannelID: "c", Content: "answer"}
+	adopted := MessageVote{MessageID: "reply-a", GuildID: "g", ChannelID: "c", Content: "answer"}
 	seeded := adopted
 	seeded.Provider, seeded.Model = "ollama", "luciole"
-	if err := repo.InsertBotReplyVote(ctx, adopted); err != nil {
+	if err := repo.InsertMessageVote(ctx, adopted); err != nil {
 		t.Fatalf("adopted insert error = %v", err)
 	}
-	if err := repo.UpdateBotReplyVoteCounts(ctx, "reply-a", 1, 0); err != nil {
-		t.Fatalf("UpdateBotReplyVoteCounts() error = %v", err)
+	if err := repo.UpdateMessageVoteCounts(ctx, "reply-a", 1, 0); err != nil {
+		t.Fatalf("UpdateMessageVoteCounts() error = %v", err)
 	}
-	if err := repo.InsertBotReplyVote(ctx, seeded); err != nil {
+	if err := repo.InsertMessageVote(ctx, seeded); err != nil {
 		t.Fatalf("seeded insert after adoption error = %v", err)
 	}
-	got, err := repo.GetBotReplyVote(ctx, "reply-a")
+	got, err := repo.GetMessageVote(ctx, "reply-a")
 	if err != nil {
-		t.Fatalf("GetBotReplyVote() error = %v", err)
+		t.Fatalf("GetMessageVote() error = %v", err)
 	}
 	if got.Provider != "ollama" || got.Model != "luciole" || got.GoodCount != 1 {
 		t.Fatalf("after seeded insert = %+v, want provider/model filled and count kept", got)
 	}
 
 	// The other order: an adopted insert must not erase provider/model.
-	if err := repo.InsertBotReplyVote(ctx, adopted); err != nil {
+	if err := repo.InsertMessageVote(ctx, adopted); err != nil {
 		t.Fatalf("adopted insert after seeding error = %v", err)
 	}
-	got, err = repo.GetBotReplyVote(ctx, "reply-a")
+	got, err = repo.GetMessageVote(ctx, "reply-a")
 	if err != nil {
-		t.Fatalf("GetBotReplyVote() error = %v", err)
+		t.Fatalf("GetMessageVote() error = %v", err)
 	}
 	if got.Provider != "ollama" || got.Model != "luciole" {
 		t.Fatalf("after adopted insert = %+v, want provider/model kept", got)
