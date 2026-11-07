@@ -168,12 +168,11 @@ func buildPromptEmbeds(title string, prompt string, pages []string) []discord.Em
 	totalChars := len([]rune(prompt))
 	embeds := make([]discord.Embed, 0, len(pages))
 	for i, page := range pages {
-		embed := discord.NewEmbedBuilder().
-			SetTitle(title).
-			SetDescription(page).
-			SetColor(promptPaginatorColor).
-			SetFooter(fmt.Sprintf("Page %d/%d • %d chars • Use reactions to navigate", i+1, len(pages), totalChars), "").
-			Build()
+		embed := discord.NewEmbed().
+			WithTitle(title).
+			WithDescription(page).
+			WithColor(promptPaginatorColor).
+			WithFooter(fmt.Sprintf("Page %d/%d • %d chars • Use reactions to navigate", i+1, len(pages), totalChars), "")
 		embeds = append(embeds, embed)
 	}
 	return embeds
