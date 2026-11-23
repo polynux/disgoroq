@@ -3,7 +3,6 @@ package ai
 import (
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -16,10 +15,16 @@ const (
 
 	mediaDescriptionMaxRunes = 60
 	mediaGifMaxWords         = 8
+
+	// Unicode whitespace as Python's str \s matches it, unlike Go's ASCII \s.
+	mediaSpaceClass = `\x09\x0a\x0b\x0c\x0d\x1c-\x1f\x20\x{85}\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}`
 )
 
 var (
-	mediaURLPattern = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
+	mediaURLPattern = regexp.MustCompile(`(?i)(?:https?://|www\.)[^` + mediaSpaceClass + `]+`)
+
+	// A scheme is only stripped when anchored at the start, like the reference.
+	mediaSchemePattern = regexp.MustCompile(`(?i)^[a-z][a-z0-9+.-]*://`)
 
 	// Legacy URL kind patterns, searched anywhere in the whole URL string.
 	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif\b`)
@@ -65,7 +70,7 @@ func renderMediaMessageV0(msg Message) string {
 	}); text != "" {
 		parts = append(parts, text)
 	}
-	if strings.TrimSpace(msg.Content) == "" {
+	if trimMediaSpace(msg.Content) == "" {
 		for _, attachment := range msg.Attachments {
 			if attachmentIsGIF(attachment) {
 				parts = append(parts, "[gif]")
@@ -74,7 +79,7 @@ func renderMediaMessageV0(msg Message) string {
 			}
 		}
 		for _, sticker := range msg.Stickers {
-			if strings.TrimSpace(sticker) != "" {
+			if trimMediaSpace(sticker) != "" {
 				parts = append(parts, "[image]")
 			}
 		}
@@ -179,8 +184,8 @@ func mediaURLKind(raw string, v1 bool) string {
 // ? or #, without parsing the URL strictly.
 func mediaURLPath(raw string) string {
 	value := raw
-	if idx := strings.Index(value, "://"); idx >= 0 {
-		value = value[idx+3:]
+	if loc := mediaSchemePattern.FindStringIndex(value); loc != nil {
+		value = value[loc[1]:]
 	}
 	if idx := strings.IndexAny(value, "?#"); idx >= 0 {
 		value = value[:idx]
@@ -215,12 +220,12 @@ func segmentHasGifWord(segment string) bool {
 // mediaSegmentWords percent-decodes the segment, lowercases it without its
 // final extension, and splits it on -, _, ., + and whitespace (gif word step 2).
 func mediaSegmentWords(segment string) []string {
-	trimmed := stripMediaExtension(strings.TrimSpace(unquoteMediaSegment(segment)))
+	trimmed := stripMediaExtension(unquoteMediaSegment(segment))
 	if trimmed == "" {
 		return nil
 	}
 	return strings.FieldsFunc(strings.ToLower(trimmed), func(r rune) bool {
-		return r == '-' || r == '_' || r == '.' || r == '+' || unicode.IsSpace(r)
+		return r == '-' || r == '_' || r == '.' || r == '+' || isPythonSpace(r)
 	})
 }
 
@@ -286,15 +291,71 @@ func decodeUTF8ReplacingInvalid(value []byte) string {
 	builder.Grow(len(value))
 	for len(value) > 0 {
 		r, size := utf8.DecodeRune(value)
-		if r == utf8.RuneError && size == 1 {
-			builder.WriteRune(utf8.RuneError)
-			value = value[1:]
+		if r != utf8.RuneError || size > 1 {
+			builder.WriteRune(r)
+			value = value[size:]
 			continue
 		}
-		builder.WriteRune(r)
-		value = value[size:]
+		builder.WriteRune(utf8.RuneError)
+		value = value[invalidUTF8SubpartLen(value):]
 	}
 	return builder.String()
+}
+
+// invalidUTF8SubpartLen returns the maximal invalid UTF-8 subpart length, the
+// way Python's decode(errors="replace") consumes one replacement per subpart.
+func invalidUTF8SubpartLen(value []byte) int {
+	lead := value[0]
+	switch {
+	case lead >= 0xC2 && lead <= 0xDF:
+		if len(value) > 1 && isContinuationByte(value[1]) {
+			return 2
+		}
+		return 1
+	case lead >= 0xE0 && lead <= 0xEF:
+		if len(value) < 2 {
+			return 1
+		}
+		low, high := byte(0x80), byte(0xBF)
+		switch lead {
+		case 0xE0:
+			low = 0xA0
+		case 0xED:
+			high = 0x9F
+		}
+		if value[1] < low || value[1] > high {
+			return 1
+		}
+		if len(value) < 3 || !isContinuationByte(value[2]) {
+			return 2
+		}
+		return 3
+	case lead >= 0xF0 && lead <= 0xF4:
+		if len(value) < 2 {
+			return 1
+		}
+		low, high := byte(0x80), byte(0xBF)
+		switch lead {
+		case 0xF0:
+			low = 0x90
+		case 0xF4:
+			high = 0x8F
+		}
+		if value[1] < low || value[1] > high {
+			return 1
+		}
+		size := 2
+		for size < 4 && len(value) > size && isContinuationByte(value[size]) {
+			size++
+		}
+		return size
+	default:
+		return 1
+	}
+}
+
+func isContinuationByte(b byte) bool {
+	return b >= 0x80 && b <= 0xBF
 }
 
 func stripMediaExtension(value string) string {
@@ -312,7 +373,7 @@ func isDigitsOnly(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if !unicode.IsDigit(r) {
+		if r < '0' || r > '9' {
 			return false
 		}
 	}
@@ -321,7 +382,7 @@ func isDigitsOnly(value string) bool {
 
 func containsDigit(value string) bool {
 	for _, r := range value {
-		if unicode.IsDigit(r) {
+		if r >= '0' && r <= '9' {
 			return true
 		}
 	}
@@ -342,17 +403,27 @@ func attachmentIsGIF(attachment MessageAttachment) bool {
 		strings.HasSuffix(strings.ToLower(attachment.Filename), ".gif")
 }
 
-// attachmentMediaType returns the content type, inferred from the filename
-// extension when it is empty.
-func attachmentMediaType(attachment MessageAttachment) string {
+// attachmentMediaClass classifies an attachment as image, video, audio or "";
+// explicit content types must carry the slash, otherwise the extension is used.
+func attachmentMediaClass(attachment MessageAttachment) string {
 	if contentType := attachmentContentType(attachment); contentType != "" {
-		return contentType
+		switch {
+		case strings.HasPrefix(contentType, "image/"):
+			return "image"
+		case strings.HasPrefix(contentType, "video/"):
+			return "video"
+		case strings.HasPrefix(contentType, "audio/"):
+			return "audio"
+		default:
+			return ""
+		}
 	}
 	extension := strings.ToLower(attachment.Filename)
-	if idx := strings.LastIndexByte(extension, '.'); idx >= 0 {
-		extension = extension[idx+1:]
+	idx := strings.LastIndexByte(extension, '.')
+	if idx < 0 {
+		return ""
 	}
-	switch extension {
+	switch extension[idx+1:] {
 	case "png", "jpg", "jpeg", "webp", "gif":
 		return "image"
 	case "mp4", "webm", "mov":
@@ -373,13 +444,12 @@ func mediaAttachmentTagV1(attachment MessageAttachment) string {
 		return "[gif: " + strings.Join(words, " ") + "]"
 	}
 
-	mediaType := attachmentMediaType(attachment)
-	switch {
-	case strings.HasPrefix(mediaType, "image"):
+	switch attachmentMediaClass(attachment) {
+	case "image":
 		return "[image]"
-	case strings.HasPrefix(mediaType, "video"):
+	case "video":
 		return "[video]"
-	case strings.HasPrefix(mediaType, "audio"):
+	case "audio":
 		return "[son]"
 	default:
 		return "[fichier]"
@@ -389,10 +459,10 @@ func mediaAttachmentTagV1(attachment MessageAttachment) string {
 // cleanMediaDescription collapses whitespace, removes brackets, and cuts the
 // description to 60 code points at its last space.
 func cleanMediaDescription(value string) string {
-	cleaned := strings.Join(strings.Fields(value), " ")
+	cleaned := strings.Join(mediaFields(value), " ")
 	cleaned = strings.ReplaceAll(cleaned, "[", "")
 	cleaned = strings.ReplaceAll(cleaned, "]", "")
-	cleaned = strings.TrimSpace(cleaned)
+	cleaned = trimMediaSpace(cleaned)
 
 	runes := []rune(cleaned)
 	if len(runes) <= mediaDescriptionMaxRunes {
@@ -402,9 +472,27 @@ func cleanMediaDescription(value string) string {
 	if idx := strings.LastIndex(cut, " "); idx >= 0 {
 		cut = cut[:idx]
 	}
-	return strings.TrimSpace(cut)
+	return trimMediaSpace(cut)
 }
 
 func collapseMediaWhitespace(value string) string {
-	return strings.Join(strings.Fields(value), " ")
+	return strings.Join(mediaFields(value), " ")
+}
+
+func mediaFields(value string) []string {
+	return strings.FieldsFunc(value, isPythonSpace)
+}
+
+func trimMediaSpace(value string) string {
+	return strings.TrimFunc(value, isPythonSpace)
+}
+
+// isPythonSpace reports whether r is whitespace for Python's str \s.
+func isPythonSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', ' ', 0x1c, 0x1d, 0x1e, 0x1f,
+		0x85, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000:
+		return true
+	}
+	return r >= 0x2000 && r <= 0x200a
 }
