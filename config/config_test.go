@@ -156,10 +156,7 @@ ai:
   primary_provider: "opencode"
   opencode:
     enabled: true
-    base_url: "https://opencode.ai/zen/go/v1"
     api_key: "${OPENCODE_API_KEY}"
-    model: "deepseek-v4-flash"
-    vision_model: "deepseek-v4-flash"
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -175,6 +172,50 @@ ai:
 	}
 	if config.AI.Opencode.APIKey != "test-opencode-key" {
 		t.Errorf("AI.Opencode.APIKey = %v, want test-opencode-key", config.AI.Opencode.APIKey)
+	}
+	if config.AI.Opencode.BaseURL != "https://opencode.ai/inference/go/v1" {
+		t.Errorf("AI.Opencode.BaseURL = %q, want https://opencode.ai/inference/go/v1", config.AI.Opencode.BaseURL)
+	}
+	if config.AI.Opencode.Model != "deepseek-v4.1-flash" {
+		t.Errorf("AI.Opencode.Model = %q, want deepseek-v4.1-flash", config.AI.Opencode.Model)
+	}
+	if config.AI.Opencode.VisionModel != "deepseek-v4.1-flash" {
+		t.Errorf("AI.Opencode.VisionModel = %q, want deepseek-v4.1-flash", config.AI.Opencode.VisionModel)
+	}
+}
+
+func TestLoadOpencodeCustomBaseURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("OPENCODE_API_KEY", "test-opencode-key")
+
+	configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  local: true
+
+ai:
+  primary_provider: "opencode"
+  opencode:
+    enabled: true
+    base_url: "https://custom.opencode.example/v1"
+    api_key: "${OPENCODE_API_KEY}"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if config.AI.Opencode.BaseURL != "https://custom.opencode.example/v1" {
+		t.Errorf("AI.Opencode.BaseURL = %q, want https://custom.opencode.example/v1", config.AI.Opencode.BaseURL)
 	}
 }
 
@@ -421,10 +462,10 @@ func TestValidation(t *testing.T) {
 					PrimaryProvider: AIProviderOpencode,
 					Opencode: OpencodeConfig{
 						Enabled:     true,
-						BaseURL:     "https://opencode.ai/zen/go/v1",
+						BaseURL:     "https://opencode.ai/inference/go/v1",
 						APIKey:      "test-key",
-						Model:       "deepseek-v4-flash",
-						VisionModel: "deepseek-v4-flash",
+						Model:       "deepseek-v4.1-flash",
+						VisionModel: "deepseek-v4.1-flash",
 					},
 					Retry: RetryConfig{
 						InitialDelay:  time.Millisecond,
@@ -717,6 +758,32 @@ func TestMemorySummaryProviderValidation(t *testing.T) {
 			errParts: []string{"memory.summary_api_key"},
 		},
 		{
+			name:   "opencode provider with ai.opencode.api_key only",
+			memory: validMemory(SummaryProviderOpencode),
+			ai: AIConfig{
+				PrimaryProvider: AIProviderGroq,
+				Opencode:        OpencodeConfig{APIKey: "opencode-ai-key"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "opencode provider with memory.summary_api_key only",
+			memory: func() MemoryConfig {
+				m := validMemory(SummaryProviderOpencode)
+				m.SummaryAPIKey = "opencode-summary-key"
+				return m
+			}(),
+			ai:      AIConfig{PrimaryProvider: AIProviderGroq},
+			wantErr: false,
+		},
+		{
+			name:     "opencode provider without any key",
+			memory:   validMemory(SummaryProviderOpencode),
+			ai:       AIConfig{PrimaryProvider: AIProviderGroq},
+			wantErr:  true,
+			errParts: []string{"memory.summary_api_key", "opencode", "ai.opencode.api_key"},
+		},
+		{
 			name:     "unknown provider",
 			memory:   validMemory("bananaprovider"),
 			ai:       validAI,
@@ -909,6 +976,15 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !config.AI.Opencode.ThinkingEnabled {
 		t.Error("Default AI.Opencode.ThinkingEnabled should be true")
+	}
+	if config.AI.Opencode.BaseURL != "https://opencode.ai/inference/go/v1" {
+		t.Errorf("Default AI.Opencode.BaseURL = %q, want https://opencode.ai/inference/go/v1", config.AI.Opencode.BaseURL)
+	}
+	if config.AI.Opencode.Model != "deepseek-v4.1-flash" {
+		t.Errorf("Default AI.Opencode.Model = %q, want deepseek-v4.1-flash", config.AI.Opencode.Model)
+	}
+	if config.AI.Opencode.VisionModel != "deepseek-v4.1-flash" {
+		t.Errorf("Default AI.Opencode.VisionModel = %q, want deepseek-v4.1-flash", config.AI.Opencode.VisionModel)
 	}
 	if !config.AI.Openrouter.ThinkingEnabled {
 		t.Error("Default AI.Openrouter.ThinkingEnabled should be true")
