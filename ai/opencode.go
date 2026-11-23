@@ -3,18 +3,27 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
+)
+
+const (
+	opencodeUserAgent       = "disgoroq/1.0"
+	opencodeFallbackSession = "disgoroq-default"
 )
 
 type OpencodeProvider struct {
-	apiKey          string
-	baseURL         *url.URL
-	httpClient      *http.Client
-	thinkingEnabled bool
+	apiKey           string
+	baseURL          *url.URL
+	httpClient       *http.Client
+	thinkingEnabled  bool
+	defaultSessionID string
 }
 
 func NewOpencodeProvider(baseURL, apiKey string, thinkingEnabled bool) (*OpencodeProvider, error) {
@@ -24,11 +33,30 @@ func NewOpencodeProvider(baseURL, apiKey string, thinkingEnabled bool) (*Opencod
 	}
 
 	return &OpencodeProvider{
-		apiKey:          apiKey,
-		baseURL:         parsedURL,
-		httpClient:      &http.Client{},
-		thinkingEnabled: thinkingEnabled,
+		apiKey:           apiKey,
+		baseURL:          parsedURL,
+		httpClient:       &http.Client{},
+		thinkingEnabled:  thinkingEnabled,
+		defaultSessionID: newOpencodeSessionID(),
 	}, nil
+}
+
+func newOpencodeSessionID() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return opencodeFallbackSession
+	}
+	return "disgoroq-" + hex.EncodeToString(raw[:])
+}
+
+func (o *OpencodeProvider) sessionID(requested string) string {
+	if trimmed := strings.TrimSpace(requested); trimmed != "" {
+		return trimmed
+	}
+	if o.defaultSessionID != "" {
+		return o.defaultSessionID
+	}
+	return opencodeFallbackSession
 }
 
 func (o *OpencodeProvider) Name() string {
@@ -69,7 +97,7 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 		return nil, fmt.Errorf("error marshaling OpenCode chat request: %w", err)
 	}
 
-	responseBody, err := o.doChatRequest(ctx, body)
+	responseBody, err := o.doChatRequest(ctx, body, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +152,7 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 		return nil, fmt.Errorf("error marshaling OpenCode vision request: %w", err)
 	}
 
-	responseBody, err := o.doChatRequest(ctx, body)
+	responseBody, err := o.doChatRequest(ctx, body, "")
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +177,7 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 	}, nil
 }
 
-func (o *OpencodeProvider) doChatRequest(ctx context.Context, body []byte) ([]byte, error) {
+func (o *OpencodeProvider) doChatRequest(ctx context.Context, body []byte, sessionID string) ([]byte, error) {
 	requestURL := o.baseURL.JoinPath("chat/completions")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL.String(), bytes.NewReader(body))
 	if err != nil {
@@ -159,6 +187,8 @@ func (o *OpencodeProvider) doChatRequest(ctx context.Context, body []byte) ([]by
 	httpReq.Header.Set("Authorization", "Bearer "+o.apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("User-Agent", opencodeUserAgent)
+	httpReq.Header.Set("x-opencode-session", o.sessionID(sessionID))
 
 	httpResp, err := o.httpClient.Do(httpReq)
 	if err != nil {

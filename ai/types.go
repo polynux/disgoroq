@@ -48,6 +48,7 @@ type ChatRequest struct {
 	AttachmentCache *AttachmentCacheInput // Optional detached attachment summary cache key
 	BotName         string                // Bot's display name, the speaker of its lines in completion mode
 	TargetMessageID string                // Discord message the completion should answer
+	SessionID       string                // Optional stable conversation key for providers that route by session
 }
 
 // Message represents a single message in the conversation

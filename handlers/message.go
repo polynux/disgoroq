@@ -299,6 +299,7 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		MaxTokens:       database.DefaultMaxTokens,
 		BotName:         botNick,
 		TargetMessageID: m.ID.String(),
+		SessionID:       chatSessionID(m.GuildID, m.ChannelID),
 	})
 
 	reference := &discord.MessageReference{
@@ -613,6 +614,16 @@ func normalizeEventMessage(event *events.GenericMessage) discord.Message {
 		message.CreatedAt = message.ID.Time()
 	}
 	return message
+}
+
+func chatSessionID(guildID *snowflake.ID, channelID snowflake.ID) string {
+	if channelID == 0 {
+		return ""
+	}
+	if guildID == nil || *guildID == 0 {
+		return channelID.String()
+	}
+	return guildID.String() + ":" + channelID.String()
 }
 
 func min(a, b int) int {

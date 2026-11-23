@@ -294,3 +294,55 @@ func TestOpencodeRetryWrapperPermanentVsTransientErrors(t *testing.T) {
 		assert.Equal(t, int32(2), attempts.Load())
 	})
 }
+
+func TestOpencodeSendsUserAgentAndSessionHeaders(t *testing.T) {
+	var seenUserAgents []string
+	var seenSessions []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenUserAgents = append(seenUserAgents, r.Header.Get("User-Agent"))
+		seenSessions = append(seenSessions, r.Header.Get("x-opencode-session"))
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpencodeProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	// Explicit SessionID is forwarded as x-opencode-session.
+	_, err = provider.Chat(context.Background(), &ChatRequest{
+		Model:     "deepseek-v4.1-flash",
+		SessionID: "guild-1:channel-2",
+		Messages:  []Message{{Role: RoleUser, Content: "hello"}},
+	})
+	require.NoError(t, err)
+
+	// Missing SessionID falls back to the provider's stable default session ID.
+	_, err = provider.Chat(context.Background(), &ChatRequest{
+		Model:    "deepseek-v4.1-flash",
+		Messages: []Message{{Role: RoleUser, Content: "second"}},
+	})
+	require.NoError(t, err)
+
+	// Vision requests also send User-Agent and the same stable fallback session ID.
+	_, err = provider.Vision(context.Background(), &VisionRequest{
+		Model:       "deepseek-v4.1-flash",
+		Instruction: "describe",
+		ImageURL:    "data:image/png;base64,iVBORw0KGgo=",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, seenUserAgents, 3)
+	for _, ua := range seenUserAgents {
+		assert.Equal(t, opencodeUserAgent, ua)
+	}
+
+	require.Len(t, seenSessions, 3)
+	assert.Equal(t, "guild-1:channel-2", seenSessions[0])
+	assert.NotEmpty(t, seenSessions[1])
+	assert.Equal(t, seenSessions[1], seenSessions[2], "fallback x-opencode-session should be stable across requests on the same provider instance")
+	assert.NotEqual(t, seenSessions[0], seenSessions[1])
+}

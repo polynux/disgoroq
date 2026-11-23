@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"testing"
+
+	"github.com/disgoorg/snowflake/v2"
 )
 
 func TestTryAcquireReplySlotIsBounded(t *testing.T) {
@@ -29,5 +31,20 @@ func TestLockForSharesOneLockPerKey(t *testing.T) {
 	}
 	if first == h.lockFor(&h.replyLocks, "2") {
 		t.Fatal("expected different keys to use separate locks")
+	}
+}
+
+func TestChatSessionID(t *testing.T) {
+	guildID := snowflake.ID(123456789)
+	channelID := snowflake.ID(987654321)
+
+	if got := chatSessionID(&guildID, channelID); got != "123456789:987654321" {
+		t.Fatalf("chatSessionID(guild, channel) = %q, want %q", got, "123456789:987654321")
+	}
+	if got := chatSessionID(nil, channelID); got != "987654321" {
+		t.Fatalf("chatSessionID(nil, channel) = %q, want %q", got, "987654321")
+	}
+	if got := chatSessionID(&guildID, 0); got != "" {
+		t.Fatalf("chatSessionID(guild, 0) = %q, want empty", got)
 	}
 }
