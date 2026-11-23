@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -721,4 +722,113 @@ func TestRetryWrapperChatUsesCachedImageDescriptions(t *testing.T) {
 	assert.Equal(t, "described", response.Content)
 	mockProvider.AssertNotCalled(t, "Vision", mock.Anything, mock.Anything)
 	mockProvider.AssertExpectations(t)
+}
+
+func testRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries:    2,
+		InitialDelay:  time.Millisecond,
+		MaxDelay:      2 * time.Millisecond,
+		BackoffFactor: 2.0,
+		RetryOnEmpty:  true,
+		RetryOnError:  true,
+	}
+}
+
+func TestRetryWrapperChatDoesNotRetryQuotaError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%: https://ollama.com/plans (ref: abc)",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "Add usage credits")
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatDoesNotRetryQuotaRateLimit(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		Message:    "Add usage credits or subscribe and save up to 66%: https://ollama.com/plans",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatDoesNotRetryUntypedQuotaMessage(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := errors.New("error in Ollama chat: Add usage credits or subscribe and save up to 66%: https://ollama.com/plans")
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatRetriesServerError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	serverError := &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, serverError).Once()
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+		Content:      "Hello, world!",
+		Model:        "kimi-k2:cloud",
+		FinishReason: "stop",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, world!", response.Content)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 2)
+}
+
+func TestRetryWrapperVisionDoesNotRetryQuotaError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Vision(context.Background(), &VisionRequest{
+		Instruction: "Describe this image",
+		ImageURL:    "https://example.com/image.jpg",
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
 }

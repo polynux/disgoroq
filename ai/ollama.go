@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -208,6 +207,9 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 
 	chunks, err := parseOllamaChatResponse(responseBody)
 	if err != nil {
+		if httpResp.StatusCode >= http.StatusBadRequest {
+			return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode}
+		}
 		return nil, err
 	}
 
@@ -222,7 +224,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 
 	for _, chunk := range chunks {
 		if chunk.Error != "" {
-			return nil, errors.New(chunk.Error)
+			return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: chunk.Error}
 		}
 		if chunk.Message.Content != "" {
 			responseBuilder.WriteString(chunk.Message.Content)
@@ -245,7 +247,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	}
 
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("ollama chat failed: %s", httpResp.Status)
+		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode}
 	}
 
 	content := responseBuilder.String()

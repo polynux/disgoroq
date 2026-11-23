@@ -387,3 +387,27 @@ func TestOllamaChatSendsAndParsesToolCalls(t *testing.T) {
 	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
 	assert.Equal(t, `{"url":"https://example.com"}`, resp.ToolCalls[0].Function.Arguments)
 }
+
+func TestOllamaChatReturnsTypedErrorOnPaymentRequired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, err := io.WriteString(w, `{"error":"Add usage credits or subscribe and save up to 66%: https://ollama.com/plans"}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+
+	_, err = provider.Chat(context.Background(), &ChatRequest{
+		Model:    "kimi-k2:cloud",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	require.Error(t, err)
+
+	var statusErr *ProviderHTTPError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusPaymentRequired, statusErr.StatusCode)
+	assert.Contains(t, statusErr.Message, "Add usage credits")
+}
