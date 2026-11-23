@@ -901,8 +901,8 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{"503 mentioning billing", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "upstream billing service unavailable"}, true},
 		{"503 mentioning credits", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "usage credits service down"}, true},
 		{
-			// Groq formats its 429 body into an untyped error, and that body links to a billing page.
-			"untyped Groq rate limit",
+			// Untyped fallback: an error without a status whose body links to a billing page.
+			"untyped rate limit with a billing link",
 			errors.New(`groq API error (status 429): {"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile. Please try again in 2.5s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}`),
 			true,
 		},
@@ -912,6 +912,9 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{"408 timeout", &ProviderHTTPError{StatusCode: http.StatusRequestTimeout}, true},
 		{"400 OpenCode upstream server_error", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: `{"error":{"type":"server_error","code":"upstream_error","message":"Upstream request failed"}}`}, true},
 		{"400 OpenCode invalid_request_error", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: `{"error":{"type":"invalid_request_error","code":"upstream_error"}}`}, false},
+		{"400 Groq tool_use_failed", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: `{"error":{"message":"Failed to call a function.","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"..."}}`}, true},
+		{"429 OpenRouter free daily limit", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: `{"error":{"message":"Rate limit exceeded: free-models-per-day.","code":429}}`}, false},
+		{"429 Groq tokens per day", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: `Rate limit reached for model x on tokens per day (TPD): Limit 500000, Used 499990. Please try again in 7m.`}, false},
 		{"canceled", context.Canceled, false},
 		{"deadline wrapped", errors.Join(errors.New("vision"), context.DeadlineExceeded), false},
 		{"timeout-like transport error", errors.New("dial tcp: i/o timeout"), true},

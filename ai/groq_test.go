@@ -195,6 +195,20 @@ func TestGroqHTTPErrorsAreTypedAndClassified(t *testing.T) {
 			wantCalls:   3,
 		},
 		{
+			name:        "400 tool_use_failed is retried",
+			status:      http.StatusBadRequest,
+			body:        `{"error":{"message":"Failed to call a function. Please adjust your prompt.","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"<function=web_search>{bad json"}}`,
+			wantMessage: "tool_use_failed",
+			wantCalls:   3,
+		},
+		{
+			name:        "429 tokens per day is final",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile on tokens per day (TPD): Limit 500000, Used 499990, Requested 120. Please try again in 7m12s.","type":"tokens","code":"rate_limit_exceeded"}}`,
+			wantMessage: "tokens per day",
+			wantCalls:   1,
+		},
+		{
 			name:        "503 is retried",
 			status:      http.StatusServiceUnavailable,
 			body:        `{"error":{"message":"service unavailable"}}`,

@@ -130,6 +130,10 @@ var quotaErrorHints = []string{
 	"usage credits", // Ollama Cloud: "Add usage credits or subscribe ..."
 	"insufficient_quota",
 	"payment required",
+	// Daily allowances: retrying seconds later cannot succeed before the reset.
+	"-per-day",         // OpenRouter: "Rate limit exceeded: free-models-per-day."
+	"tokens per day",   // Groq: "... on tokens per day (TPD) ..."
+	"requests per day", // Groq: "... on requests per day (RPD) ..."
 }
 
 func isQuotaMessage(message string) bool {
@@ -174,6 +178,11 @@ func isRetryableProviderError(err error) bool {
 		// "server_error"; those can be transient, unlike "invalid_request_error".
 		if statusErr.StatusCode == http.StatusBadRequest && strings.Contains(statusErr.Message, `"server_error"`) {
 			return !isQuotaMessage(statusErr.Message)
+		}
+		// Groq rejects a malformed tool call the model generated with a 400
+		// "tool_use_failed"; its docs say to retry, since a new sample can succeed.
+		if statusErr.StatusCode == http.StatusBadRequest && strings.Contains(statusErr.Message, "tool_use_failed") {
+			return true
 		}
 		if statusErr.StatusCode >= http.StatusBadRequest {
 			return false

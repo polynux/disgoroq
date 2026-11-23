@@ -181,9 +181,16 @@ func TestOpenrouterHTTPErrorsAreTypedAndClassified(t *testing.T) {
 		{
 			name:        "429 rate limit is retried",
 			status:      http.StatusTooManyRequests,
-			body:        `{"error":{"message":"Rate limit exceeded: free-models-per-day.","code":429}}`,
+			body:        `{"error":{"message":"Rate limit exceeded: free-models-per-min.","code":429}}`,
 			wantMessage: "Rate limit exceeded",
 			wantCalls:   3,
+		},
+		{
+			name:        "429 daily allowance is final",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":{"message":"Rate limit exceeded: free-models-per-day.","code":429}}`,
+			wantMessage: "free-models-per-day",
+			wantCalls:   1,
 		},
 		{
 			name:        "503 is retried",
@@ -234,8 +241,69 @@ func TestOpenrouterHTTPErrorsAreTypedAndClassified(t *testing.T) {
 			require.ErrorAs(t, err, &httpErr)
 			assert.Equal(t, tt.status, httpErr.StatusCode)
 			assert.Contains(t, httpErr.Message, tt.wantMessage)
+			assert.Contains(t, err.Error(), "OpenRouter")
 		})
 	}
+}
+
+// OpenRouter can report a failure inside a 200 response; it must be typed with
+// the code from the body so the retry rules apply.
+func TestOpenrouterErrorInsideOKResponse(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+		wantCalls  int32
+	}{
+		{"402 in the body is final", `{"error":{"code":402,"message":"Provider returned error"}}`, http.StatusPaymentRequired, 1},
+		{"502 in the body is retried", `{"error":{"code":502,"message":"Provider returned error"}}`, http.StatusBadGateway, 3},
+		{"string code is parsed", `{"error":{"code":"429","message":"Rate limit exceeded: free-models-per-min."}}`, http.StatusTooManyRequests, 3},
+		{"missing code is treated as a transient upstream error", `{"error":{"message":"Provider returned error"}}`, http.StatusBadGateway, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+
+			provider, err := NewOpenrouterProvider(server.URL, "test-key", false)
+			require.NoError(t, err)
+
+			wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "google/gemini-2.5-flash", "google/gemini-2.5-flash", nil)
+			_, err = wrapper.Chat(context.Background(), &ChatRequest{
+				Model:    "google/gemini-2.5-flash",
+				Messages: []Message{{Role: RoleUser, Content: "hello"}},
+			})
+
+			require.Error(t, err)
+			var httpErr *ProviderHTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, tt.wantStatus, httpErr.StatusCode)
+			assert.Equal(t, tt.wantCalls, calls.Load())
+			assert.Contains(t, err.Error(), "OpenRouter")
+		})
+	}
+
+	t.Run("choices with an error field are still returned", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"error":{"code":502},"choices":[{"message":{"content":"partial"},"finish_reason":"error"}]}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpenrouterProvider(server.URL, "test-key", false)
+		require.NoError(t, err)
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model:    "google/gemini-2.5-flash",
+			Messages: []Message{{Role: RoleUser, Content: "hello"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "partial", resp.Content)
+	})
 }
 
 func TestOpenrouterVisionHTTPErrorIsTypedAndFinal(t *testing.T) {

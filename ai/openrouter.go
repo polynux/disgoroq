@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 type OpenrouterProvider struct {
@@ -72,6 +73,9 @@ func (o *OpenrouterProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatR
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, fmt.Errorf("error decoding OpenRouter chat response: %w", err)
 	}
+	if err := response.envelopeError(responseBody); err != nil {
+		return nil, err
+	}
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("OpenRouter chat response did not contain any choices")
 	}
@@ -127,6 +131,9 @@ func (o *OpenrouterProvider) Vision(ctx context.Context, req *VisionRequest) (*V
 	if err := json.Unmarshal(responseBody, &response); err != nil {
 		return nil, fmt.Errorf("error decoding OpenRouter vision response: %w", err)
 	}
+	if err := response.envelopeError(responseBody); err != nil {
+		return nil, err
+	}
 	if len(response.Choices) == 0 {
 		return nil, fmt.Errorf("OpenRouter vision response did not contain any choices")
 	}
@@ -165,7 +172,7 @@ func (o *OpenrouterProvider) doChatRequest(ctx context.Context, body []byte) ([]
 		return nil, fmt.Errorf("error reading OpenRouter response: %w", err)
 	}
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)}
+		return nil, fmt.Errorf("OpenRouter request failed: %w", &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)})
 	}
 
 	return responseBody, nil
@@ -192,7 +199,13 @@ type openrouterReasoning struct {
 }
 
 type openrouterChatResponse struct {
-	Model   string `json:"model"`
+	Model string `json:"model"`
+	// Error is set when OpenRouter reports a failure inside a 200 response,
+	// e.g. an upstream provider error after the headers were sent.
+	Error *struct {
+		Code    any    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
 	Choices []struct {
 		Message struct {
 			Content   string           `json:"content"`
@@ -221,4 +234,26 @@ func openrouterReasoningConfig(thinkingEnabled bool) *openrouterReasoning {
 		Effort:  "none",
 		Exclude: true,
 	}
+}
+
+// envelopeError turns an error reported inside a 200 response into a typed
+// ProviderHTTPError, using the code OpenRouter puts in the body, so the retry
+// rules see the real status. It returns nil when there is no error, or when
+// choices came back anyway.
+func (r *openrouterChatResponse) envelopeError(body []byte) error {
+	if r.Error == nil || len(r.Choices) > 0 {
+		return nil
+	}
+	status := http.StatusBadGateway // unknown upstream failure: treat as transient
+	switch code := r.Error.Code.(type) {
+	case float64:
+		if code >= 400 && code < 600 {
+			status = int(code)
+		}
+	case string:
+		if parsed, err := strconv.Atoi(code); err == nil && parsed >= 400 && parsed < 600 {
+			status = parsed
+		}
+	}
+	return fmt.Errorf("OpenRouter request failed: %w", &ProviderHTTPError{StatusCode: status, Message: errorBodySnippet(body)})
 }
