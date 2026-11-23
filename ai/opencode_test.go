@@ -346,3 +346,123 @@ func TestOpencodeSendsUserAgentAndSessionHeaders(t *testing.T) {
 	assert.Equal(t, seenSessions[1], seenSessions[2], "fallback x-opencode-session should be stable across requests on the same provider instance")
 	assert.NotEqual(t, seenSessions[0], seenSessions[1])
 }
+
+func TestOpencodeAvailableModelsAndSupportsInlineImages(t *testing.T) {
+	provider, err := NewOpencodeProvider("https://opencode.ai/inference/go/v1", "test-key", true)
+	require.NoError(t, err)
+
+	modelsByName := make(map[string]ModelInfo)
+	for _, model := range provider.AvailableModels() {
+		assert.Equal(t, "opencode", model.Provider)
+		modelsByName[model.Name] = model
+	}
+
+	assert.Contains(t, modelsByName["deepseek-v4.1-flash"].Capabilities, CapabilityVision)
+	assert.Contains(t, modelsByName["muse-spark-1.3-contributor"].Capabilities, CapabilityVision)
+	assert.Contains(t, modelsByName["kimi-k3"].Capabilities, CapabilityVision)
+	assert.Contains(t, modelsByName["minimax-m3"].Capabilities, CapabilityVision)
+	assert.NotContains(t, modelsByName["deepseek-v4-pro"].Capabilities, CapabilityVision)
+	assert.NotContains(t, modelsByName["glm-5.3"].Capabilities, CapabilityVision)
+
+	assert.True(t, provider.SupportsInlineImages("deepseek-v4.1-flash", "deepseek-v4.1-flash"))
+	assert.True(t, provider.SupportsInlineImages("muse-spark-1.3-contributor", "muse-spark-1.3-contributor"))
+	assert.True(t, provider.SupportsInlineImages("kimi-k3", "kimi-k3"))
+	assert.False(t, provider.SupportsInlineImages("deepseek-v4.1-flash", "muse-spark-1.3-contributor"))
+	assert.False(t, provider.SupportsInlineImages("deepseek-v4-pro", "deepseek-v4-pro"))
+	assert.False(t, provider.SupportsInlineImages("glm-5.3", "glm-5.3"))
+	assert.False(t, provider.SupportsInlineImages("", ""))
+	assert.False(t, provider.SupportsInlineImages("unknown-model", "unknown-model"))
+}
+
+func TestOpencodeInlineImagesWithRetryWrapper(t *testing.T) {
+	const dataURI = "data:image/png;base64,iVBORw0KGgo="
+
+	t.Run("sends images inline in a single request when shared model supports vision", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req opencodeChatRequest
+			require.NoError(t, json.Unmarshal(body, &req))
+			assert.Equal(t, "deepseek-v4.1-flash", req.Model)
+			require.Len(t, req.Messages, 1)
+
+			partsData, err := json.Marshal(req.Messages[0].Content)
+			require.NoError(t, err)
+			var parts []openAIMessageContentPart
+			require.NoError(t, json.Unmarshal(partsData, &parts))
+			require.Len(t, parts, 2)
+			assert.Equal(t, "text", parts[0].Type)
+			assert.Equal(t, "what is this?", parts[0].Text)
+			assert.Equal(t, "image_url", parts[1].Type)
+			require.NotNil(t, parts[1].ImageURL)
+			assert.Equal(t, dataURI, parts[1].ImageURL.URL)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, err = io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"a tiny png"},"finish_reason":"stop"}]}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+		wrapper := NewRetryWrapper(provider, DefaultRetryConfig(), 1, "deepseek-v4.1-flash", "deepseek-v4.1-flash", nil)
+
+		resp, err := wrapper.Chat(context.Background(), &ChatRequest{
+			Messages: []Message{{
+				Role:      RoleUser,
+				Content:   "what is this?",
+				ImageRefs: []int{0},
+			}},
+			Images: []ImageContext{{
+				URL:  dataURI,
+				Type: "image/png",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "a tiny png", resp.Content)
+		assert.Equal(t, int32(1), requests.Load())
+	})
+
+	t.Run("uses separate vision call when chat model is text-only", func(t *testing.T) {
+		var seenModels []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+
+			var req opencodeChatRequest
+			require.NoError(t, json.Unmarshal(body, &req))
+			seenModels = append(seenModels, req.Model)
+
+			w.Header().Set("Content-Type", "application/json")
+			if len(seenModels) == 1 {
+				_, err = io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"a red square"},"finish_reason":"stop"}]}`)
+			} else {
+				_, err = io.WriteString(w, `{"model":"deepseek-v4-pro","choices":[{"message":{"content":"looks red"},"finish_reason":"stop"}]}`)
+			}
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+		wrapper := NewRetryWrapper(provider, DefaultRetryConfig(), 1, "deepseek-v4-pro", "deepseek-v4.1-flash", nil)
+
+		resp, err := wrapper.Chat(context.Background(), &ChatRequest{
+			Messages: []Message{{
+				Role:      RoleUser,
+				Content:   "what is this?",
+				ImageRefs: []int{0},
+			}},
+			Images: []ImageContext{{
+				URL:  dataURI,
+				Type: "image/png",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "looks red", resp.Content)
+		assert.Equal(t, []string{"deepseek-v4.1-flash", "deepseek-v4-pro"}, seenModels)
+	})
+}

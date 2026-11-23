@@ -65,20 +65,56 @@ func (o *OpencodeProvider) Name() string {
 
 func (o *OpencodeProvider) AvailableModels() []ModelInfo {
 	return []ModelInfo{
-		{Name: "glm-5.1", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "glm-5", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "kimi-k2.5", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "kimi-k2.6", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "deepseek-v4.1-flash", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
 		{Name: "deepseek-v4-pro", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "deepseek-v4-flash", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "mimo-v2.5", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "muse-spark-1.3-contributor", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "muse-spark-1.2-contributor", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "kimi-k3", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "kimi-k3.1-pro", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "kimi-k2.7-code", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "minimax-m3", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "minimax-m3.1-flash", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "glm-5.3", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "glm-5.3-flash", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "mimo-v2.6-pro", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "mimo-v2.6-flash", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "mimo-v2.5", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
 		{Name: "mimo-v2.5-pro", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "qwen3.6-plus", Provider: "opencode", Capabilities: []string{CapabilityChat}},
-		{Name: "qwen3.5-plus", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "qwen4-max", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "qwen3.8-max", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "qwen3.8-flash", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "qwen3.7-plus", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "claude-haiku-5-5", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "gemini-4-argon", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "gpt-6-luna", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "gpt-5.6-luna", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "grok-4.7", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "longcat-2.5", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "step-5-preview", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "hy4", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "hy4-preview", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "hy3", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "hy4-flash-free", Provider: "opencode", Capabilities: []string{CapabilityChat, CapabilityVision}},
+		{Name: "iceman-contributor-free", Provider: "opencode", Capabilities: []string{CapabilityChat}},
+		{Name: "beam-free", Provider: "opencode", Capabilities: []string{CapabilityChat}},
 	}
 }
 
 func (o *OpencodeProvider) SupportsInlineImages(chatModel, visionModel string) bool {
+	if chatModel == "" || chatModel != visionModel {
+		return false
+	}
+	for _, model := range o.AvailableModels() {
+		if model.Name != chatModel {
+			continue
+		}
+		for _, capability := range model.Capabilities {
+			if capability == CapabilityVision {
+				return true
+			}
+		}
+		return false
+	}
 	return false
 }
 
