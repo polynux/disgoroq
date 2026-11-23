@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -32,6 +33,8 @@ type Service struct {
 	emojiManager   *emoji.Manager
 	config         config.ReengageConfig
 	defaultPrompt  string
+	skippedMu      sync.Mutex
+	skippedGuilds  map[string]struct{}
 }
 
 func (s *Service) resolveReengageSettings(ctx context.Context, guildID, channelID string) (bool, int, float64) {
@@ -72,6 +75,7 @@ func NewService(client *bot.Client, aiService *ai.Service, repo *database.Reposi
 		emojiManager:   emojiManager,
 		config:         cfg,
 		defaultPrompt:  defaultPrompt,
+		skippedGuilds:  make(map[string]struct{}),
 	}
 }
 
@@ -88,15 +92,28 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 			continue
 		}
 
-		// Use REST API instead of state
-		_, err = s.client.Rest.GetGuild(guildIDSnowflake, false, rest.WithCtx(ctx))
-		if err != nil {
+		// The gateway guild cache is authoritative for membership once populated, so
+		// guilds the bot left are skipped without any REST call.
+		if s.client.Caches.GuildsLen() > 0 {
+			if !s.guildInCache(guildIDSnowflake) {
+				continue
+			}
+			s.unskipGuild(guildID)
+		} else if s.isGuildSkipped(guildID) {
+			continue
+		} else if _, err = s.client.Rest.GetGuild(guildIDSnowflake, false, rest.WithCtx(ctx)); err != nil {
+			if s.skipUnknownGuild(err, guildID) {
+				continue
+			}
 			logger.Warn("Failed to get guild", zap.String("guild_id", guildID), zap.Error(err))
 			continue
 		}
 
 		channels, err := s.client.Rest.GetGuildChannels(guildIDSnowflake, rest.WithCtx(ctx))
 		if err != nil {
+			if s.skipUnknownGuild(err, guildID) {
+				continue
+			}
 			logger.Warn("Failed to get guild channels", zap.String("guild_id", guildID), zap.Error(err))
 			continue
 		}
@@ -143,6 +160,44 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// guildInCache reports whether the bot is currently in the guild according to the
+// gateway guild cache.
+func (s *Service) guildInCache(guildID snowflake.ID) bool {
+	_, ok := s.client.Caches.Guild(guildID)
+	return ok
+}
+
+// isGuildSkipped reports whether the guild was already found to be left by the bot.
+func (s *Service) isGuildSkipped(guildID string) bool {
+	s.skippedMu.Lock()
+	defer s.skippedMu.Unlock()
+	_, ok := s.skippedGuilds[guildID]
+	return ok
+}
+
+// unskipGuild clears a previous skip, e.g. after the bot was re-invited.
+func (s *Service) unskipGuild(guildID string) {
+	s.skippedMu.Lock()
+	defer s.skippedMu.Unlock()
+	delete(s.skippedGuilds, guildID)
+}
+
+// skipUnknownGuild stops checking a guild Discord reports as unknown (error 10004)
+// and reports whether the error was that case.
+func (s *Service) skipUnknownGuild(err error, guildID string) bool {
+	if !rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownGuild) {
+		return false
+	}
+	logger.Info("Skipping guild the bot is no longer in", zap.String("guild_id", guildID))
+	s.skippedMu.Lock()
+	defer s.skippedMu.Unlock()
+	if s.skippedGuilds == nil {
+		s.skippedGuilds = make(map[string]struct{})
+	}
+	s.skippedGuilds[guildID] = struct{}{}
+	return true
 }
 
 func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string) error {
