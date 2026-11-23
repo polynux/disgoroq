@@ -222,6 +222,7 @@ type MediaLibraryConfig struct {
 	CrossGuild           bool    `yaml:"cross_guild"`
 	AllowDiscordCDN      bool    `yaml:"allow_discord_cdn"`
 	RepeatWindow         int     `yaml:"repeat_window"`
+	LookupTimeoutMs      int     `yaml:"lookup_timeout_ms"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -354,6 +355,7 @@ func DefaultConfig() *Config {
 			CrossGuild:           false,
 			AllowDiscordCDN:      false,
 			RepeatWindow:         20,
+			LookupTimeoutMs:      3000,
 		},
 		Bot: BotConfig{
 			DefaultPrompt: "yo, t'es {{.BotNick}}, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀",

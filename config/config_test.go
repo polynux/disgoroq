@@ -748,6 +748,9 @@ func TestValidation(t *testing.T) {
 			if tt.config.Votes == (VotesConfig{}) {
 				tt.config.Votes = DefaultConfig().Votes
 			}
+			if tt.config.MediaLibrary == (MediaLibraryConfig{}) {
+				tt.config.MediaLibrary = DefaultConfig().MediaLibrary
+			}
 			err := tt.config.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
@@ -1118,11 +1121,12 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		cfg.MediaLibrary.MinTriggerSimilarity != 0.80 ||
 		cfg.MediaLibrary.CrossGuild ||
 		cfg.MediaLibrary.AllowDiscordCDN ||
-		cfg.MediaLibrary.RepeatWindow != 20 {
+		cfg.MediaLibrary.RepeatWindow != 20 ||
+		cfg.MediaLibrary.LookupTimeoutMs != 3000 {
 		t.Fatalf("unexpected media_library defaults: %+v", cfg.MediaLibrary)
 	}
 
-	// Valid edge values (0 and 1 for similarity, 0 for repeat_window).
+	// Valid edge values (0 and 1 for similarity, 0..200 for repeat_window, >=1 for lookup_timeout_ms).
 	valid := DefaultConfig()
 	valid.Discord.Token = "test-token"
 	valid.Database.Local = true
@@ -1133,7 +1137,8 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		MinTriggerSimilarity: 1,
 		CrossGuild:           true,
 		AllowDiscordCDN:      true,
-		RepeatWindow:         0,
+		RepeatWindow:         200,
+		LookupTimeoutMs:      1,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() unexpected error for valid boundary config: %v", err)
@@ -1169,6 +1174,21 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 			mutate:  func(c *MediaLibraryConfig) { c.RepeatWindow = -1 },
 			wantErr: "media_library.repeat_window",
 		},
+		{
+			name:    "repeat_window above 200",
+			mutate:  func(c *MediaLibraryConfig) { c.RepeatWindow = 201 },
+			wantErr: "media_library.repeat_window",
+		},
+		{
+			name:    "zero lookup_timeout_ms",
+			mutate:  func(c *MediaLibraryConfig) { c.LookupTimeoutMs = 0 },
+			wantErr: "media_library.lookup_timeout_ms",
+		},
+		{
+			name:    "negative lookup_timeout_ms",
+			mutate:  func(c *MediaLibraryConfig) { c.LookupTimeoutMs = -100 },
+			wantErr: "media_library.lookup_timeout_ms",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := DefaultConfig()
@@ -1201,6 +1221,7 @@ media_library:
   min_similarity: 0.75
   cross_guild: true
   repeat_window: 10
+  lookup_timeout_ms: 1500
 `
 	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)
@@ -1214,7 +1235,8 @@ media_library:
 		loaded.MediaLibrary.MinTriggerSimilarity != 0.80 ||
 		!loaded.MediaLibrary.CrossGuild ||
 		loaded.MediaLibrary.AllowDiscordCDN ||
-		loaded.MediaLibrary.RepeatWindow != 10 {
+		loaded.MediaLibrary.RepeatWindow != 10 ||
+		loaded.MediaLibrary.LookupTimeoutMs != 1500 {
 		t.Fatalf("unexpected loaded media_library config: %+v", loaded.MediaLibrary)
 	}
 }

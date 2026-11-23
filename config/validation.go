@@ -533,8 +533,11 @@ func (c *MediaLibraryConfig) validate() error {
 	if math.IsNaN(c.MinTriggerSimilarity) || math.IsInf(c.MinTriggerSimilarity, 0) || c.MinTriggerSimilarity < 0 || c.MinTriggerSimilarity > 1 {
 		return fmt.Errorf("media_library.min_trigger_similarity must be between 0 and 1")
 	}
-	if c.RepeatWindow < 0 {
-		return fmt.Errorf("media_library.repeat_window cannot be negative")
+	if c.RepeatWindow < 0 || c.RepeatWindow > 200 {
+		return fmt.Errorf("media_library.repeat_window must be between 0 and 200")
+	}
+	if c.LookupTimeoutMs < 1 {
+		return fmt.Errorf("media_library.lookup_timeout_ms must be positive")
 	}
 	return nil
 }

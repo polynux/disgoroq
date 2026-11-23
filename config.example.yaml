@@ -39,6 +39,7 @@ media_library:
   cross_guild: false
   allow_discord_cdn: false
   repeat_window: 20
+  lookup_timeout_ms: 3000
 
 ai:
   # Primary AI provider to use by default: "groq", "ollama", "opencode", or "openrouter"
