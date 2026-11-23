@@ -1178,7 +1178,7 @@ func (m *failingAIService) callCount() int {
 func TestService_SummarizationBacksOffAfterFailure(t *testing.T) {
 	const threshold = 2
 	// Also caps the backoff, so the test does not wait minutes.
-	const interval = 1 * time.Second
+	const interval = 3 * time.Second
 
 	repo := newMockRepository()
 	aiSvc := &failingAIService{}
@@ -1228,6 +1228,22 @@ func TestService_SummarizationBacksOffAfterFailure(t *testing.T) {
 		t.Fatalf("expected exactly 1 AI call after first batch, got %d", got)
 	}
 
+	// The fake counts the call before it fails, so wait until the failing run
+	// has recorded its cooldown and released the key. Otherwise the second
+	// batch could be skipped by the "already running" guard instead of the backoff.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, cooling := service.summaryBackoffWait(key)
+		_, running := service.activeSummaries.Load(key)
+		if cooling && !running {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, cooling := service.summaryBackoffWait(key); !cooling {
+		t.Fatal("expected a cooldown after the failed summarization")
+	}
+
 	// A second trigger inside the cooldown must not reach the AI service.
 	bufferBatch("second")
 	time.Sleep(400 * time.Millisecond)
@@ -1249,5 +1265,40 @@ func TestService_SummarizationBacksOffAfterFailure(t *testing.T) {
 	}
 	if got := aiSvc.callCount(); got != 2 {
 		t.Fatalf("expected exactly 2 AI calls, got %d", got)
+	}
+}
+
+// TestService_SummaryBackoffDoublesCapsAndResets checks the cooldown schedule:
+// 5m, then doubled per consecutive failure, capped at the summary interval,
+// and forgotten after a success.
+func TestService_SummaryBackoffDoublesCapsAndResets(t *testing.T) {
+	service := NewService(newMockRepository(), newMockEmbeddingProvider(), NewSummarizer(&failingAIService{}, "test"), ServiceConfig{
+		BufferThreshold:        2,
+		SummaryInterval:        30 * time.Minute,
+		MaxSummaryContext:      3,
+		MaxConcurrentSummaries: 1,
+		SummarizationTimeout:   5 * time.Second,
+	}).(*MemoryService)
+	defer service.Close()
+
+	const key = "user:guild"
+	for i, want := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute, 30 * time.Minute, 30 * time.Minute} {
+		service.recordSummaryFailure(key)
+		wait, cooling := service.summaryBackoffWait(key)
+		if !cooling {
+			t.Fatalf("failure %d: expected a cooldown", i+1)
+		}
+		if wait > want || wait < want-time.Second {
+			t.Fatalf("failure %d: expected a cooldown of about %v, got %v", i+1, want, wait)
+		}
+	}
+
+	service.clearSummaryBackoff(key)
+	if _, cooling := service.summaryBackoffWait(key); cooling {
+		t.Fatal("expected no cooldown after a success")
+	}
+	service.recordSummaryFailure(key)
+	if wait, _ := service.summaryBackoffWait(key); wait > initialSummaryBackoff {
+		t.Fatalf("expected the failure streak to restart at %v, got %v", initialSummaryBackoff, wait)
 	}
 }
