@@ -159,13 +159,13 @@ func TestOpencodeHTTPErrorMapping(t *testing.T) {
 	longHTML := "<html><body><h1>502 Bad Gateway</h1><p>" + strings.Repeat("upstream proxy failure ", 25) + "</p></body></html>"
 
 	tests := []struct {
-		name            string
-		statusCode      int
-		contentType     string
-		body            string
-		wantContains    string
-		wantRetryable   bool
-		wantTruncated   bool
+		name          string
+		statusCode    int
+		contentType   string
+		body          string
+		wantContains  string
+		wantRetryable bool
+		wantTruncated bool
 	}{
 		{
 			name:          "401 api_key_expired is permanent",
@@ -193,12 +193,12 @@ func TestOpencodeHTTPErrorMapping(t *testing.T) {
 			wantTruncated: true,
 		},
 		{
-			name:          "400 invalid_request_error media download failure is not permanent quota",
+			name:          "400 invalid_request_error media download failure is not retried",
 			statusCode:    http.StatusBadRequest,
 			contentType:   "application/json",
 			body:          `{"error":{"type":"invalid_request_error","code":"upstream_error","message":"Failed to download image: media_url_origin_error"}}`,
 			wantContains:  "invalid_request_error",
-			wantRetryable: true,
+			wantRetryable: false,
 		},
 	}
 
@@ -665,4 +665,43 @@ func TestOpencodeReasoningResponses(t *testing.T) {
 		assert.Empty(t, resp.Description)
 		assert.Equal(t, "length", resp.FinishReason)
 	})
+}
+
+func TestOpencodeReasoningEffortTable(t *testing.T) {
+	tests := []struct {
+		model    string
+		thinking bool
+		want     string
+	}{
+		{"deepseek-v4.1-flash", false, "none"},
+		{"deepseek-v4-pro", false, "none"},
+		{"kimi-k3", false, "none"},
+		{"glm-5.3", false, "none"},
+		{"minimax-m3", false, "none"},
+		{"muse-spark-1.3-contributor", false, "minimal"},
+		{"opencode-go/muse-spark-1.3-contributor", false, "minimal"},
+		{"OpenCode-Go/DeepSeek-V4.1-Flash", false, "none"},
+		// Rejects "none" live; unknown models keep their default too.
+		{"kimi-k2.7-code", false, ""},
+		{"some-new-model", false, ""},
+		{"deepseek-v4.1-flash", true, ""},
+		{"muse-spark-1.3-contributor", true, ""},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.want, opencodeReasoningEffort(tt.model, tt.thinking), "model %q thinking %v", tt.model, tt.thinking)
+	}
+}
+
+func TestStripLeadingThinkBlock(t *testing.T) {
+	tests := map[string]string{
+		"Bonjour !": "Bonjour !",
+		"<think>We need answer French</think>Bonjour !": "Bonjour !",
+		"\n <think>a\nb</think>\n\nBonjour !":           "Bonjour !",
+		"<think>never closed":                           "",
+		"Bonjour <think>not leading</think>":            "Bonjour <think>not leading</think>",
+		"":                                              "",
+	}
+	for in, want := range tests {
+		assert.Equal(t, want, stripLeadingThinkBlock(in), "input %q", in)
+	}
 }

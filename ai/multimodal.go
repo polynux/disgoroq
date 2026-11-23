@@ -48,7 +48,7 @@ func (r *RetryWrapper) prepareChatRequest(ctx context.Context, req *ChatRequest)
 	adapted.Messages = cloneMessages(req.Messages)
 	adapted.Images = nil
 
-	descriptions := r.describeImagesForChat(ctx, req.Images)
+	descriptions := r.describeImagesForChat(ctx, req.Images, req.SessionID)
 	for idx := range adapted.Messages {
 		if len(adapted.Messages[idx].ImageRefs) == 0 {
 			continue
@@ -78,7 +78,7 @@ func cloneMessages(messages []Message) []Message {
 	return cloned
 }
 
-func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []ImageContext) map[int]string {
+func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []ImageContext, sessionID string) map[int]string {
 	descriptions := make(map[int]string, len(images))
 	for idx, image := range images {
 		if ctx.Err() != nil {
@@ -97,6 +97,7 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			Height:      image.Height,
 			MaxTokens:   100,
 			Temperature: 0.2,
+			SessionID:   sessionID,
 		}
 
 		response, err := r.Vision(ctx, request)

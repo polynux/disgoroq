@@ -108,6 +108,7 @@ type VisionRequest struct {
 	Height      int
 	MaxTokens   int     // Max description length
 	Temperature float32 // 0.0-1.0
+	SessionID   string  // Optional conversation key, e.g. "<guild>:<channel>"
 }
 
 // ChatResponse contains the AI-generated text response

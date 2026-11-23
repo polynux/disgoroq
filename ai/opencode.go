@@ -151,6 +151,7 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 	}
 
 	choice := response.Choices[0]
+	choice.Message.Content = stripLeadingThinkBlock(choice.Message.Content)
 	toolCalls := parseOpenAIToolCalls(choice.Message.ToolCalls)
 	if choice.Message.Content == "" && len(toolCalls) == 0 && choice.Message.ReasoningContent != "" {
 		model := response.Model
@@ -206,7 +207,7 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 		return nil, fmt.Errorf("error marshaling OpenCode vision request: %w", err)
 	}
 
-	responseBody, err := o.doChatRequest(ctx, body, "")
+	responseBody, err := o.doChatRequest(ctx, body, req.SessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +221,7 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 	}
 
 	choice := response.Choices[0]
+	choice.Message.Content = stripLeadingThinkBlock(choice.Message.Content)
 	if choice.Message.Content == "" && choice.Message.ReasoningContent != "" {
 		model := response.Model
 		if model == "" {
@@ -313,13 +315,47 @@ type opencodeChatResponse struct {
 	} `json:"usage"`
 }
 
+// opencodeNoReasoningPrefixes are the model families checked live (2026-11-23)
+// to accept reasoning_effort "none" on /chat/completions. Other models either
+// reject "none" (kimi-k2.7-code: "only type=enabled is allowed") or were not
+// checked, so they get no reasoning_effort field and keep their default.
+var opencodeNoReasoningPrefixes = []string{"deepseek-", "kimi-k3", "glm-5.3", "minimax-m3"}
+
+// opencodeReasoningEffort picks the reasoning_effort to send when thinking is
+// off. An empty result omits the field.
 func opencodeReasoningEffort(model string, thinkingEnabled bool) string {
 	if thinkingEnabled {
 		return ""
 	}
 	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	// Accept provider-qualified names such as "opencode-go/muse-spark-1.3-contributor".
+	if i := strings.LastIndex(normalizedModel, "/"); i >= 0 {
+		normalizedModel = normalizedModel[i+1:]
+	}
 	if strings.HasPrefix(normalizedModel, "muse-") {
+		// Muse rejects "none"; "minimal" is its lowest accepted value.
 		return "minimal"
 	}
-	return "none"
+	for _, prefix := range opencodeNoReasoningPrefixes {
+		if strings.HasPrefix(normalizedModel, prefix) {
+			return "none"
+		}
+	}
+	return ""
+}
+
+// stripLeadingThinkBlock removes a leading <think>...</think> block. Some models
+// (minimax-m3) put their reasoning inline in content instead of
+// reasoning_content, and it must not reach users.
+func stripLeadingThinkBlock(content string) string {
+	trimmed := strings.TrimLeft(content, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "<think>") {
+		return content
+	}
+	end := strings.Index(trimmed, "</think>")
+	if end < 0 {
+		// Unterminated reasoning: nothing in it is a reply.
+		return ""
+	}
+	return strings.TrimLeft(trimmed[end+len("</think>"):], " \t\r\n")
 }

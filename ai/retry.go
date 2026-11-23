@@ -162,6 +162,17 @@ func isRetryableProviderError(err error) bool {
 		if statusErr.StatusCode >= http.StatusInternalServerError {
 			return true
 		}
+		// Other 4xx responses reject the request itself (bad parameter, model
+		// option, unreachable image), so sending it again cannot succeed. Only
+		// timeouts and rate limits are worth another attempt, unless the rate
+		// limit says the account is out of credits.
+		switch statusErr.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests:
+			return !isQuotaMessage(statusErr.Message)
+		}
+		if statusErr.StatusCode >= http.StatusBadRequest {
+			return false
+		}
 		return !isQuotaMessage(statusErr.Message)
 	}
 

@@ -907,6 +907,9 @@ func TestIsRetryableProviderError(t *testing.T) {
 			true,
 		},
 		{"untyped OpenAI quota", errors.New(`{"error":{"code":"insufficient_quota"}}`), false},
+		{"400 bad request", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: "reasoning_effort 'none' is not supported"}, false},
+		{"404 not found", &ProviderHTTPError{StatusCode: http.StatusNotFound}, false},
+		{"408 timeout", &ProviderHTTPError{StatusCode: http.StatusRequestTimeout}, true},
 		{"canceled", context.Canceled, false},
 		{"deadline wrapped", errors.Join(errors.New("vision"), context.DeadlineExceeded), false},
 		{"timeout-like transport error", errors.New("dial tcp: i/o timeout"), true},
@@ -935,8 +938,24 @@ func TestDescribeImagesForChatSkipsFallbackWhenContextDone(t *testing.T) {
 	descriptions := wrapper.describeImagesForChat(ctx, []ImageContext{
 		{URL: "https://example.com/a.png", Type: "image/png"},
 		{URL: "https://example.com/b.png", Type: "image/png"},
-	})
+	}, "")
 
 	assert.Empty(t, descriptions)
 	assert.Zero(t, fallbackCalls)
+}
+
+func TestDescribeImagesForChatPassesSessionID(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("opencode")
+	mockProvider.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.SessionID == "guild:channel"
+	})).Return(&VisionResponse{Description: "a cat"}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	descriptions := wrapper.describeImagesForChat(context.Background(), []ImageContext{
+		{URL: "https://example.com/a.png", Type: "image/png"},
+	}, "guild:channel")
+
+	assert.Equal(t, map[int]string{0: "a cat"}, descriptions)
+	mockProvider.AssertExpectations(t)
 }
