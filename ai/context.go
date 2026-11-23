@@ -72,7 +72,10 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 
 		imageRefs := imageRefsByMessage[messages[idx].ID.String()]
 		docSummary, hasDocSummary := documentSummaries[messages[idx].ID.String()]
-		if normalizedContent == "" && !hasDocSummary && len(imageRefs) == 0 {
+		attachments, stickers, embeds := messageMedia(messages[idx])
+		hasMedia := len(attachments) > 0 || len(stickers) > 0 || len(embeds) > 0
+		mediaOnly := normalizedContent == "" && !hasDocSummary && len(imageRefs) == 0
+		if mediaOnly && !hasMedia {
 			continue
 		}
 
@@ -143,16 +146,24 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 				MessageID:     messages[idx].ID.String(),
 				ImageRefs:     imageRefs,
 				CommandOutput: messages[idx].Interaction != nil || messages[idx].InteractionMetadata != nil,
+				Attachments:   attachments,
+				Stickers:      stickers,
+				Embeds:        embeds,
+				MediaOnly:     mediaOnly,
 			})
 		} else {
 			formattedMessages = append(formattedMessages, Message{
-				Role:       "user",
-				Content:    content.String(),
-				AuthorID:   messages[idx].Author.ID.String(),
-				AuthorNick: nick,
-				MessageID:  messages[idx].ID.String(),
-				ImageRefs:  imageRefs,
-				AuthorBot:  messages[idx].Author.Bot || messages[idx].WebhookID != nil,
+				Role:        "user",
+				Content:     content.String(),
+				AuthorID:    messages[idx].Author.ID.String(),
+				AuthorNick:  nick,
+				MessageID:   messages[idx].ID.String(),
+				ImageRefs:   imageRefs,
+				AuthorBot:   messages[idx].Author.Bot || messages[idx].WebhookID != nil,
+				Attachments: attachments,
+				Stickers:    stickers,
+				Embeds:      embeds,
+				MediaOnly:   mediaOnly,
 			})
 		}
 	}
@@ -338,4 +349,35 @@ func (cb *ContextBuilder) getDocumentSummaries(ctx context.Context, messages []d
 	}
 
 	return summaries
+}
+
+// messageMedia collects the metadata the completion media-tag renderer needs.
+func messageMedia(message discord.Message) ([]MessageAttachment, []string, []MessageEmbed) {
+	var attachments []MessageAttachment
+	for _, attachment := range message.Attachments {
+		contentType := ""
+		if attachment.ContentType != nil {
+			contentType = *attachment.ContentType
+		}
+		attachments = append(attachments, MessageAttachment{
+			Filename:    attachment.Filename,
+			ContentType: contentType,
+		})
+	}
+
+	var stickers []string
+	for _, sticker := range message.StickerItems {
+		stickers = append(stickers, sticker.Name)
+	}
+
+	var embeds []MessageEmbed
+	for _, embed := range message.Embeds {
+		embeds = append(embeds, MessageEmbed{
+			URL:         embed.URL,
+			Title:       embed.Title,
+			Description: embed.Description,
+		})
+	}
+
+	return attachments, stickers, embeds
 }

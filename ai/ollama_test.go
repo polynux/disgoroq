@@ -435,3 +435,21 @@ func TestOllamaChatKeepsNonJSONErrorBody(t *testing.T) {
 	assert.Contains(t, statusErr.Message, "Add usage credits")
 	assert.False(t, isRetryableProviderError(err))
 }
+
+func TestOllamaBuildChatMessagesSkipsMediaOnlyMessages(t *testing.T) {
+	provider, err := NewOllamaProvider("http://localhost:11434", false)
+	require.NoError(t, err)
+
+	messages, err := provider.buildChatMessages(context.Background(), &ChatRequest{
+		SystemPrompt: "system",
+		Messages: []Message{
+			{Role: RoleUser, Content: "visible"},
+			{Role: RoleUser, Content: "", MediaOnly: true, Stickers: []string{"Wave"}},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, RoleSystem, messages[0].Role)
+	assert.Equal(t, "visible", messages[1].Content)
+}

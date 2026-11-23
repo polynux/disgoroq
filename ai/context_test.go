@@ -429,3 +429,47 @@ func singleFrameGIFData(t *testing.T) []byte {
 	require.NoError(t, err)
 	return buf.Bytes()
 }
+
+func TestBuildContext_KeepsMediaOnlyMessagesAndMarksThem(t *testing.T) {
+	cb := newTestContextBuilder()
+	webhookID := snowflake.ID(9999)
+	botID := snowflake.ID(42)
+
+	messages := []discord.Message{
+		{
+			ID:           snowflake.ID(2),
+			WebhookID:    &webhookID,
+			StickerItems: []discord.MessageSticker{{Name: "Wave"}},
+			Author:       discord.User{ID: snowflake.ID(2), Username: "bob"},
+		},
+		{
+			ID:        snowflake.ID(1),
+			WebhookID: &webhookID,
+			Content:   "salut",
+			Attachments: []discord.Attachment{
+				{ID: 1, Filename: "clip.mp4", URL: "https://example.com/clip.mp4", ContentType: ptr("video/mp4"), Size: 10},
+			},
+			Embeds: []discord.Embed{{URL: "https://youtu.be/abc", Title: "Some title"}},
+			Author: discord.User{ID: snowflake.ID(1), Username: "alice"},
+		},
+	}
+
+	processed, err := cb.BuildContext(context.Background(), messages, snowflake.ID(100), botID)
+
+	require.NoError(t, err)
+	require.Len(t, processed.Messages, 2)
+
+	withText := processed.Messages[0]
+	assert.False(t, withText.MediaOnly)
+	require.Len(t, withText.Attachments, 1)
+	assert.Equal(t, "clip.mp4", withText.Attachments[0].Filename)
+	assert.Equal(t, "video/mp4", withText.Attachments[0].ContentType)
+	require.Len(t, withText.Embeds, 1)
+	assert.Equal(t, "https://youtu.be/abc", withText.Embeds[0].URL)
+	assert.Equal(t, "Some title", withText.Embeds[0].Title)
+
+	stickerOnly := processed.Messages[1]
+	assert.True(t, stickerOnly.MediaOnly)
+	assert.Equal(t, []string{"Wave"}, stickerOnly.Stickers)
+	assert.Empty(t, stickerOnly.ImageRefs)
+}

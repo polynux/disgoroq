@@ -287,3 +287,16 @@ func TestGroqVisionHTTPErrorIsTypedAndFinal(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
 	assert.Contains(t, httpErr.Message, "does not exist")
 }
+
+func TestGroqBuildMessagesSkipsMediaOnlyMessages(t *testing.T) {
+	req := &ChatRequest{Messages: []Message{
+		{Role: RoleUser, Content: "visible"},
+		{Role: RoleUser, Content: "", MediaOnly: true, Stickers: []string{"Wave"}},
+	}}
+
+	messages := buildGroqMessages(req)
+
+	require.Len(t, messages, 1)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, "visible", messages[0].Content)
+}

@@ -53,17 +53,34 @@ type ChatRequest struct {
 
 // Message represents a single message in the conversation
 type Message struct {
-	Role          string     // "user", "assistant", "system", "tool"
-	Content       string     // Text content
-	AuthorID      string     // Discord user ID
-	AuthorNick    string     // Display name
-	MessageID     string     // Discord message ID
-	Name          string     // Optional tool/function name
-	ToolCallID    string     // Links a tool result to an assistant tool call
-	ToolCalls     []ToolCall // Assistant-requested tool calls
-	ImageRefs     []int      // Indices into ChatRequest.Images
-	AuthorBot     bool       // Author is another bot or webhook
-	CommandOutput bool       // Message is an interaction command response
+	Role          string              // "user", "assistant", "system", "tool"
+	Content       string              // Text content
+	AuthorID      string              // Discord user ID
+	AuthorNick    string              // Display name
+	MessageID     string              // Discord message ID
+	Name          string              // Optional tool/function name
+	ToolCallID    string              // Links a tool result to an assistant tool call
+	ToolCalls     []ToolCall          // Assistant-requested tool calls
+	ImageRefs     []int               // Indices into ChatRequest.Images
+	AuthorBot     bool                // Author is another bot or webhook
+	CommandOutput bool                // Message is an interaction command response
+	Attachments   []MessageAttachment // Attachment filenames and content types
+	Stickers      []string            // Sticker names
+	Embeds        []MessageEmbed      // Link-preview embeds
+	MediaOnly     bool                // Carried media with no text; chat providers skip it
+}
+
+// MessageAttachment is the attachment metadata the media-tag renderer needs.
+type MessageAttachment struct {
+	Filename    string
+	ContentType string
+}
+
+// MessageEmbed is the embed metadata the media-tag renderer needs.
+type MessageEmbed struct {
+	URL         string
+	Title       string
+	Description string
 }
 
 // ImageContext contains image metadata for vision processing

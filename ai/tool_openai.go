@@ -48,6 +48,9 @@ func buildOpenAIChatMessages(req *ChatRequest, imageDetail string) []openAIChatM
 	}
 
 	for _, msg := range req.Messages {
+		if msg.MediaOnly {
+			continue
+		}
 		if msg.HasToolCalls() {
 			messages = append(messages, openAIChatMessage{
 				Role:      msg.Role,

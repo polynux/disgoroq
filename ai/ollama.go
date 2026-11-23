@@ -26,6 +26,8 @@ type OllamaProvider struct {
 	completion            bool
 	completionSpeaker     string
 	completionPromptChars int
+	completionBotLines    int
+	completionMediaTags   string
 }
 
 type ollamaChatChunk struct {
@@ -57,6 +59,8 @@ func NewOllamaProvider(baseURL string, thinkingEnabled bool) (*OllamaProvider, e
 		thinkingEnabled:       thinkingEnabled,
 		completionSpeaker:     "§bot",
 		completionPromptChars: completionPromptChars,
+		completionBotLines:    completionDefaultBotLines,
+		completionMediaTags:   MediaTagsV0,
 	}, nil
 }
 
@@ -135,6 +139,9 @@ func (o *OllamaProvider) buildChatMessages(ctx context.Context, req *ChatRequest
 	}
 
 	for _, msg := range req.Messages {
+		if msg.MediaOnly {
+			continue
+		}
 		ollamaMessage := api.Message{
 			Role:    msg.Role,
 			Content: msg.Content,
