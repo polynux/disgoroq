@@ -140,6 +140,7 @@ const (
 
 	// AI - General
 	EnvAIPrimaryProvider   = "AI_PRIMARY_PROVIDER"
+	EnvAIVisionProvider    = "AI_VISION_PROVIDER"
 	EnvAIFallbackEnabled   = "AI_FALLBACK_ENABLED"
 	EnvAIMinResponseLength = "AI_MIN_RESPONSE_LENGTH"
 

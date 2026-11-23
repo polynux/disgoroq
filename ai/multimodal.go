@@ -39,8 +39,27 @@ func resolveImageRefs(images []ImageContext, refs []int) []ImageContext {
 	return resolved
 }
 
+func (r *RetryWrapper) canInlineImages(chatModel string) bool {
+	if r.visionChain != nil {
+		primary, err := r.visionChain.GetProvider(0)
+		if err != nil || primary.Name() != r.provider.Name() {
+			return false
+		}
+	}
+	return supportsInlineImages(r.provider, chatModel, r.visionModel)
+}
+
+func (r *RetryWrapper) visionCacheScope() (providerName, visionModel string) {
+	if r.visionChain != nil {
+		if primary, err := r.visionChain.GetProvider(0); err == nil {
+			return primary.Name(), selectedVisionModel(primary, "")
+		}
+	}
+	return r.provider.Name(), r.visionModel
+}
+
 func (r *RetryWrapper) prepareChatRequest(ctx context.Context, req *ChatRequest) *ChatRequest {
-	if len(req.Images) == 0 || supportsInlineImages(r.provider, req.Model, r.visionModel) {
+	if len(req.Images) == 0 || r.canInlineImages(req.Model) {
 		return req
 	}
 
@@ -100,25 +119,42 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			SessionID:   sessionID,
 		}
 
-		response, err := r.Vision(ctx, request)
-		if err != nil {
-			logger.Warn("Failed to describe image for chat fallback",
-				zap.Error(err),
-				zap.String("provider", r.provider.Name()),
-				zap.String("image_url", image.URL),
-				zap.String("chat_model", r.chatModel),
-				zap.String("vision_model", r.visionModel))
-			if r.visionFallback == nil || ctx.Err() != nil {
+		var (
+			response *VisionResponse
+			err      error
+		)
+		if r.visionChain != nil {
+			response, err = r.visionChain.Vision(ctx, request)
+			if err != nil {
+				logger.Warn("Failed to describe image for chat with vision chain",
+					zap.Error(err),
+					zap.String("chat_provider", r.provider.Name()),
+					zap.String("vision_chain", r.visionChain.Name()),
+					zap.String("image_url", image.URL),
+					zap.String("chat_model", r.chatModel))
 				continue
 			}
-
-			response, err = r.visionFallback(ctx, request)
+		} else {
+			response, err = r.Vision(ctx, request)
 			if err != nil {
-				logger.Warn("Failed to describe image for chat with fallback vision",
+				logger.Warn("Failed to describe image for chat fallback",
 					zap.Error(err),
 					zap.String("provider", r.provider.Name()),
-					zap.String("image_url", image.URL))
-				continue
+					zap.String("image_url", image.URL),
+					zap.String("chat_model", r.chatModel),
+					zap.String("vision_model", r.visionModel))
+				if r.visionFallback == nil || ctx.Err() != nil {
+					continue
+				}
+
+				response, err = r.visionFallback(ctx, request)
+				if err != nil {
+					logger.Warn("Failed to describe image for chat with fallback vision",
+						zap.Error(err),
+						zap.String("provider", r.provider.Name()),
+						zap.String("image_url", image.URL))
+					continue
+				}
 			}
 		}
 
@@ -127,7 +163,7 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			continue
 		}
 
-		r.storeCachedImageDescription(ctx, image, description)
+		r.storeCachedImageDescription(ctx, image, response, description)
 		descriptions[idx] = description
 	}
 
@@ -139,12 +175,17 @@ func (r *RetryWrapper) getCachedImageDescription(ctx context.Context, image Imag
 		return "", false
 	}
 
-	entry, found, err := r.cache.GetAttachmentCache(ctx, attachmentCacheKey(imageDescriptionCacheInput(image), r.provider.Name(), r.visionModel))
+	providerName, visionModel := r.visionCacheScope()
+	if providerName == "" || visionModel == "" {
+		return "", false
+	}
+
+	entry, found, err := r.cache.GetAttachmentCache(ctx, attachmentCacheKey(imageDescriptionCacheInput(image), providerName, visionModel))
 	if err != nil {
 		logger.Warn("Failed to read image description cache",
 			zap.Error(err),
-			zap.String("provider", r.provider.Name()),
-			zap.String("model", r.visionModel),
+			zap.String("provider", providerName),
+			zap.String("model", visionModel),
 			zap.String("image_url", image.URL))
 		return "", false
 	}
@@ -158,21 +199,37 @@ func (r *RetryWrapper) getCachedImageDescription(ctx context.Context, image Imag
 	}
 
 	logger.Debug("Using cached image description",
-		zap.String("provider", r.provider.Name()),
-		zap.String("model", r.visionModel),
+		zap.String("provider", providerName),
+		zap.String("model", visionModel),
 		zap.String("image_url", image.URL))
 
 	return description, true
 }
 
-func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image ImageContext, description string) {
+func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image ImageContext, response *VisionResponse, description string) {
 	if r.cache == nil {
+		return
+	}
+
+	defaultProvider, defaultModel := r.visionCacheScope()
+	providerName, visionModel := defaultProvider, defaultModel
+	if response != nil && response.Provider != "" {
+		providerName = response.Provider
+		if response.Model != "" {
+			visionModel = response.Model
+		} else if response.Provider != defaultProvider {
+			visionModel = ""
+		}
+	} else if response != nil && response.Model != "" {
+		visionModel = response.Model
+	}
+	if providerName == "" || visionModel == "" {
 		return
 	}
 
 	input := imageDescriptionCacheInput(image)
 	if err := r.cache.PutAttachmentCache(ctx, database.AttachmentCacheEntry{
-		AttachmentCacheKey: attachmentCacheKey(input, r.provider.Name(), r.visionModel),
+		AttachmentCacheKey: attachmentCacheKey(input, providerName, visionModel),
 		Content:            description,
 		SourceURL:          input.SourceURL,
 		ContentType:        input.ContentType,
@@ -180,8 +237,8 @@ func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image Im
 	}); err != nil {
 		logger.Warn("Failed to write image description cache",
 			zap.Error(err),
-			zap.String("provider", r.provider.Name()),
-			zap.String("model", r.visionModel),
+			zap.String("provider", providerName),
+			zap.String("model", visionModel),
 			zap.String("image_url", image.URL))
 	}
 }

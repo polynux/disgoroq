@@ -170,8 +170,8 @@ func (c *ProviderChain) Vision(ctx context.Context, req *VisionRequest) (*Vision
 				zap.Error(err),
 				zap.Int("attempt", i+1))
 
-			// Continue to next provider if available
-			if i < len(c.providers)-1 {
+			// Continue to next provider if available and caller hasn't canceled
+			if ctx.Err() == nil && i < len(c.providers)-1 {
 				continue
 			}
 

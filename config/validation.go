@@ -99,10 +99,21 @@ func (c *AIConfig) validate() error {
 		return fmt.Errorf("ai.primary_provider must be one of %q, %q, %q, or %q", AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter)
 	}
 
+	if c.VisionProvider != "" {
+		switch c.VisionProvider {
+		case AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter:
+		default:
+			return fmt.Errorf("ai.vision_provider must be one of %q, %q, %q, or %q", AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter)
+		}
+	}
+
 	if c.PrimaryProvider == AIProviderGroq {
 		if c.Groq.APIKey == "" {
 			return fmt.Errorf("ai.groq.api_key is required when ai.primary_provider is %q", AIProviderGroq)
 		}
+	}
+	if c.VisionProvider == AIProviderGroq && c.Groq.APIKey == "" {
+		return fmt.Errorf("ai.groq.api_key is required when ai.vision_provider is %q", AIProviderGroq)
 	}
 
 	if c.shouldValidateGroq() {
@@ -114,15 +125,22 @@ func (c *AIConfig) validate() error {
 	if c.PrimaryProvider == AIProviderOllama && !c.Ollama.Enabled {
 		return fmt.Errorf("ai.ollama.enabled must be true when ai.primary_provider is %q", AIProviderOllama)
 	}
+	if c.VisionProvider == AIProviderOllama && !c.Ollama.Enabled {
+		return fmt.Errorf("ai.ollama.enabled must be true when ai.vision_provider is %q", AIProviderOllama)
+	}
 
 	if c.shouldValidateOllama() {
-		if err := c.Ollama.validate(); err != nil {
+		requireOllamaVision := c.VisionProvider == "" || c.VisionProvider == AIProviderOllama
+		if err := c.Ollama.validate(requireOllamaVision); err != nil {
 			return err
 		}
 	}
 
 	if c.PrimaryProvider == AIProviderOpencode && !c.Opencode.Enabled {
 		return fmt.Errorf("ai.opencode.enabled must be true when ai.primary_provider is %q", AIProviderOpencode)
+	}
+	if c.VisionProvider == AIProviderOpencode && !c.Opencode.Enabled {
+		return fmt.Errorf("ai.opencode.enabled must be true when ai.vision_provider is %q", AIProviderOpencode)
 	}
 
 	if c.shouldValidateOpencode() {
@@ -133,6 +151,9 @@ func (c *AIConfig) validate() error {
 
 	if c.PrimaryProvider == AIProviderOpenrouter && !c.Openrouter.Enabled {
 		return fmt.Errorf("ai.openrouter.enabled must be true when ai.primary_provider is %q", AIProviderOpenrouter)
+	}
+	if c.VisionProvider == AIProviderOpenrouter && !c.Openrouter.Enabled {
+		return fmt.Errorf("ai.openrouter.enabled must be true when ai.vision_provider is %q", AIProviderOpenrouter)
 	}
 
 	if c.shouldValidateOpenrouter() {
@@ -157,32 +178,32 @@ func (c *AIConfig) validate() error {
 }
 
 func (c *AIConfig) shouldValidateGroq() bool {
-	return c.PrimaryProvider == AIProviderGroq || c.Groq.APIKey != ""
+	return c.PrimaryProvider == AIProviderGroq || c.VisionProvider == AIProviderGroq || c.Groq.APIKey != ""
 }
 
 func (c *AIConfig) shouldValidateOllama() bool {
-	return c.PrimaryProvider == AIProviderOllama || c.Ollama.Enabled
+	return c.PrimaryProvider == AIProviderOllama || c.VisionProvider == AIProviderOllama || c.Ollama.Enabled
 }
 
 func (c *AIConfig) shouldValidateOpencode() bool {
-	return c.PrimaryProvider == AIProviderOpencode || c.Opencode.Enabled
+	return c.PrimaryProvider == AIProviderOpencode || c.VisionProvider == AIProviderOpencode || c.Opencode.Enabled
 }
 
 func (c *AIConfig) shouldValidateOpenrouter() bool {
-	return c.PrimaryProvider == AIProviderOpenrouter || c.Openrouter.Enabled
+	return c.PrimaryProvider == AIProviderOpenrouter || c.VisionProvider == AIProviderOpenrouter || c.Openrouter.Enabled
 }
 
 func (c *GroqConfig) validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("ai.groq.model cannot be empty")
 	}
-	if c.VisionModel == "" {
+	if strings.TrimSpace(c.VisionModel) == "" {
 		return fmt.Errorf("ai.groq.vision_model cannot be empty")
 	}
 	return nil
 }
 
-func (c *OllamaConfig) validate() error {
+func (c *OllamaConfig) validate(requireVisionModel bool) error {
 	// Ollama is optional, only validate if enabled
 	if !c.Enabled {
 		return nil
@@ -194,7 +215,7 @@ func (c *OllamaConfig) validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("ai.ollama.model cannot be empty when ollama is enabled")
 	}
-	if c.VisionModel == "" {
+	if requireVisionModel && strings.TrimSpace(c.VisionModel) == "" {
 		return fmt.Errorf("ai.ollama.vision_model cannot be empty when ollama is enabled")
 	}
 	return nil
@@ -214,7 +235,7 @@ func (c *OpencodeConfig) validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("ai.opencode.model cannot be empty when opencode is enabled")
 	}
-	if c.VisionModel == "" {
+	if strings.TrimSpace(c.VisionModel) == "" {
 		return fmt.Errorf("ai.opencode.vision_model cannot be empty when opencode is enabled")
 	}
 	return nil
@@ -234,7 +255,7 @@ func (c *OpenrouterConfig) validate() error {
 	if c.Model == "" {
 		return fmt.Errorf("ai.openrouter.model cannot be empty when openrouter is enabled")
 	}
-	if c.VisionModel == "" {
+	if strings.TrimSpace(c.VisionModel) == "" {
 		return fmt.Errorf("ai.openrouter.vision_model cannot be empty when openrouter is enabled")
 	}
 	return nil
