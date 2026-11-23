@@ -108,6 +108,13 @@ ai:
 	if _, err := Load(configPath); err == nil {
 		t.Error("Load() accepted completion_media_tags v2")
 	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Replace(content, "completion_bot_lines: 6", "completion_bot_lines: 0", 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil {
+		t.Error("Load() accepted completion_bot_lines 0")
+	}
 }
 
 func TestLoadOllamaCompletionSpeakerCanBeEmpty(t *testing.T) {
@@ -488,7 +495,7 @@ func TestValidation(t *testing.T) {
 				Database: DatabaseConfig{URL: "http://localhost", Token: "test", Local: false},
 				AI: AIConfig{
 					PrimaryProvider: AIProviderOllama,
-					Ollama:          OllamaConfig{Enabled: true, URL: "http://localhost:11434", Model: "dolphin3", VisionModel: "llava"},
+					Ollama:          OllamaConfig{Enabled: true, URL: "http://localhost:11434", Model: "dolphin3", VisionModel: "llava", CompletionBotLines: 4},
 					Retry: RetryConfig{
 						InitialDelay:  time.Millisecond,
 						MaxDelay:      2 * time.Millisecond,

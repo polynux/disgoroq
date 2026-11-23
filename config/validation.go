@@ -236,8 +236,8 @@ func (c *OllamaConfig) validate(requireVisionModel bool) error {
 	default:
 		return fmt.Errorf("ai.ollama.completion_media_tags must be %q or %q", "v0", "v1")
 	}
-	if c.CompletionBotLines < 0 {
-		return fmt.Errorf("ai.ollama.completion_bot_lines cannot be negative")
+	if c.CompletionBotLines < 1 {
+		return fmt.Errorf("ai.ollama.completion_bot_lines must be at least 1")
 	}
 	return nil
 }

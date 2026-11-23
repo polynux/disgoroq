@@ -79,7 +79,7 @@ ai:
     # Maximum prompt characters sent to completion models (Luciole context: 1,024 tokens).
     completion_prompt_chars: 2400
 
-    # How many of the bot's own lines stay in the prompt (error replies and command outputs are always excluded).
+    # How many of the bot's own lines stay in the prompt (at least 1; error replies and command outputs are always excluded).
     completion_bot_lines: 4
 
     # Media-tag contract used to render messages: "v0" placeholders (current models) or "v1" descriptive tags.
