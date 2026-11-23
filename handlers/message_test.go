@@ -88,3 +88,51 @@ func TestSkipCompletionTarget(t *testing.T) {
 		t.Fatal("chat mode must keep its current bot behaviour")
 	}
 }
+
+func TestSkipCompletionTargetUsesPrimaryProviderWithFallback(t *testing.T) {
+	botMessage := discord.Message{Author: discord.User{ID: snowflake.ID(1), Bot: true}}
+
+	completionPrimary := ai.NewService(ai.ServiceConfig{
+		PrimaryProvider:          ai.ProviderOllama,
+		OllamaEnabled:            true,
+		OllamaURL:                "http://localhost:11434",
+		OllamaModel:              "luciole-1b-discord1",
+		OllamaVisionModel:        "llava",
+		OllamaCompletion:         true,
+		OllamaCompletionBotLines: 4,
+		GroqAPIKey:               "test-key",
+		GroqModel:                "test-model",
+		GroqVisionModel:          "test-vision-model",
+		FallbackEnabled:          true,
+		RetryConfig:              ai.DefaultRetryConfig(),
+		MinResponseLength:        1,
+	})
+	if completionPrimary == nil {
+		t.Fatal("failed to build the Ollama-primary service")
+	}
+	if !(&MessageHandler{aiservice: completionPrimary}).skipCompletionTarget(botMessage) {
+		t.Fatalf("completion primary with chain %q must skip a bot message", completionPrimary.Name())
+	}
+
+	completionFallback := ai.NewService(ai.ServiceConfig{
+		PrimaryProvider:          ai.ProviderGroq,
+		GroqAPIKey:               "test-key",
+		GroqModel:                "test-model",
+		GroqVisionModel:          "test-vision-model",
+		OllamaEnabled:            true,
+		OllamaURL:                "http://localhost:11434",
+		OllamaModel:              "luciole-1b-discord1",
+		OllamaVisionModel:        "llava",
+		OllamaCompletion:         true,
+		OllamaCompletionBotLines: 4,
+		FallbackEnabled:          true,
+		RetryConfig:              ai.DefaultRetryConfig(),
+		MinResponseLength:        1,
+	})
+	if completionFallback == nil {
+		t.Fatal("failed to build the Groq-primary service")
+	}
+	if (&MessageHandler{aiservice: completionFallback}).skipCompletionTarget(botMessage) {
+		t.Fatalf("non-Ollama primary with chain %q must keep chat behaviour", completionFallback.Name())
+	}
+}
