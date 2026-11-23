@@ -171,7 +171,10 @@ func (o *OpencodeProvider) doChatRequest(ctx context.Context, body []byte) ([]by
 		return nil, fmt.Errorf("error reading OpenCode response: %w", err)
 	}
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("OpenCode request failed: %s: %s", httpResp.Status, string(responseBody))
+		return nil, &ProviderHTTPError{
+			StatusCode: httpResp.StatusCode,
+			Message:    errorBodySnippet(responseBody),
+		}
 	}
 
 	return responseBody, nil
