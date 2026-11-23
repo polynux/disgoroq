@@ -762,7 +762,7 @@ func TestMemorySummaryProviderValidation(t *testing.T) {
 			memory: validMemory(SummaryProviderOpencode),
 			ai: AIConfig{
 				PrimaryProvider: AIProviderGroq,
-				Opencode:        OpencodeConfig{APIKey: "opencode-ai-key"},
+				Opencode:        OpencodeConfig{APIKey: "opencode-ai-key", BaseURL: "https://opencode.ai/inference/go/v1"},
 			},
 			wantErr: false,
 		},
@@ -773,8 +773,18 @@ func TestMemorySummaryProviderValidation(t *testing.T) {
 				m.SummaryAPIKey = "opencode-summary-key"
 				return m
 			}(),
-			ai:      AIConfig{PrimaryProvider: AIProviderGroq},
+			ai:      AIConfig{PrimaryProvider: AIProviderGroq, Opencode: OpencodeConfig{BaseURL: "https://opencode.ai/inference/go/v1"}},
 			wantErr: false,
+		},
+		{
+			name:   "opencode provider with a key but an empty base_url",
+			memory: validMemory(SummaryProviderOpencode),
+			ai: AIConfig{
+				PrimaryProvider: AIProviderGroq,
+				Opencode:        OpencodeConfig{APIKey: "opencode-ai-key", BaseURL: "  "},
+			},
+			wantErr:  true,
+			errParts: []string{"ai.opencode.base_url", "opencode"},
 		},
 		{
 			name:     "opencode provider without any key",

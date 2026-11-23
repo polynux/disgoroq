@@ -90,7 +90,8 @@ ai:
     model: "deepseek-v4.1-flash"
 
     # Model to use for vision / attachment description requests
-    # Set this equal to model to allow inline multimodal chat for image attachments
+    # Set this equal to model, with an image-capable model (deepseek-v4.1-flash,
+    # muse-spark-1.3-contributor), to send image attachments inline with the chat
     vision_model: "deepseek-v4.1-flash"
 
     # Use the model's default reasoning/thinking behavior

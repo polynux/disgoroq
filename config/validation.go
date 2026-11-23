@@ -414,6 +414,11 @@ func (c *MemoryConfig) validate(ai *AIConfig) error {
 		if c.SummaryAPIKey == "" && ai.Opencode.APIKey == "" {
 			return fmt.Errorf("memory.summary_api_key is required when memory.summary_provider is %q and ai.opencode.api_key is not set", SummaryProviderOpencode)
 		}
+		// The summary provider reuses ai.opencode.base_url, which is only
+		// validated when opencode is enabled for chat.
+		if strings.TrimSpace(ai.Opencode.BaseURL) == "" {
+			return fmt.Errorf("ai.opencode.base_url is required when memory.summary_provider is %q", SummaryProviderOpencode)
+		}
 	case "":
 		return fmt.Errorf("memory.summary_provider cannot be empty when memory is enabled")
 	default:
