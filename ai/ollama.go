@@ -208,7 +208,7 @@ func (o *OllamaProvider) runChat(ctx context.Context, model string, messages []a
 	chunks, err := parseOllamaChatResponse(responseBody)
 	if err != nil {
 		if httpResp.StatusCode >= http.StatusBadRequest {
-			return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode}
+			return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)}
 		}
 		return nil, err
 	}

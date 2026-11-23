@@ -411,3 +411,27 @@ func TestOllamaChatReturnsTypedErrorOnPaymentRequired(t *testing.T) {
 	assert.Equal(t, http.StatusPaymentRequired, statusErr.StatusCode)
 	assert.Contains(t, statusErr.Message, "Add usage credits")
 }
+
+func TestOllamaChatKeepsNonJSONErrorBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, err := io.WriteString(w, "Add usage credits or subscribe and save up to 66%")
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+
+	_, err = provider.Chat(context.Background(), &ChatRequest{
+		Model:    "kimi-k2:cloud",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+
+	var statusErr *ProviderHTTPError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusTooManyRequests, statusErr.StatusCode)
+	assert.Contains(t, statusErr.Message, "Add usage credits")
+	assert.False(t, isRetryableProviderError(err))
+}

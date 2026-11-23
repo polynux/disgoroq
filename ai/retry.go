@@ -111,15 +111,25 @@ func (e *ProviderHTTPError) Error() string {
 	return "provider request failed: " + status + ": " + e.Message
 }
 
+// errorBodySnippet keeps a non-JSON error body (plain text, proxy HTML) readable
+// in logs and visible to the quota check, without logging a whole page.
+func errorBodySnippet(body []byte) string {
+	const maxLen = 300
+	text := []rune(strings.TrimSpace(string(body)))
+	if len(text) > maxLen {
+		return string(text[:maxLen]) + "…"
+	}
+	return string(text)
+}
+
 // quotaErrorHints are the wordings providers use when the account itself cannot
-// serve the request until it is paid for.
+// serve the request until it is paid for. Keep them specific: words like
+// "billing" or "subscribe" also show up in transient rate-limit bodies (Groq's
+// 429 links to console.groq.com/settings/billing), which must still be retried.
 var quotaErrorHints = []string{
-	"add usage credits",
-	"usage credits",
+	"usage credits", // Ollama Cloud: "Add usage credits or subscribe ..."
 	"insufficient_quota",
 	"payment required",
-	"billing",
-	"subscribe",
 }
 
 func isQuotaMessage(message string) bool {
@@ -138,12 +148,19 @@ func isRetryableProviderError(err error) bool {
 	if err == nil {
 		return true
 	}
+	// The caller gave up; another attempt cannot succeed.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 
 	var statusErr *ProviderHTTPError
 	if errors.As(err, &statusErr) {
 		switch statusErr.StatusCode {
 		case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden:
 			return false
+		}
+		if statusErr.StatusCode >= http.StatusInternalServerError {
+			return true
 		}
 		return !isQuotaMessage(statusErr.Message)
 	}

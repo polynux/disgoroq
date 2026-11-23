@@ -81,6 +81,9 @@ func cloneMessages(messages []Message) []Message {
 func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []ImageContext) map[int]string {
 	descriptions := make(map[int]string, len(images))
 	for idx, image := range images {
+		if ctx.Err() != nil {
+			break
+		}
 		if description, ok := r.getCachedImageDescription(ctx, image); ok {
 			descriptions[idx] = description
 			continue
@@ -104,7 +107,7 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 				zap.String("image_url", image.URL),
 				zap.String("chat_model", r.chatModel),
 				zap.String("vision_model", r.visionModel))
-			if r.visionFallback == nil {
+			if r.visionFallback == nil || ctx.Err() != nil {
 				continue
 			}
 

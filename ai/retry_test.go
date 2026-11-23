@@ -886,3 +886,57 @@ func TestRetryWrapperChatDescribesImagesWithVisionFallback(t *testing.T) {
 	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
 	mockProvider.AssertExpectations(t)
 }
+
+func TestIsRetryableProviderError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401 without message", &ProviderHTTPError{StatusCode: http.StatusUnauthorized}, false},
+		{"402 without message", &ProviderHTTPError{StatusCode: http.StatusPaymentRequired}, false},
+		{"403 without message", &ProviderHTTPError{StatusCode: http.StatusForbidden}, false},
+		{"429 asking for credits", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: "Add usage credits or subscribe"}, false},
+		{"plain 429", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: "rate limit exceeded"}, true},
+		{"503 mentioning billing", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "upstream billing service unavailable"}, true},
+		{"503 mentioning credits", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "usage credits service down"}, true},
+		{
+			// Groq formats its 429 body into an untyped error, and that body links to a billing page.
+			"untyped Groq rate limit",
+			errors.New(`groq API error (status 429): {"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile. Please try again in 2.5s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}`),
+			true,
+		},
+		{"untyped OpenAI quota", errors.New(`{"error":{"code":"insufficient_quota"}}`), false},
+		{"canceled", context.Canceled, false},
+		{"deadline wrapped", errors.Join(errors.New("vision"), context.DeadlineExceeded), false},
+		{"timeout-like transport error", errors.New("dial tcp: i/o timeout"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isRetryableProviderError(tt.err))
+		})
+	}
+}
+
+func TestDescribeImagesForChatSkipsFallbackWhenContextDone(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(nil, context.Canceled)
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	fallbackCalls := 0
+	wrapper.SetVisionFallback(func(context.Context, *VisionRequest) (*VisionResponse, error) {
+		fallbackCalls++
+		return &VisionResponse{Description: "a cat"}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	descriptions := wrapper.describeImagesForChat(ctx, []ImageContext{
+		{URL: "https://example.com/a.png", Type: "image/png"},
+		{URL: "https://example.com/b.png", Type: "image/png"},
+	})
+
+	assert.Empty(t, descriptions)
+	assert.Zero(t, fallbackCalls)
+}
