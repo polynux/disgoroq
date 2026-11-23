@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -160,4 +161,106 @@ func TestOpenrouterChatParsesToolCalls(t *testing.T) {
 	require.Len(t, resp.ToolCalls, 1)
 	assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
 	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
+}
+
+func TestOpenrouterHTTPErrorsAreTypedAndClassified(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		wantMessage string
+		wantCalls   int32
+	}{
+		{
+			name:        "404 model not found is final",
+			status:      http.StatusNotFound,
+			body:        `{"error":{"message":"No endpoints found for model google/does-not-exist.","code":404}}`,
+			wantMessage: "No endpoints found",
+			wantCalls:   1,
+		},
+		{
+			name:        "429 rate limit is retried",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":{"message":"Rate limit exceeded: free-models-per-day.","code":429}}`,
+			wantMessage: "Rate limit exceeded",
+			wantCalls:   3,
+		},
+		{
+			name:        "503 is retried",
+			status:      http.StatusServiceUnavailable,
+			body:        `{"error":{"message":"upstream provider unavailable"}}`,
+			wantMessage: "upstream provider unavailable",
+			wantCalls:   3,
+		},
+		{
+			name:        "401 is final",
+			status:      http.StatusUnauthorized,
+			body:        `{"error":{"message":"No auth credentials found","code":401}}`,
+			wantMessage: "No auth credentials found",
+			wantCalls:   1,
+		},
+		{
+			name:        "non-JSON error body is kept in the message",
+			status:      http.StatusBadGateway,
+			body:        `<html><body>Bad Gateway</body></html>`,
+			wantMessage: "Bad Gateway",
+			wantCalls:   3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+
+			provider, err := NewOpenrouterProvider(server.URL, "test-key", false)
+			require.NoError(t, err)
+
+			wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "google/gemini-2.5-flash", "google/gemini-2.5-flash", nil)
+			_, err = wrapper.Chat(context.Background(), &ChatRequest{
+				Model:    "google/gemini-2.5-flash",
+				Messages: []Message{{Role: RoleUser, Content: "hello"}},
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantCalls, calls.Load())
+
+			var httpErr *ProviderHTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, tt.status, httpErr.StatusCode)
+			assert.Contains(t, httpErr.Message, tt.wantMessage)
+		})
+	}
+}
+
+func TestOpenrouterVisionHTTPErrorIsTypedAndFinal(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"message":"No endpoints found for model google/gemini-9.","code":404}}`)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenrouterProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "google/gemini-2.5-flash", "google/gemini-9", nil)
+	_, err = wrapper.Vision(context.Background(), &VisionRequest{
+		Instruction: "describe this image",
+		ImageURL:    "https://example.com/image.png",
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, int32(1), calls.Load())
+
+	var httpErr *ProviderHTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
+	assert.Contains(t, httpErr.Message, "No endpoints found")
 }

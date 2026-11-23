@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -169,4 +170,106 @@ func TestGroqChatParsesToolCalls(t *testing.T) {
 	require.Len(t, resp.ToolCalls, 1)
 	assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
 	assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
+}
+
+func TestGroqHTTPErrorsAreTypedAndClassified(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		body        string
+		wantMessage string
+		wantCalls   int32
+	}{
+		{
+			name:        "404 model not found is final",
+			status:      http.StatusNotFound,
+			body:        `{"error":{"message":"The model llama-3.3-70b-versatile does not exist or you do not have access to it.","type":"invalid_request_error","code":"model_not_found"}}`,
+			wantMessage: "model_not_found",
+			wantCalls:   1,
+		},
+		{
+			name:        "429 rate limit is retried despite the billing link",
+			status:      http.StatusTooManyRequests,
+			body:        `{"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile. Please try again in 2.5s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}`,
+			wantMessage: "console.groq.com/settings/billing",
+			wantCalls:   3,
+		},
+		{
+			name:        "503 is retried",
+			status:      http.StatusServiceUnavailable,
+			body:        `{"error":{"message":"service unavailable"}}`,
+			wantMessage: "service unavailable",
+			wantCalls:   3,
+		},
+		{
+			name:        "401 is final",
+			status:      http.StatusUnauthorized,
+			body:        `{"error":{"message":"Invalid API Key"}}`,
+			wantMessage: "Invalid API Key",
+			wantCalls:   1,
+		},
+		{
+			name:        "non-JSON error body is kept in the message",
+			status:      http.StatusBadGateway,
+			body:        `<html><body>Bad Gateway</body></html>`,
+			wantMessage: "Bad Gateway",
+			wantCalls:   3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+
+			provider := NewGroqProvider("test-key", false)
+			provider.baseURL = server.URL
+
+			wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "llama-3.3-70b-versatile", "meta-llama/llama-4-scout-17b-16e-instruct", nil)
+			_, err := wrapper.Chat(context.Background(), &ChatRequest{
+				Model:    "llama-3.3-70b-versatile",
+				Messages: []Message{{Role: RoleUser, Content: "hello"}},
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, tt.wantCalls, calls.Load())
+
+			var httpErr *ProviderHTTPError
+			require.ErrorAs(t, err, &httpErr)
+			assert.Equal(t, tt.status, httpErr.StatusCode)
+			assert.Contains(t, httpErr.Message, tt.wantMessage)
+		})
+	}
+}
+
+func TestGroqVisionHTTPErrorIsTypedAndFinal(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"message":"The model llama-9 does not exist","code":"model_not_found"}}`)
+	}))
+	defer server.Close()
+
+	provider := NewGroqProvider("test-key", false)
+	provider.baseURL = server.URL
+
+	wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "llama-3.3-70b-versatile", "llama-9", nil)
+	_, err := wrapper.Vision(context.Background(), &VisionRequest{
+		Instruction: "describe this image",
+		ImageURL:    "https://example.com/image.png",
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, int32(1), calls.Load())
+
+	var httpErr *ProviderHTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
+	assert.Contains(t, httpErr.Message, "does not exist")
 }
