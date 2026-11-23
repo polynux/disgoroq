@@ -1151,3 +1151,99 @@ func TestService_GetMemoryContext_VectorUsedWithoutDebug(t *testing.T) {
 		t.Fatal("expected summaries in context from vector/fallback path")
 	}
 }
+
+// failingAIService fails every Chat call and counts attempts, so tests can
+// assert that a summarization is not retried during a backoff window.
+type failingAIService struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *failingAIService) Chat(ctx context.Context, messages []Message, model string) (string, error) {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+	return "", errors.New("provider quota exceeded")
+}
+
+func (m *failingAIService) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// TestService_SummarizationBacksOffAfterFailure verifies that a failed
+// summarization puts the user/guild key in a cooldown: a trigger inside the
+// cooldown never reaches the AI service, and one after it does.
+func TestService_SummarizationBacksOffAfterFailure(t *testing.T) {
+	const threshold = 2
+	// Also caps the backoff, so the test does not wait minutes.
+	const interval = 1 * time.Second
+
+	repo := newMockRepository()
+	aiSvc := &failingAIService{}
+	service := NewService(repo, newMockEmbeddingProvider(), NewSummarizer(aiSvc, "test"), ServiceConfig{
+		BufferThreshold:        threshold,
+		SummaryInterval:        interval,
+		MaxSummaryContext:      3,
+		MaxConcurrentSummaries: 1,
+		SummarizationTimeout:   5 * time.Second,
+	}).(*MemoryService)
+	defer service.Close()
+
+	ctx := context.Background()
+	userID := "user_backoff"
+	guildID := "guild_backoff"
+	key := userID + ":" + guildID
+
+	bufferBatch := func(prefix string) {
+		t.Helper()
+		for i := 0; i < threshold; i++ {
+			if err := service.BufferMessage(ctx, BufferMessageInput{
+				UserID:    userID,
+				GuildID:   guildID,
+				Content:   fmt.Sprintf("%s %d", prefix, i),
+				Timestamp: time.Now(),
+			}); err != nil {
+				t.Fatalf("failed to buffer message: %v", err)
+			}
+		}
+	}
+
+	waitForCalls := func(want int) bool {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for aiSvc.callCount() < want && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		return aiSvc.callCount() >= want
+	}
+
+	// First batch reaches the threshold; the provider fails.
+	bufferBatch("first")
+	if !waitForCalls(1) {
+		t.Fatal("expected the AI service to be called for the first batch")
+	}
+	if got := aiSvc.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 AI call after first batch, got %d", got)
+	}
+
+	// A second trigger inside the cooldown must not reach the AI service.
+	bufferBatch("second")
+	time.Sleep(400 * time.Millisecond)
+	if got := aiSvc.callCount(); got != 1 {
+		t.Fatalf("expected backoff to skip the AI call, got %d calls", got)
+	}
+
+	// Once the cooldown has elapsed, a trigger reaches the AI service again.
+	if wait, cooling := service.summaryBackoffWait(key); cooling {
+		time.Sleep(wait + 100*time.Millisecond)
+	}
+	bufferBatch("third")
+	if !waitForCalls(2) {
+		t.Fatalf("expected the AI service to be called after the cooldown, got %d calls", aiSvc.callCount())
+	}
+	if got := aiSvc.callCount(); got != 2 {
+		t.Fatalf("expected exactly 2 AI calls, got %d", got)
+	}
+}

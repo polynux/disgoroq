@@ -32,6 +32,12 @@ type MemoryService struct {
 	closeCancel     context.CancelFunc
 	closed          bool
 
+	// Failure backoff (keyed by userID:guildID), so a failing provider is not
+	// retried on every new message while the buffer stays above the threshold.
+	backoffMu       sync.Mutex
+	summaryFailures map[string]int
+	summaryRetryAt  map[string]time.Time
+
 	// Context building
 	maxSummaryContext int // Max number of summaries to include in context
 
@@ -57,6 +63,11 @@ func DefaultServiceConfig() ServiceConfig {
 		SummarizationTimeout:   60 * time.Second,
 	}
 }
+
+// initialSummaryBackoff is the cooldown after the first failed summarization for
+// a user/guild pair. It doubles on each consecutive failure and is capped at
+// the configured summary interval.
+const initialSummaryBackoff = 5 * time.Minute
 
 // Ensure MemoryService implements the Service interface
 var _ Service = (*MemoryService)(nil)
@@ -92,6 +103,8 @@ func NewService(repo Repository, embeddings EmbeddingProvider, summarizer *Summa
 		closeCtx:             closeCtx,
 		closeCancel:          closeCancel,
 		summarizationTimeout: config.SummarizationTimeout,
+		summaryFailures:      make(map[string]int),
+		summaryRetryAt:       make(map[string]time.Time),
 	}
 }
 
@@ -197,11 +210,59 @@ func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 	}
 
 	if err := s.runSummarization(ctx, userID, guildID); err != nil {
+		s.recordSummaryFailure(key)
 		logger.Warn("Memory summarization failed",
 			zap.String("user_id", userID),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
+	} else {
+		s.clearSummaryBackoff(key)
 	}
+}
+
+// summaryBackoffWait reports how long the key is still in cooldown after a
+// failed summarization.
+func (s *MemoryService) summaryBackoffWait(key string) (time.Duration, bool) {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+
+	retryAt, ok := s.summaryRetryAt[key]
+	if !ok {
+		return 0, false
+	}
+	wait := time.Until(retryAt)
+	if wait <= 0 {
+		return 0, false
+	}
+	return wait, true
+}
+
+// recordSummaryFailure doubles the cooldown for the key and records when the
+// next attempt is allowed.
+func (s *MemoryService) recordSummaryFailure(key string) {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+
+	failures := s.summaryFailures[key] + 1
+	s.summaryFailures[key] = failures
+
+	backoff := initialSummaryBackoff
+	for i := 1; i < failures && backoff < s.summaryInterval; i++ {
+		backoff *= 2
+	}
+	if backoff > s.summaryInterval {
+		backoff = s.summaryInterval
+	}
+	s.summaryRetryAt[key] = time.Now().Add(backoff)
+}
+
+// clearSummaryBackoff forgets past failures after a successful summarization.
+func (s *MemoryService) clearSummaryBackoff(key string) {
+	s.backoffMu.Lock()
+	defer s.backoffMu.Unlock()
+
+	delete(s.summaryFailures, key)
+	delete(s.summaryRetryAt, key)
 }
 
 // Close cancels all in-flight summarizations and marks the service closed.
@@ -231,6 +292,19 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 		logger.Debug("Running memory summarization check",
 			zap.String("user_id", userID),
 			zap.String("guild_id", guildID))
+	}
+
+	// Back off after a failed summarization so a failing provider is not
+	// retried on every new message while the buffer stays above the threshold.
+	key := fmt.Sprintf("%s:%s", userID, guildID)
+	if wait, cooling := s.summaryBackoffWait(key); cooling {
+		if logger.IsDebugMode() {
+			logger.Debug("Skipping memory summarization during failure backoff",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID),
+				zap.Duration("retry_in", wait))
+		}
+		return nil
 	}
 
 	// Check if enough time has passed since last summary
