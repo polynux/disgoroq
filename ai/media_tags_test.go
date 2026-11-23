@@ -28,6 +28,12 @@ type mediaTagsFixture struct {
 	} `json:"cases"`
 }
 
+func TestRenderMediaMessageIgnoresQueryWhenExtractingPath(t *testing.T) {
+	msg := Message{Content: "https://cdn.discordapp.com?next=/cat-gif"}
+	require.Equal(t, "[image]", RenderMediaMessage(msg, MediaTagsV1))
+	require.Equal(t, "[image]", RenderMediaMessage(msg, MediaTagsV0))
+}
+
 func TestRenderMediaMessageFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/media_tags_v1.json")
 	require.NoError(t, err)

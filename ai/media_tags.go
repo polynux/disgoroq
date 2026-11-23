@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"net/url"
 	"regexp"
 	"strings"
 	"unicode"
@@ -9,8 +8,8 @@ import (
 )
 
 // Media tag rendering, shared with the training data: see
-// docs/06-media-tags.md in discord-ia-waldo. Models trained on v0 prompts know
-// the bracketed placeholders; v1 prompts carry descriptive tags.
+// docs/06-media-tags.md (revision 2) in discord-ia-waldo. Models trained on v0
+// prompts know the bracketed placeholders; v1 prompts carry descriptive tags.
 const (
 	MediaTagsV0 = "v0"
 	MediaTagsV1 = "v1"
@@ -19,7 +18,19 @@ const (
 	mediaGifMaxWords         = 8
 )
 
-var mediaURLPattern = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
+var (
+	mediaURLPattern = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
+
+	// Legacy URL kind patterns, searched anywhere in the whole URL string.
+	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif\b`)
+	mediaYouTubeKindPattern = regexp.MustCompile(`(?i)youtube\.com|youtu\.be`)
+	mediaTweetKindPattern   = regexp.MustCompile(`(?i)twitter\.com|//x\.com|twimg\.com|fxtwitter|vxtwitter|fixupx`)
+	mediaTikTokKindPattern  = regexp.MustCompile(`(?i)tiktok\.com|tnktok\.com`)
+	mediaInstaKindPattern   = regexp.MustCompile(`(?i)instagram\.com`)
+	mediaSonKindPattern     = regexp.MustCompile(`(?i)soundcloud\.com|spotify\.com|deezer\.com`)
+	mediaSteamKindPattern   = regexp.MustCompile(`(?i)steampowered\.com|steamcommunity\.com`)
+	mediaDiscordCDNPattern  = regexp.MustCompile(`(?i)cdn\.discordapp\.com|media\.discordapp\.net`)
+)
 
 var mediaGifStopWords = map[string]bool{
 	"gif": true, "gifs": true, "tenor": true, "giphy": true, "klipy": true,
@@ -49,7 +60,9 @@ func mediaTagsVersion(version string) string {
 // attachments and stickers are only rendered when the message has no text.
 func renderMediaMessageV0(msg Message) string {
 	parts := make([]string, 0, 1+len(msg.Attachments)+len(msg.Stickers))
-	if text := mediaURLPattern.ReplaceAllStringFunc(msg.Content, mediaURLTagV0); text != "" {
+	if text := mediaURLPattern.ReplaceAllStringFunc(msg.Content, func(raw string) string {
+		return "[" + mediaURLKind(raw, false) + "]"
+	}); text != "" {
 		parts = append(parts, text)
 	}
 	if strings.TrimSpace(msg.Content) == "" {
@@ -60,8 +73,10 @@ func renderMediaMessageV0(msg Message) string {
 				parts = append(parts, "[image]")
 			}
 		}
-		for range msg.Stickers {
-			parts = append(parts, "[image]")
+		for _, sticker := range msg.Stickers {
+			if strings.TrimSpace(sticker) != "" {
+				parts = append(parts, "[image]")
+			}
 		}
 	}
 	return collapseMediaWhitespace(strings.Join(parts, " "))
@@ -71,7 +86,7 @@ func renderMediaMessageV1(msg Message) string {
 	urls := mediaURLPattern.FindAllString(msg.Content, -1)
 	nonGifURLs := 0
 	for _, raw := range urls {
-		if parsed := parseMediaURL(raw); parsed == nil || mediaURLKindV1(parsed) != "gif" {
+		if mediaURLKind(raw, true) != "gif" {
 			nonGifURLs++
 		}
 	}
@@ -89,7 +104,6 @@ func renderMediaMessageV1(msg Message) string {
 	for _, sticker := range msg.Stickers {
 		name := collapseMediaWhitespace(sticker)
 		if name == "" {
-			parts = append(parts, "[sticker]")
 			continue
 		}
 		parts = append(parts, "[sticker: "+name+"]")
@@ -97,16 +111,10 @@ func renderMediaMessageV1(msg Message) string {
 	return collapseMediaWhitespace(strings.Join(parts, " "))
 }
 
-func mediaURLTagV0(raw string) string {
-	parsed := parseMediaURL(raw)
-	return "[" + mediaURLKindV0(parsed) + "]"
-}
-
 func mediaURLTagV1(raw string, embeds []MessageEmbed, nonGifURLs int) string {
-	parsed := parseMediaURL(raw)
-	kind := mediaURLKindV1(parsed)
+	kind := mediaURLKind(raw, true)
 	if kind == "gif" {
-		words := gifWordsFromSegment(lastURLPathSegment(parsed))
+		words := gifWordsFromSegment(lastURLPathSegment(raw))
 		if len(words) == 0 {
 			return "[gif]"
 		}
@@ -118,11 +126,10 @@ func mediaURLTagV1(raw string, embeds []MessageEmbed, nonGifURLs int) string {
 
 	description := ""
 	if embed := mediaEmbedForURL(embeds, raw, nonGifURLs); embed != nil {
-		description = embed.Title
+		description = cleanMediaDescription(embed.Title)
 		if description == "" {
-			description = embed.Description
+			description = cleanMediaDescription(embed.Description)
 		}
-		description = cleanMediaDescription(description)
 	}
 	if description == "" {
 		return "[" + kind + "]"
@@ -142,108 +149,56 @@ func mediaEmbedForURL(embeds []MessageEmbed, raw string, nonGifURLs int) *Messag
 	return nil
 }
 
-func mediaURLKindV0(parsed *url.URL) string {
-	if parsed == nil {
-		return "lien"
-	}
-	host := strings.ToLower(parsed.Hostname())
+// mediaURLKind classifies a URL by the legacy regexes over the whole string.
+// v1 adds the Discord-CDN last-segment gif-word clause.
+func mediaURLKind(raw string, v1 bool) string {
 	switch {
-	case hostContainsAny(host, "tenor.com", "giphy.com", "klipy.com"):
+	case mediaGifKindPattern.MatchString(raw),
+		v1 && mediaDiscordCDNPattern.MatchString(raw) && segmentHasGifWord(lastURLPathSegment(raw)):
 		return "gif"
-	case strings.HasSuffix(strings.ToLower(parsed.Path), ".gif"):
-		return "gif"
-	case hostContainsAny(host, "youtube.com") || host == "youtu.be":
+	case mediaYouTubeKindPattern.MatchString(raw):
 		return "youtube"
-	case hostContainsAny(host, "twitter.com", "twimg.com", "fxtwitter", "vxtwitter", "fixupx") || host == "x.com" || strings.HasSuffix(host, ".x.com"):
+	case mediaTweetKindPattern.MatchString(raw):
 		return "tweet"
-	case hostContainsAny(host, "tiktok.com", "tnktok.com"):
+	case mediaTikTokKindPattern.MatchString(raw):
 		return "tiktok"
-	case hostContainsAny(host, "instagram.com"):
+	case mediaInstaKindPattern.MatchString(raw):
 		return "insta"
-	case hostContainsAny(host, "soundcloud.com", "spotify.com", "deezer.com"):
+	case mediaSonKindPattern.MatchString(raw):
 		return "son"
-	case hostContainsAny(host, "steampowered.com", "steamcommunity.com"):
+	case mediaSteamKindPattern.MatchString(raw):
 		return "steam"
-	case isDiscordCDN(host):
+	case mediaDiscordCDNPattern.MatchString(raw):
 		return "image"
 	default:
 		return "lien"
 	}
 }
 
-func mediaURLKindV1(parsed *url.URL) string {
-	if parsed == nil {
-		return "lien"
+// mediaURLPath returns the path part after scheme://host and before the first
+// ? or #, without parsing the URL strictly.
+func mediaURLPath(raw string) string {
+	value := raw
+	if idx := strings.Index(value, "://"); idx >= 0 {
+		value = value[idx+3:]
 	}
-	host := strings.ToLower(parsed.Hostname())
-	switch {
-	case hostContainsAny(host, "tenor.com", "giphy.com", "klipy.com"):
-		return "gif"
-	case strings.HasSuffix(strings.ToLower(parsed.Path), ".gif"):
-		return "gif"
-	case isDiscordCDN(host) && segmentHasGifWord(lastURLPathSegment(parsed)):
-		return "gif"
-	case hostContainsAny(host, "youtube.com") || host == "youtu.be":
-		return "youtube"
-	case hostContainsAny(host, "twitter.com", "twimg.com", "fxtwitter", "vxtwitter", "fixupx") || host == "x.com" || strings.HasSuffix(host, ".x.com"):
-		return "tweet"
-	case hostContainsAny(host, "tiktok.com", "tnktok.com"):
-		return "tiktok"
-	case hostContainsAny(host, "instagram.com"):
-		return "insta"
-	case hostContainsAny(host, "soundcloud.com", "spotify.com", "deezer.com"):
-		return "son"
-	case hostContainsAny(host, "steampowered.com", "steamcommunity.com"):
-		return "steam"
-	case isDiscordCDN(host):
-		return "image"
-	default:
-		return "lien"
+	if idx := strings.IndexAny(value, "?#"); idx >= 0 {
+		value = value[:idx]
 	}
-}
-
-func hostContainsAny(host string, needles ...string) bool {
-	for _, needle := range needles {
-		if strings.Contains(host, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func isDiscordCDN(host string) bool {
-	return hostContainsAny(host, "cdn.discordapp.com", "media.discordapp.net")
-}
-
-func parseMediaURL(raw string) *url.URL {
-	value := strings.TrimSpace(raw)
-	if value == "" {
-		return nil
-	}
-	if !strings.Contains(value, "://") {
-		value = "https://" + value
-	}
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Host == "" {
-		return nil
-	}
-	return parsed
-}
-
-// lastURLPathSegment returns the last non-empty, percent-decoded path segment.
-func lastURLPathSegment(parsed *url.URL) string {
-	if parsed == nil {
+	slash := strings.IndexByte(value, '/')
+	if slash < 0 {
 		return ""
 	}
-	segments := strings.Split(parsed.EscapedPath(), "/")
+	return value[slash:]
+}
+
+// lastURLPathSegment returns the last non-empty raw path segment.
+func lastURLPathSegment(raw string) string {
+	segments := strings.Split(mediaURLPath(raw), "/")
 	for idx := len(segments) - 1; idx >= 0; idx-- {
-		if segments[idx] == "" {
-			continue
+		if segments[idx] != "" {
+			return segments[idx]
 		}
-		if decoded, err := url.PathUnescape(segments[idx]); err == nil {
-			return decoded
-		}
-		return segments[idx]
 	}
 	return ""
 }
@@ -257,10 +212,10 @@ func segmentHasGifWord(segment string) bool {
 	return false
 }
 
-// mediaSegmentWords lowercases the segment without its final extension and
-// splits it on -, _, ., + and whitespace (gif word step 2).
+// mediaSegmentWords percent-decodes the segment, lowercases it without its
+// final extension, and splits it on -, _, ., + and whitespace (gif word step 2).
 func mediaSegmentWords(segment string) []string {
-	trimmed := stripMediaExtension(strings.TrimSpace(segment))
+	trimmed := stripMediaExtension(strings.TrimSpace(unquoteMediaSegment(segment)))
 	if trimmed == "" {
 		return nil
 	}
@@ -286,6 +241,60 @@ func gifWordsFromSegment(segment string) []string {
 		}
 	}
 	return words
+}
+
+// unquoteMediaSegment decodes valid %XX escapes as UTF-8 and keeps everything
+// else, like Python's urllib.parse.unquote (bare % stays literal).
+func unquoteMediaSegment(value string) string {
+	if !strings.Contains(value, "%") {
+		return value
+	}
+	decoded := make([]byte, 0, len(value))
+	for idx := 0; idx < len(value); idx++ {
+		if value[idx] == '%' && idx+2 < len(value) {
+			high, highOK := hexValue(value[idx+1])
+			low, lowOK := hexValue(value[idx+2])
+			if highOK && lowOK {
+				decoded = append(decoded, high<<4|low)
+				idx += 2
+				continue
+			}
+		}
+		decoded = append(decoded, value[idx])
+	}
+	return decodeUTF8ReplacingInvalid(decoded)
+}
+
+func hexValue(b byte) (byte, bool) {
+	switch {
+	case b >= '0' && b <= '9':
+		return b - '0', true
+	case b >= 'a' && b <= 'f':
+		return b - 'a' + 10, true
+	case b >= 'A' && b <= 'F':
+		return b - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+func decodeUTF8ReplacingInvalid(value []byte) string {
+	if utf8.Valid(value) {
+		return string(value)
+	}
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for len(value) > 0 {
+		r, size := utf8.DecodeRune(value)
+		if r == utf8.RuneError && size == 1 {
+			builder.WriteRune(utf8.RuneError)
+			value = value[1:]
+			continue
+		}
+		builder.WriteRune(r)
+		value = value[size:]
+	}
+	return builder.String()
 }
 
 func stripMediaExtension(value string) string {
@@ -319,12 +328,40 @@ func containsDigit(value string) bool {
 	return false
 }
 
-func attachmentIsGIF(attachment MessageAttachment) bool {
+// attachmentContentType lowercases a content type and drops its parameters.
+func attachmentContentType(attachment MessageAttachment) string {
 	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
 	if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
 		contentType = strings.TrimSpace(contentType[:idx])
 	}
-	return contentType == "image/gif" || strings.HasSuffix(strings.ToLower(attachment.Filename), ".gif")
+	return contentType
+}
+
+func attachmentIsGIF(attachment MessageAttachment) bool {
+	return attachmentContentType(attachment) == "image/gif" ||
+		strings.HasSuffix(strings.ToLower(attachment.Filename), ".gif")
+}
+
+// attachmentMediaType returns the content type, inferred from the filename
+// extension when it is empty.
+func attachmentMediaType(attachment MessageAttachment) string {
+	if contentType := attachmentContentType(attachment); contentType != "" {
+		return contentType
+	}
+	extension := strings.ToLower(attachment.Filename)
+	if idx := strings.LastIndexByte(extension, '.'); idx >= 0 {
+		extension = extension[idx+1:]
+	}
+	switch extension {
+	case "png", "jpg", "jpeg", "webp", "gif":
+		return "image"
+	case "mp4", "webm", "mov":
+		return "video"
+	case "mp3", "ogg", "wav", "m4a", "opus":
+		return "audio"
+	default:
+		return ""
+	}
 }
 
 func mediaAttachmentTagV1(attachment MessageAttachment) string {
@@ -336,16 +373,13 @@ func mediaAttachmentTagV1(attachment MessageAttachment) string {
 		return "[gif: " + strings.Join(words, " ") + "]"
 	}
 
-	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
-	if idx := strings.IndexByte(contentType, ';'); idx >= 0 {
-		contentType = strings.TrimSpace(contentType[:idx])
-	}
+	mediaType := attachmentMediaType(attachment)
 	switch {
-	case strings.HasPrefix(contentType, "image/"):
+	case strings.HasPrefix(mediaType, "image"):
 		return "[image]"
-	case strings.HasPrefix(contentType, "video/"):
+	case strings.HasPrefix(mediaType, "video"):
 		return "[video]"
-	case strings.HasPrefix(contentType, "audio/"):
+	case strings.HasPrefix(mediaType, "audio"):
 		return "[son]"
 	default:
 		return "[fichier]"
