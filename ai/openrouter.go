@@ -165,7 +165,7 @@ func (o *OpenrouterProvider) doChatRequest(ctx context.Context, body []byte) ([]
 		return nil, fmt.Errorf("error reading OpenRouter response: %w", err)
 	}
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("OpenRouter request failed: %s: %s", httpResp.Status, string(responseBody))
+		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)}
 	}
 
 	return responseBody, nil

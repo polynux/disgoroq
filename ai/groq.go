@@ -160,7 +160,7 @@ func (g *GroqProvider) doChatCompletion(ctx context.Context, req groqChatComplet
 		return nil, fmt.Errorf("error reading Groq response: %w", err)
 	}
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("Groq request failed: %s: %s", httpResp.Status, string(responseBody))
+		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)}
 	}
 
 	var response groqChatCompletionResponse
