@@ -22,6 +22,7 @@ type RetryWrapper struct {
 	chatModel         string // Provider-specific chat model
 	visionModel       string // Provider-specific vision model
 	cache             database.AttachmentCache
+	visionFallback    func(context.Context, *VisionRequest) (*VisionResponse, error)
 }
 
 type modelAwareProvider interface {
@@ -61,6 +62,12 @@ func (r *RetryWrapper) VisionModelName() string {
 
 func (r *RetryWrapper) AttachmentCache() database.AttachmentCache {
 	return r.cache
+}
+
+// SetVisionFallback registers an optional vision fallback used to describe
+// images for chat when this provider's own vision model cannot.
+func (r *RetryWrapper) SetVisionFallback(fallback func(context.Context, *VisionRequest) (*VisionResponse, error)) {
+	r.visionFallback = fallback
 }
 
 func (r *RetryWrapper) ChatCacheScopes() []AttachmentCacheScope {

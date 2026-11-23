@@ -832,3 +832,57 @@ func TestRetryWrapperVisionDoesNotRetryQuotaError(t *testing.T) {
 	require.Error(t, err)
 	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
 }
+
+func TestRetryWrapperChatDescribesImagesWithVisionFallback(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.Model == "qwen3-vl:cloud" && req.ImageURL == "https://example.com/cat.png"
+	})).Return(nil, quotaError).Once()
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return req.Model == "kimi-k2:cloud" &&
+			len(req.Images) == 0 &&
+			len(req.Messages) == 1 &&
+			len(req.Messages[0].ImageRefs) == 0 &&
+			strings.Contains(req.Messages[0].Content, "a cat from the fallback provider")
+	})).Return(&ChatResponse{
+		Content: "described",
+		Model:   "kimi-k2:cloud",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+
+	fallbackCalls := 0
+	wrapper.SetVisionFallback(func(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
+		fallbackCalls++
+		assert.Equal(t, defaultVisionInstruction, req.Instruction)
+		assert.Equal(t, "https://example.com/cat.png", req.ImageURL)
+		return &VisionResponse{
+			Description: "a cat from the fallback provider",
+			Provider:    "groq",
+		}, nil
+	})
+
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:  "https://example.com/cat.png",
+			Type: "image/png",
+		}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "described", response.Content)
+	assert.Equal(t, 1, fallbackCalls)
+	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
+	mockProvider.AssertExpectations(t)
+}
