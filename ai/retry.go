@@ -2,7 +2,9 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ type RetryWrapper struct {
 	chatModel         string // Provider-specific chat model
 	visionModel       string // Provider-specific vision model
 	cache             database.AttachmentCache
+	visionFallback    func(context.Context, *VisionRequest) (*VisionResponse, error)
 }
 
 type modelAwareProvider interface {
@@ -61,6 +64,12 @@ func (r *RetryWrapper) AttachmentCache() database.AttachmentCache {
 	return r.cache
 }
 
+// SetVisionFallback registers an optional vision fallback used to describe
+// images for chat when this provider's own vision model cannot.
+func (r *RetryWrapper) SetVisionFallback(fallback func(context.Context, *VisionRequest) (*VisionResponse, error)) {
+	r.visionFallback = fallback
+}
+
 func (r *RetryWrapper) ChatCacheScopes() []AttachmentCacheScope {
 	if r.chatModel == "" {
 		return nil
@@ -74,6 +83,91 @@ func (r *RetryWrapper) ChatCacheScopes() []AttachmentCacheScope {
 // AvailableModels returns the available models from the wrapped provider
 func (r *RetryWrapper) AvailableModels() []ModelInfo {
 	return r.provider.AvailableModels()
+}
+
+// ProviderHTTPError reports a non-success HTTP status returned by a provider.
+// Providers wrap their transport errors in this type so retry logic can tell a
+// permanent account failure (quota, billing, auth) from a transient one.
+type ProviderHTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *ProviderHTTPError) Error() string {
+	if e.StatusCode < http.StatusBadRequest {
+		if e.Message != "" {
+			return e.Message
+		}
+		return "provider request failed"
+	}
+
+	status := fmt.Sprintf("status %d", e.StatusCode)
+	if text := strings.TrimSpace(http.StatusText(e.StatusCode)); text != "" {
+		status = fmt.Sprintf("status %d %s", e.StatusCode, text)
+	}
+	if e.Message == "" {
+		return "provider request failed: " + status
+	}
+	return "provider request failed: " + status + ": " + e.Message
+}
+
+// errorBodySnippet keeps a non-JSON error body (plain text, proxy HTML) readable
+// in logs and visible to the quota check, without logging a whole page.
+func errorBodySnippet(body []byte) string {
+	const maxLen = 300
+	text := []rune(strings.TrimSpace(string(body)))
+	if len(text) > maxLen {
+		return string(text[:maxLen]) + "…"
+	}
+	return string(text)
+}
+
+// quotaErrorHints are the wordings providers use when the account itself cannot
+// serve the request until it is paid for. Keep them specific: words like
+// "billing" or "subscribe" also show up in transient rate-limit bodies (Groq's
+// 429 links to console.groq.com/settings/billing), which must still be retried.
+var quotaErrorHints = []string{
+	"usage credits", // Ollama Cloud: "Add usage credits or subscribe ..."
+	"insufficient_quota",
+	"payment required",
+}
+
+func isQuotaMessage(message string) bool {
+	lower := strings.ToLower(message)
+	for _, hint := range quotaErrorHints {
+		if strings.Contains(lower, hint) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRetryableProviderError reports whether err is worth another attempt. Quota,
+// billing and auth failures are permanent: retrying them only burns calls.
+func isRetryableProviderError(err error) bool {
+	if err == nil {
+		return true
+	}
+	// The caller gave up; another attempt cannot succeed.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	var statusErr *ProviderHTTPError
+	if errors.As(err, &statusErr) {
+		switch statusErr.StatusCode {
+		case http.StatusUnauthorized, http.StatusPaymentRequired, http.StatusForbidden:
+			return false
+		}
+		if statusErr.StatusCode >= http.StatusInternalServerError {
+			return true
+		}
+		return !isQuotaMessage(statusErr.Message)
+	}
+
+	// Providers that do not expose a typed status still surface the quota
+	// wording, e.g. "Add usage credits or subscribe".
+	return !isQuotaMessage(err.Error())
 }
 
 // Chat performs a chat request with retry logic
@@ -123,8 +217,9 @@ func (r *RetryWrapper) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 				return nil, fmt.Errorf("AI chat failed (quick-fail): %w", err)
 			}
 
-			// Check if we should retry on error
-			if !r.config.RetryOnError || attempt >= maxAttempts {
+			// Check if we should retry on error. Permanent failures (quota,
+			// billing, auth) are not worth another call plus a backoff sleep.
+			if !r.config.RetryOnError || !isRetryableProviderError(err) || attempt >= maxAttempts {
 				return nil, fmt.Errorf("AI chat failed after %d attempts: %w", attempt, err)
 			}
 
@@ -326,7 +421,7 @@ func (r *RetryWrapper) Vision(ctx context.Context, req *VisionRequest) (*VisionR
 				zap.Int("attempt", attempt),
 				zap.String("provider", r.provider.Name()))
 
-			if !r.config.RetryOnError || attempt >= maxAttempts {
+			if !r.config.RetryOnError || !isRetryableProviderError(err) || attempt >= maxAttempts {
 				return nil, fmt.Errorf("AI vision failed after %d attempts: %w", attempt, err)
 			}
 

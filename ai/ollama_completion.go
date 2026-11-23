@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -128,13 +127,16 @@ func (o *OllamaProvider) generateCompletion(ctx context.Context, req *ChatReques
 	}
 	var generated ollamaGenerateResponse
 	if err := json.Unmarshal(responseBody, &generated); err != nil {
+		if httpResp.StatusCode >= http.StatusBadRequest {
+			return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: errorBodySnippet(responseBody)}
+		}
 		return nil, fmt.Errorf("unmarshal Ollama generate response: %w", err)
 	}
 	if generated.Error != "" {
-		return nil, errors.New(generated.Error)
+		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode, Message: generated.Error}
 	}
 	if httpResp.StatusCode >= http.StatusBadRequest {
-		return nil, fmt.Errorf("ollama generate failed: %s", httpResp.Status)
+		return nil, &ProviderHTTPError{StatusCode: httpResp.StatusCode}
 	}
 	return &generated, nil
 }

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -721,4 +722,221 @@ func TestRetryWrapperChatUsesCachedImageDescriptions(t *testing.T) {
 	assert.Equal(t, "described", response.Content)
 	mockProvider.AssertNotCalled(t, "Vision", mock.Anything, mock.Anything)
 	mockProvider.AssertExpectations(t)
+}
+
+func testRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries:    2,
+		InitialDelay:  time.Millisecond,
+		MaxDelay:      2 * time.Millisecond,
+		BackoffFactor: 2.0,
+		RetryOnEmpty:  true,
+		RetryOnError:  true,
+	}
+}
+
+func TestRetryWrapperChatDoesNotRetryQuotaError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%: https://ollama.com/plans (ref: abc)",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, response)
+	assert.Contains(t, err.Error(), "Add usage credits")
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatDoesNotRetryQuotaRateLimit(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusTooManyRequests,
+		Message:    "Add usage credits or subscribe and save up to 66%: https://ollama.com/plans",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatDoesNotRetryUntypedQuotaMessage(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := errors.New("error in Ollama chat: Add usage credits or subscribe and save up to 66%: https://ollama.com/plans")
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 1)
+}
+
+func TestRetryWrapperChatRetriesServerError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	serverError := &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(nil, serverError).Once()
+	mockProvider.On("Chat", mock.Anything, mock.Anything).Return(&ChatResponse{
+		Content:      "Hello, world!",
+		Model:        "kimi-k2:cloud",
+		FinishReason: "stop",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "Hello"}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, world!", response.Content)
+	mockProvider.AssertNumberOfCalls(t, "Chat", 2)
+}
+
+func TestRetryWrapperVisionDoesNotRetryQuotaError(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(nil, quotaError).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	_, err := wrapper.Vision(context.Background(), &VisionRequest{
+		Instruction: "Describe this image",
+		ImageURL:    "https://example.com/image.jpg",
+	})
+
+	require.Error(t, err)
+	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
+}
+
+func TestRetryWrapperChatDescribesImagesWithVisionFallback(t *testing.T) {
+	mockProvider := new(MockProvider)
+	quotaError := &ProviderHTTPError{
+		StatusCode: http.StatusPaymentRequired,
+		Message:    "Add usage credits or subscribe and save up to 66%",
+	}
+
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.Model == "qwen3-vl:cloud" && req.ImageURL == "https://example.com/cat.png"
+	})).Return(nil, quotaError).Once()
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return req.Model == "kimi-k2:cloud" &&
+			len(req.Images) == 0 &&
+			len(req.Messages) == 1 &&
+			len(req.Messages[0].ImageRefs) == 0 &&
+			strings.Contains(req.Messages[0].Content, "a cat from the fallback provider")
+	})).Return(&ChatResponse{
+		Content: "described",
+		Model:   "kimi-k2:cloud",
+	}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+
+	fallbackCalls := 0
+	wrapper.SetVisionFallback(func(ctx context.Context, req *VisionRequest) (*VisionResponse, error) {
+		fallbackCalls++
+		assert.Equal(t, defaultVisionInstruction, req.Instruction)
+		assert.Equal(t, "https://example.com/cat.png", req.ImageURL)
+		return &VisionResponse{
+			Description: "a cat from the fallback provider",
+			Provider:    "groq",
+		}, nil
+	})
+
+	response, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{
+			Role:      "user",
+			Content:   "look",
+			ImageRefs: []int{0},
+		}},
+		Images: []ImageContext{{
+			URL:  "https://example.com/cat.png",
+			Type: "image/png",
+		}},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "described", response.Content)
+	assert.Equal(t, 1, fallbackCalls)
+	mockProvider.AssertNumberOfCalls(t, "Vision", 1)
+	mockProvider.AssertExpectations(t)
+}
+
+func TestIsRetryableProviderError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"401 without message", &ProviderHTTPError{StatusCode: http.StatusUnauthorized}, false},
+		{"402 without message", &ProviderHTTPError{StatusCode: http.StatusPaymentRequired}, false},
+		{"403 without message", &ProviderHTTPError{StatusCode: http.StatusForbidden}, false},
+		{"429 asking for credits", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: "Add usage credits or subscribe"}, false},
+		{"plain 429", &ProviderHTTPError{StatusCode: http.StatusTooManyRequests, Message: "rate limit exceeded"}, true},
+		{"503 mentioning billing", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "upstream billing service unavailable"}, true},
+		{"503 mentioning credits", &ProviderHTTPError{StatusCode: http.StatusServiceUnavailable, Message: "usage credits service down"}, true},
+		{
+			// Groq formats its 429 body into an untyped error, and that body links to a billing page.
+			"untyped Groq rate limit",
+			errors.New(`groq API error (status 429): {"error":{"message":"Rate limit reached for model llama-3.3-70b-versatile. Please try again in 2.5s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing","type":"tokens","code":"rate_limit_exceeded"}}`),
+			true,
+		},
+		{"untyped OpenAI quota", errors.New(`{"error":{"code":"insufficient_quota"}}`), false},
+		{"canceled", context.Canceled, false},
+		{"deadline wrapped", errors.Join(errors.New("vision"), context.DeadlineExceeded), false},
+		{"timeout-like transport error", errors.New("dial tcp: i/o timeout"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isRetryableProviderError(tt.err))
+		})
+	}
+}
+
+func TestDescribeImagesForChatSkipsFallbackWhenContextDone(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("ollama")
+	mockProvider.On("Vision", mock.Anything, mock.Anything).Return(nil, context.Canceled)
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	fallbackCalls := 0
+	wrapper.SetVisionFallback(func(context.Context, *VisionRequest) (*VisionResponse, error) {
+		fallbackCalls++
+		return &VisionResponse{Description: "a cat"}, nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	descriptions := wrapper.describeImagesForChat(ctx, []ImageContext{
+		{URL: "https://example.com/a.png", Type: "image/png"},
+		{URL: "https://example.com/b.png", Type: "image/png"},
+	})
+
+	assert.Empty(t, descriptions)
+	assert.Zero(t, fallbackCalls)
 }

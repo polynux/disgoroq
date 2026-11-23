@@ -1,6 +1,8 @@
 package logger
 
 import (
+	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -167,6 +169,59 @@ func TestInitFromConfig_RebuildsLogger(t *testing.T) {
 	assert.NotNil(t, Log)
 	assert.Equal(t, 3, GetRetentionDays())
 	assert.True(t, IsDebugMode())
+}
+
+func TestWarnLogCarriesNoStacktrace(t *testing.T) {
+	warnOutput := captureConsoleLog(t, func() { Warn("warn without stacktrace") })
+	assert.NotContains(t, warnOutput, "\n\t", "expected warn log without stacktrace")
+	assert.Contains(t, warnOutput, "warn without stacktrace")
+
+	errorOutput := captureConsoleLog(t, func() { Error("error with stacktrace") })
+	assert.Contains(t, errorOutput, "\n\t", "expected error log to carry a stacktrace")
+}
+
+// captureConsoleLog runs logFn with a console logger writing to an in-memory pipe.
+func captureConsoleLog(t *testing.T, logFn func()) string {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+
+	originalStderr := os.Stderr
+	os.Stderr = writer
+	defer func() { os.Stderr = originalStderr }()
+
+	logConfig = nil
+	Log = nil
+	InitFromConfig(&cfg.LoggingConfig{
+		Enabled:       true,
+		Level:         "debug",
+		Encoding:      "console",
+		RetentionDays: 1,
+	})
+	t.Cleanup(func() {
+		logConfig = nil
+		Log = zap.NewNop()
+	})
+
+	logFn()
+	_ = Log.Sync()
+	os.Stderr = originalStderr
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close pipe writer: %v", err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("failed to read log output: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("failed to close pipe reader: %v", err)
+	}
+
+	return string(output)
 }
 
 func TestRebuildLogger_UsesHumanReadableTimestamp(t *testing.T) {

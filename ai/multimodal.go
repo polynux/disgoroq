@@ -81,12 +81,15 @@ func cloneMessages(messages []Message) []Message {
 func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []ImageContext) map[int]string {
 	descriptions := make(map[int]string, len(images))
 	for idx, image := range images {
+		if ctx.Err() != nil {
+			break
+		}
 		if description, ok := r.getCachedImageDescription(ctx, image); ok {
 			descriptions[idx] = description
 			continue
 		}
 
-		response, err := r.Vision(ctx, &VisionRequest{
+		request := &VisionRequest{
 			Instruction: defaultVisionInstruction,
 			ImageURL:    image.URL,
 			ImageType:   image.Type,
@@ -94,7 +97,9 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			Height:      image.Height,
 			MaxTokens:   100,
 			Temperature: 0.2,
-		})
+		}
+
+		response, err := r.Vision(ctx, request)
 		if err != nil {
 			logger.Warn("Failed to describe image for chat fallback",
 				zap.Error(err),
@@ -102,7 +107,18 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 				zap.String("image_url", image.URL),
 				zap.String("chat_model", r.chatModel),
 				zap.String("vision_model", r.visionModel))
-			continue
+			if r.visionFallback == nil || ctx.Err() != nil {
+				continue
+			}
+
+			response, err = r.visionFallback(ctx, request)
+			if err != nil {
+				logger.Warn("Failed to describe image for chat with fallback vision",
+					zap.Error(err),
+					zap.String("provider", r.provider.Name()),
+					zap.String("image_url", image.URL))
+				continue
+			}
 		}
 
 		description := strings.TrimSpace(response.Description)

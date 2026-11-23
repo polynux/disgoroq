@@ -258,6 +258,24 @@ func NewService(config ServiceConfig) *Service {
 		return nil
 	}
 
+	// Describing an image for chat must survive one provider's vision model
+	// failing, so each wrapper falls back to the other providers' vision models.
+	for _, provider := range wrappedProviders {
+		wrapper, ok := provider.(*RetryWrapper)
+		if !ok {
+			continue
+		}
+		others := make([]Provider, 0, len(wrappedProviders)-1)
+		for _, other := range wrappedProviders {
+			if other != provider {
+				others = append(others, other)
+			}
+		}
+		if len(others) > 0 {
+			wrapper.SetVisionFallback(NewProviderChain(others...).Vision)
+		}
+	}
+
 	// Create provider chain if multiple providers
 	var chain *ProviderChain
 	var finalProvider Provider
