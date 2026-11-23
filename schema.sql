@@ -167,3 +167,25 @@ ON message_votes(guild_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_message_votes_best
 ON message_votes(is_bot_reply, good_count DESC);
+
+CREATE TABLE IF NOT EXISTS media_library (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    uses INTEGER NOT NULL DEFAULT 1,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    trigger_text TEXT NOT NULL DEFAULT '',
+    description_embedding F32_BLOB(768),
+    trigger_embedding F32_BLOB(768),
+    UNIQUE(url, guild_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_library_guild_kind_desc
+ON media_library(guild_id, kind, description);
+
+CREATE INDEX IF NOT EXISTS idx_media_library_kind_desc
+ON media_library(kind, description);
+

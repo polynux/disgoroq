@@ -272,3 +272,118 @@ ON CONFLICT(guild_id) DO UPDATE SET
 SELECT guild_id, auto_join_channel
 FROM voice_settings
 WHERE auto_join = TRUE;
+
+-- Media Library Queries
+
+-- name: GetDiscordMessageByID :one
+SELECT message_id, message_json
+FROM discord_messages
+WHERE message_id = ? AND deleted_at IS NULL
+LIMIT 1;
+
+-- name: GetRecentBotMessagesByChannel :many
+SELECT content
+FROM discord_messages
+WHERE channel_id = ? AND author_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
+LIMIT ?;
+
+-- name: GetMediaLibraryEntry :one
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen,
+       trigger_text, description_embedding, trigger_embedding
+FROM media_library
+WHERE url = ? AND guild_id = ?
+LIMIT 1;
+
+-- name: UpsertMediaLibraryImport :exec
+INSERT INTO media_library (
+    guild_id, url, kind, description, uses, first_seen, last_seen,
+    trigger_text, description_embedding, trigger_embedding
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(url, guild_id) DO UPDATE SET
+    kind = excluded.kind,
+    description = excluded.description,
+    uses = excluded.uses,
+    first_seen = excluded.first_seen,
+    last_seen = excluded.last_seen,
+    trigger_text = excluded.trigger_text,
+    description_embedding = excluded.description_embedding,
+    trigger_embedding = excluded.trigger_embedding;
+
+-- name: UpsertMediaLibraryLive :exec
+INSERT INTO media_library (
+    guild_id, url, kind, description, uses, first_seen, last_seen,
+    trigger_text, description_embedding, trigger_embedding
+) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+ON CONFLICT(url, guild_id) DO UPDATE SET
+    kind = excluded.kind,
+    description = CASE WHEN excluded.description != '' THEN excluded.description ELSE media_library.description END,
+    uses = media_library.uses + 1,
+    first_seen = MIN(media_library.first_seen, excluded.first_seen),
+    last_seen = MAX(media_library.last_seen, excluded.last_seen),
+    trigger_text = CASE WHEN excluded.trigger_text != '' THEN excluded.trigger_text ELSE media_library.trigger_text END,
+    description_embedding = COALESCE(excluded.description_embedding, media_library.description_embedding),
+    trigger_embedding = COALESCE(excluded.trigger_embedding, media_library.trigger_embedding);
+
+-- name: FindMediaLibraryExactDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+ORDER BY uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: FindMediaLibraryExactDescriptionCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+ORDER BY uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryByDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryByDescriptionCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryByTrigger :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryByTriggerCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryAllKindsByDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+
+-- name: SearchMediaLibraryAllKindsByTrigger :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?;
+

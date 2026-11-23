@@ -78,6 +78,20 @@ type GuildSetting struct {
 	Value   string
 }
 
+type MediaLibrary struct {
+	ID                   int64
+	GuildID              string
+	Url                  string
+	Kind                 string
+	Description          string
+	Uses                 int64
+	FirstSeen            int64
+	LastSeen             int64
+	TriggerText          string
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+}
+
 type MessageBuffer struct {
 	ID               int64
 	GuildID          string

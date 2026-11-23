@@ -110,6 +110,136 @@ func (q *Queries) DeleteSummariesForUser(ctx context.Context, arg DeleteSummarie
 	return err
 }
 
+const findMediaLibraryExactDescription = `-- name: FindMediaLibraryExactDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+ORDER BY uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type FindMediaLibraryExactDescriptionParams struct {
+	GuildID string
+	Kind    string
+	LOWER   string
+	Limit   int64
+}
+
+type FindMediaLibraryExactDescriptionRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+}
+
+func (q *Queries) FindMediaLibraryExactDescription(ctx context.Context, arg FindMediaLibraryExactDescriptionParams) ([]FindMediaLibraryExactDescriptionRow, error) {
+	rows, err := q.db.QueryContext(ctx, findMediaLibraryExactDescription,
+		arg.GuildID,
+		arg.Kind,
+		arg.LOWER,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindMediaLibraryExactDescriptionRow
+	for rows.Next() {
+		var i FindMediaLibraryExactDescriptionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const findMediaLibraryExactDescriptionCrossGuild = `-- name: FindMediaLibraryExactDescriptionCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+ORDER BY uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type FindMediaLibraryExactDescriptionCrossGuildParams struct {
+	GuildID string
+	Kind    string
+	LOWER   string
+	Limit   int64
+}
+
+type FindMediaLibraryExactDescriptionCrossGuildRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+}
+
+func (q *Queries) FindMediaLibraryExactDescriptionCrossGuild(ctx context.Context, arg FindMediaLibraryExactDescriptionCrossGuildParams) ([]FindMediaLibraryExactDescriptionCrossGuildRow, error) {
+	rows, err := q.db.QueryContext(ctx, findMediaLibraryExactDescriptionCrossGuild,
+		arg.GuildID,
+		arg.Kind,
+		arg.LOWER,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindMediaLibraryExactDescriptionCrossGuildRow
+	for rows.Next() {
+		var i FindMediaLibraryExactDescriptionCrossGuildRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAllGuilds = `-- name: GetAllGuilds :many
 SELECT DISTINCT guild_id FROM guild_settings
 `
@@ -179,6 +309,27 @@ func (q *Queries) GetAttachmentCacheEntry(ctx context.Context, arg GetAttachment
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const getDiscordMessageByID = `-- name: GetDiscordMessageByID :one
+
+SELECT message_id, message_json
+FROM discord_messages
+WHERE message_id = ? AND deleted_at IS NULL
+LIMIT 1
+`
+
+type GetDiscordMessageByIDRow struct {
+	MessageID   string
+	MessageJson string
+}
+
+// Media Library Queries
+func (q *Queries) GetDiscordMessageByID(ctx context.Context, messageID string) (GetDiscordMessageByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getDiscordMessageByID, messageID)
+	var i GetDiscordMessageByIDRow
+	err := row.Scan(&i.MessageID, &i.MessageJson)
 	return i, err
 }
 
@@ -531,6 +682,38 @@ func (q *Queries) GetLatestSummaryForUser(ctx context.Context, arg GetLatestSumm
 	return i, err
 }
 
+const getMediaLibraryEntry = `-- name: GetMediaLibraryEntry :one
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen,
+       trigger_text, description_embedding, trigger_embedding
+FROM media_library
+WHERE url = ? AND guild_id = ?
+LIMIT 1
+`
+
+type GetMediaLibraryEntryParams struct {
+	Url     string
+	GuildID string
+}
+
+func (q *Queries) GetMediaLibraryEntry(ctx context.Context, arg GetMediaLibraryEntryParams) (MediaLibrary, error) {
+	row := q.db.QueryRowContext(ctx, getMediaLibraryEntry, arg.Url, arg.GuildID)
+	var i MediaLibrary
+	err := row.Scan(
+		&i.ID,
+		&i.GuildID,
+		&i.Url,
+		&i.Kind,
+		&i.Description,
+		&i.Uses,
+		&i.FirstSeen,
+		&i.LastSeen,
+		&i.TriggerText,
+		&i.DescriptionEmbedding,
+		&i.TriggerEmbedding,
+	)
+	return i, err
+}
+
 const getMessageVote = `-- name: GetMessageVote :one
 SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
        content, reply_to_message_id, reply_to_content, provider, model, good_count,
@@ -560,6 +743,43 @@ func (q *Queries) GetMessageVote(ctx context.Context, messageID string) (Message
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getRecentBotMessagesByChannel = `-- name: GetRecentBotMessagesByChannel :many
+SELECT content
+FROM discord_messages
+WHERE channel_id = ? AND author_id = ? AND deleted_at IS NULL
+ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
+LIMIT ?
+`
+
+type GetRecentBotMessagesByChannelParams struct {
+	ChannelID string
+	AuthorID  string
+	Limit     int64
+}
+
+func (q *Queries) GetRecentBotMessagesByChannel(ctx context.Context, arg GetRecentBotMessagesByChannelParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, getRecentBotMessagesByChannel, arg.ChannelID, arg.AuthorID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return nil, err
+		}
+		items = append(items, content)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getRecentDiscordMessagesByChannel = `-- name: GetRecentDiscordMessagesByChannel :many
@@ -966,6 +1186,402 @@ func (q *Queries) MarkMessagesAsProcessed(ctx context.Context, arg MarkMessagesA
 	return err
 }
 
+const searchMediaLibraryAllKindsByDescription = `-- name: SearchMediaLibraryAllKindsByDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryAllKindsByDescriptionParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Limit    int64
+}
+
+type SearchMediaLibraryAllKindsByDescriptionRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryAllKindsByDescription(ctx context.Context, arg SearchMediaLibraryAllKindsByDescriptionParams) ([]SearchMediaLibraryAllKindsByDescriptionRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryAllKindsByDescription, arg.Vector32, arg.GuildID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryAllKindsByDescriptionRow
+	for rows.Next() {
+		var i SearchMediaLibraryAllKindsByDescriptionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMediaLibraryAllKindsByTrigger = `-- name: SearchMediaLibraryAllKindsByTrigger :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryAllKindsByTriggerParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Limit    int64
+}
+
+type SearchMediaLibraryAllKindsByTriggerRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryAllKindsByTrigger(ctx context.Context, arg SearchMediaLibraryAllKindsByTriggerParams) ([]SearchMediaLibraryAllKindsByTriggerRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryAllKindsByTrigger, arg.Vector32, arg.GuildID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryAllKindsByTriggerRow
+	for rows.Next() {
+		var i SearchMediaLibraryAllKindsByTriggerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMediaLibraryByDescription = `-- name: SearchMediaLibraryByDescription :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryByDescriptionParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Kind     string
+	Limit    int64
+}
+
+type SearchMediaLibraryByDescriptionRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryByDescription(ctx context.Context, arg SearchMediaLibraryByDescriptionParams) ([]SearchMediaLibraryByDescriptionRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByDescription,
+		arg.Vector32,
+		arg.GuildID,
+		arg.Kind,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryByDescriptionRow
+	for rows.Next() {
+		var i SearchMediaLibraryByDescriptionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMediaLibraryByDescriptionCrossGuild = `-- name: SearchMediaLibraryByDescriptionCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(description_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND description_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryByDescriptionCrossGuildParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Kind     string
+	Limit    int64
+}
+
+type SearchMediaLibraryByDescriptionCrossGuildRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryByDescriptionCrossGuild(ctx context.Context, arg SearchMediaLibraryByDescriptionCrossGuildParams) ([]SearchMediaLibraryByDescriptionCrossGuildRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByDescriptionCrossGuild,
+		arg.Vector32,
+		arg.GuildID,
+		arg.Kind,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryByDescriptionCrossGuildRow
+	for rows.Next() {
+		var i SearchMediaLibraryByDescriptionCrossGuildRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMediaLibraryByTrigger = `-- name: SearchMediaLibraryByTrigger :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id = ? AND kind = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryByTriggerParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Kind     string
+	Limit    int64
+}
+
+type SearchMediaLibraryByTriggerRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryByTrigger(ctx context.Context, arg SearchMediaLibraryByTriggerParams) ([]SearchMediaLibraryByTriggerRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByTrigger,
+		arg.Vector32,
+		arg.GuildID,
+		arg.Kind,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryByTriggerRow
+	for rows.Next() {
+		var i SearchMediaLibraryByTriggerRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchMediaLibraryByTriggerCrossGuild = `-- name: SearchMediaLibraryByTriggerCrossGuild :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+FROM media_library
+WHERE guild_id != ? AND kind = ? AND trigger_embedding IS NOT NULL
+ORDER BY distance ASC, uses DESC, last_seen DESC
+LIMIT ?
+`
+
+type SearchMediaLibraryByTriggerCrossGuildParams struct {
+	Vector32 interface{}
+	GuildID  string
+	Kind     string
+	Limit    int64
+}
+
+type SearchMediaLibraryByTriggerCrossGuildRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+	Distance    interface{}
+}
+
+func (q *Queries) SearchMediaLibraryByTriggerCrossGuild(ctx context.Context, arg SearchMediaLibraryByTriggerCrossGuildParams) ([]SearchMediaLibraryByTriggerCrossGuildRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByTriggerCrossGuild,
+		arg.Vector32,
+		arg.GuildID,
+		arg.Kind,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchMediaLibraryByTriggerCrossGuildRow
+	for rows.Next() {
+		var i SearchMediaLibraryByTriggerCrossGuildRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+			&i.Distance,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setGuildSetting = `-- name: SetGuildSetting :exec
 INSERT OR REPLACE INTO guild_settings (guild_id, name, value) VALUES (?, ?, ?)
 `
@@ -1163,6 +1779,94 @@ type UpsertDiscordMessageCacheStateParams struct {
 
 func (q *Queries) UpsertDiscordMessageCacheState(ctx context.Context, arg UpsertDiscordMessageCacheStateParams) error {
 	_, err := q.db.ExecContext(ctx, upsertDiscordMessageCacheState, arg.ChannelID, arg.GuildID, arg.HistoryExhausted)
+	return err
+}
+
+const upsertMediaLibraryImport = `-- name: UpsertMediaLibraryImport :exec
+INSERT INTO media_library (
+    guild_id, url, kind, description, uses, first_seen, last_seen,
+    trigger_text, description_embedding, trigger_embedding
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(url, guild_id) DO UPDATE SET
+    kind = excluded.kind,
+    description = excluded.description,
+    uses = excluded.uses,
+    first_seen = excluded.first_seen,
+    last_seen = excluded.last_seen,
+    trigger_text = excluded.trigger_text,
+    description_embedding = excluded.description_embedding,
+    trigger_embedding = excluded.trigger_embedding
+`
+
+type UpsertMediaLibraryImportParams struct {
+	GuildID              string
+	Url                  string
+	Kind                 string
+	Description          string
+	Uses                 int64
+	FirstSeen            int64
+	LastSeen             int64
+	TriggerText          string
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+}
+
+func (q *Queries) UpsertMediaLibraryImport(ctx context.Context, arg UpsertMediaLibraryImportParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMediaLibraryImport,
+		arg.GuildID,
+		arg.Url,
+		arg.Kind,
+		arg.Description,
+		arg.Uses,
+		arg.FirstSeen,
+		arg.LastSeen,
+		arg.TriggerText,
+		arg.DescriptionEmbedding,
+		arg.TriggerEmbedding,
+	)
+	return err
+}
+
+const upsertMediaLibraryLive = `-- name: UpsertMediaLibraryLive :exec
+INSERT INTO media_library (
+    guild_id, url, kind, description, uses, first_seen, last_seen,
+    trigger_text, description_embedding, trigger_embedding
+) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+ON CONFLICT(url, guild_id) DO UPDATE SET
+    kind = excluded.kind,
+    description = CASE WHEN excluded.description != '' THEN excluded.description ELSE media_library.description END,
+    uses = media_library.uses + 1,
+    first_seen = MIN(media_library.first_seen, excluded.first_seen),
+    last_seen = MAX(media_library.last_seen, excluded.last_seen),
+    trigger_text = CASE WHEN excluded.trigger_text != '' THEN excluded.trigger_text ELSE media_library.trigger_text END,
+    description_embedding = COALESCE(excluded.description_embedding, media_library.description_embedding),
+    trigger_embedding = COALESCE(excluded.trigger_embedding, media_library.trigger_embedding)
+`
+
+type UpsertMediaLibraryLiveParams struct {
+	GuildID              string
+	Url                  string
+	Kind                 string
+	Description          string
+	FirstSeen            int64
+	LastSeen             int64
+	TriggerText          string
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+}
+
+func (q *Queries) UpsertMediaLibraryLive(ctx context.Context, arg UpsertMediaLibraryLiveParams) error {
+	_, err := q.db.ExecContext(ctx, upsertMediaLibraryLive,
+		arg.GuildID,
+		arg.Url,
+		arg.Kind,
+		arg.Description,
+		arg.FirstSeen,
+		arg.LastSeen,
+		arg.TriggerText,
+		arg.DescriptionEmbedding,
+		arg.TriggerEmbedding,
+	)
 	return err
 }
 
