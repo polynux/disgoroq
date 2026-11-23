@@ -910,6 +910,8 @@ func TestIsRetryableProviderError(t *testing.T) {
 		{"400 bad request", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: "reasoning_effort 'none' is not supported"}, false},
 		{"404 not found", &ProviderHTTPError{StatusCode: http.StatusNotFound}, false},
 		{"408 timeout", &ProviderHTTPError{StatusCode: http.StatusRequestTimeout}, true},
+		{"400 OpenCode upstream server_error", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: `{"error":{"type":"server_error","code":"upstream_error","message":"Upstream request failed"}}`}, true},
+		{"400 OpenCode invalid_request_error", &ProviderHTTPError{StatusCode: http.StatusBadRequest, Message: `{"error":{"type":"invalid_request_error","code":"upstream_error"}}`}, false},
 		{"canceled", context.Canceled, false},
 		{"deadline wrapped", errors.Join(errors.New("vision"), context.DeadlineExceeded), false},
 		{"timeout-like transport error", errors.New("dial tcp: i/o timeout"), true},
@@ -957,5 +959,27 @@ func TestDescribeImagesForChatPassesSessionID(t *testing.T) {
 	}, "guild:channel")
 
 	assert.Equal(t, map[int]string{0: "a cat"}, descriptions)
+	mockProvider.AssertExpectations(t)
+}
+
+// Chat must hand its SessionID to the image descriptions it prepares.
+func TestRetryWrapperChatPassesSessionIDToImageDescriptions(t *testing.T) {
+	mockProvider := new(MockProvider)
+	mockProvider.On("Name").Return("opencode")
+	mockProvider.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.SessionID == "guild:channel"
+	})).Return(&VisionResponse{Description: "a cat"}, nil).Once()
+	mockProvider.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
+		return req.SessionID == "guild:channel"
+	})).Return(&ChatResponse{Content: "Joli chat", FinishReason: "stop"}, nil).Once()
+
+	wrapper := NewRetryWrapper(mockProvider, testRetryConfig(), 1, "kimi-k2:cloud", "qwen3-vl:cloud", nil)
+	resp, err := wrapper.Chat(context.Background(), &ChatRequest{
+		Messages:  []Message{{Role: "user", Content: "Regarde", ImageRefs: []int{0}}},
+		Images:    []ImageContext{{URL: "https://example.com/a.png", Type: "image/png"}},
+		SessionID: "guild:channel",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Joli chat", resp.Content)
 	mockProvider.AssertExpectations(t)
 }

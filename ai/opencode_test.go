@@ -676,6 +676,9 @@ func TestOpencodeReasoningEffortTable(t *testing.T) {
 		{"deepseek-v4.1-flash", false, "none"},
 		{"deepseek-v4-pro", false, "none"},
 		{"kimi-k3", false, "none"},
+		{"kimi-k3.1-pro", false, "none"},
+		{"glm-5.3-flash", false, "none"},
+		{"minimax-m3.1-flash", false, "none"},
 		{"glm-5.3", false, "none"},
 		{"minimax-m3", false, "none"},
 		{"muse-spark-1.3-contributor", false, "minimal"},
@@ -698,10 +701,55 @@ func TestStripLeadingThinkBlock(t *testing.T) {
 		"<think>We need answer French</think>Bonjour !": "Bonjour !",
 		"\n <think>a\nb</think>\n\nBonjour !":           "Bonjour !",
 		"<think>never closed":                           "",
+		"<think>a</think>\n<think>b</think>Bonjour":     "Bonjour",
 		"Bonjour <think>not leading</think>":            "Bonjour <think>not leading</think>",
 		"":                                              "",
 	}
 	for in, want := range tests {
 		assert.Equal(t, want, stripLeadingThinkBlock(in), "input %q", in)
 	}
+}
+
+// The provider strips inline reasoning and forwards the vision SessionID, end to end.
+func TestOpencodeVisionStripsThinkAndSendsSessionID(t *testing.T) {
+	var gotSession string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotSession = r.Header.Get("x-opencode-session")
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"model":"minimax-m3","choices":[{"message":{"content":"<think>look at it</think>\nA cat."},"finish_reason":"stop"}]}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpencodeProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	resp, err := provider.Vision(context.Background(), &VisionRequest{
+		Model:       "minimax-m3",
+		Instruction: "describe",
+		ImageURL:    "data:image/png;base64,AAAA",
+		SessionID:   "guild:channel",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "A cat.", resp.Description)
+	assert.Equal(t, "guild:channel", gotSession)
+}
+
+func TestOpencodeChatStripsInlineThink(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, err := io.WriteString(w, `{"model":"minimax-m3","choices":[{"message":{"content":"<think>We need French</think>Bonjour !"},"finish_reason":"stop"}]}`)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpencodeProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	resp, err := provider.Chat(context.Background(), &ChatRequest{
+		Model:    "minimax-m3",
+		Messages: []Message{{Role: "user", Content: "Dis bonjour"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Bonjour !", resp.Content)
 }

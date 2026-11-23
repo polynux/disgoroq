@@ -170,6 +170,11 @@ func isRetryableProviderError(err error) bool {
 		case http.StatusRequestTimeout, http.StatusTooManyRequests:
 			return !isQuotaMessage(statusErr.Message)
 		}
+		// OpenCode Go wraps upstream failures in a 400 whose error type is
+		// "server_error"; those can be transient, unlike "invalid_request_error".
+		if statusErr.StatusCode == http.StatusBadRequest && strings.Contains(statusErr.Message, `"server_error"`) {
+			return !isQuotaMessage(statusErr.Message)
+		}
 		if statusErr.StatusCode >= http.StatusBadRequest {
 			return false
 		}

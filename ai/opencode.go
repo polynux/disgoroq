@@ -315,10 +315,12 @@ type opencodeChatResponse struct {
 	} `json:"usage"`
 }
 
-// opencodeNoReasoningPrefixes are the model families checked live (2026-11-23)
-// to accept reasoning_effort "none" on /chat/completions. Other models either
-// reject "none" (kimi-k2.7-code: "only type=enabled is allowed") or were not
-// checked, so they get no reasoning_effort field and keep their default.
+// opencodeNoReasoningPrefixes are the model families that accept
+// reasoning_effort "none" on /chat/completions. Checked live on 2026-11-23:
+// deepseek-v4.1-flash, deepseek-v4-pro, kimi-k3, kimi-k3.1-pro, glm-5.3,
+// glm-5.3-flash, minimax-m3 and minimax-m3.1-flash. Models outside these
+// families either reject "none" (kimi-k2.7-code: "only type=enabled is
+// allowed") or were not checked, so they get no reasoning_effort field.
 var opencodeNoReasoningPrefixes = []string{"deepseek-", "kimi-k3", "glm-5.3", "minimax-m3"}
 
 // opencodeReasoningEffort picks the reasoning_effort to send when thinking is
@@ -348,14 +350,22 @@ func opencodeReasoningEffort(model string, thinkingEnabled bool) string {
 // (minimax-m3) put their reasoning inline in content instead of
 // reasoning_content, and it must not reach users.
 func stripLeadingThinkBlock(content string) string {
-	trimmed := strings.TrimLeft(content, " \t\r\n")
-	if !strings.HasPrefix(trimmed, "<think>") {
-		return content
+	stripped := false
+	for {
+		trimmed := strings.TrimLeft(content, " \t\r\n")
+		if !strings.HasPrefix(trimmed, "<think>") {
+			if stripped {
+				return trimmed
+			}
+			return content
+		}
+		end := strings.Index(trimmed, "</think>")
+		if end < 0 {
+			// Unterminated reasoning, e.g. cut off by max_tokens: nothing in it
+			// is a reply.
+			return ""
+		}
+		content = trimmed[end+len("</think>"):]
+		stripped = true
 	}
-	end := strings.Index(trimmed, "</think>")
-	if end < 0 {
-		// Unterminated reasoning: nothing in it is a reply.
-		return ""
-	}
-	return strings.TrimLeft(trimmed[end+len("</think>"):], " \t\r\n")
 }
