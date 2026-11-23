@@ -28,6 +28,7 @@ type OllamaProvider struct {
 	completionPromptChars int
 	completionBotLines    int
 	completionMediaTags   string
+	mediaResolver         MediaResolver
 }
 
 type ollamaChatChunk struct {

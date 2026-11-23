@@ -225,6 +225,101 @@ func TestCleanCompletionReply(t *testing.T) {
 	assert.Equal(t, "x", cleanCompletionReply(" x [sticker: Wave]", "Bot"))
 	assert.Equal(t, "y", cleanCompletionReply(" y [video] [fichier]", "Bot"))
 	assert.Equal(t, "z", cleanCompletionReply(" z [gif] [lien] [image] [son] [steam] [tweet] [tiktok] [insta]", "Bot"))
+	assert.Equal(t, "", cleanCompletionReply(" [gif: cat smile]", "Bot"))
+	assert.Equal(t, "", cleanCompletionReply("[youtube: some title]", "Bot"))
+	assert.Equal(t, "", cleanCompletionReply(" §bot: [gif: cat smile]", "Bot"))
+}
+
+type stubMediaResolver struct {
+	reqs   []MediaResolveRequest
+	result MediaResolveResult
+	ok     bool
+}
+
+func (s *stubMediaResolver) Resolve(_ context.Context, req MediaResolveRequest) (MediaResolveResult, bool) {
+	s.reqs = append(s.reqs, req)
+	return s.result, s.ok
+}
+
+func TestOllamaCompletionMediaResolver(t *testing.T) {
+	t.Run("text and tag appends url on its own line", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"response":" mdr [gif: cat smile]"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "[gif: cat smile]", URL: "https://tenor.com/view/cat-smile-1", Similarity: 1.0},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", BotID: "bot-1", GuildID: "g-1", ChannelID: "c-1",
+			TargetMessageID: "m-1",
+			Messages: []Message{{
+				Role: RoleUser, MessageID: "m-1", AuthorID: "1", AuthorNick: "Alice",
+				Text: "regarde https://tenor.com/view/dog-bark-gif-99",
+			}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "mdr\nhttps://tenor.com/view/cat-smile-1", resp.Content)
+		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "g-1", resolver.reqs[0].GuildID)
+		assert.Equal(t, "c-1", resolver.reqs[0].ChannelID)
+		assert.Equal(t, "bot-1", resolver.reqs[0].BotID)
+		assert.Equal(t, "regarde [gif: dog bark]", resolver.reqs[0].TargetText)
+	})
+
+	t.Run("tag-only reply becomes whole url without retry", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = io.WriteString(w, `{"response":" [gif: cat smile]"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		provider.SetMediaResolver(&stubMediaResolver{
+			result: MediaResolveResult{Tag: "[gif: cat smile]", URL: "https://tenor.com/view/cat-smile-1", Similarity: 0.92},
+			ok:     true,
+		})
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", GuildID: "g-1",
+			Messages: []Message{{Role: RoleUser, AuthorID: "1", AuthorNick: "Alice", Text: "yo"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.Content)
+		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("unmatched tag is stripped as today", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"response":" lol [gif: unknown]"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		provider.SetMediaResolver(&stubMediaResolver{ok: false})
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", GuildID: "g-1",
+			Messages: []Message{{Role: RoleUser, AuthorID: "1", AuthorNick: "Alice", Text: "yo"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "lol", resp.Content)
+		assert.Empty(t, resp.MediaURL)
+	})
 }
 
 func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {

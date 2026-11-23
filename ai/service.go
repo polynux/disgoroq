@@ -70,6 +70,9 @@ type ServiceConfig struct {
 
 	// Optional tool-calling runtime configuration.
 	ToolConfig ToolRuntimeConfig
+
+	// Optional media library resolver for completion-mode media tags.
+	MediaResolver MediaResolver
 }
 
 // Validate checks if the service configuration is valid
@@ -337,6 +340,9 @@ func NewService(config ServiceConfig) *Service {
 			}
 			ollamaProvider.SetCompletionMode(config.OllamaCompletion)
 			ollamaProvider.SetCompletionConfig(config.OllamaCompletionSpeaker, config.OllamaCompletionPromptChars, config.OllamaCompletionBotLines, config.OllamaCompletionMediaTags)
+			if config.MediaResolver != nil {
+				ollamaProvider.SetMediaResolver(config.MediaResolver)
+			}
 			wrapper = NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,

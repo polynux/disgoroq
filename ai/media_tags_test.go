@@ -119,3 +119,116 @@ func TestRenderMediaMessageFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMediaTags(t *testing.T) {
+	cases := []struct {
+		name  string
+		reply string
+		want  []MediaTag
+	}{
+		{
+			name:  "bare gif",
+			reply: "mdr [gif]",
+			want:  []MediaTag{{Raw: "[gif]", Kind: "gif", Description: ""}},
+		},
+		{
+			name:  "described gif with extra spaces and uppercase",
+			reply: "regardez [GIF:   cat   smile  ]",
+			want:  []MediaTag{{Raw: "[GIF:   cat   smile  ]", Kind: "gif", Description: "cat smile"}},
+		},
+		{
+			name:  "gif with empty colon treated as bare gif",
+			reply: "[gif:   ]",
+			want:  []MediaTag{{Raw: "[gif:   ]", Kind: "gif", Description: ""}},
+		},
+		{
+			name:  "described link kinds preserve inner colons",
+			reply: "tiens [youtube: Rick: Astley] et [tweet: breaking: news] [tiktok: danse] [insta: photo] [son: track] [steam: Half-Life 2]",
+			want: []MediaTag{
+				{Raw: "[youtube: Rick: Astley]", Kind: "youtube", Description: "Rick: Astley"},
+				{Raw: "[tweet: breaking: news]", Kind: "tweet", Description: "breaking: news"},
+				{Raw: "[tiktok: danse]", Kind: "tiktok", Description: "danse"},
+				{Raw: "[insta: photo]", Kind: "insta", Description: "photo"},
+				{Raw: "[son: track]", Kind: "son", Description: "track"},
+				{Raw: "[steam: Half-Life 2]", Kind: "steam", Description: "Half-Life 2"},
+			},
+		},
+		{
+			name:  "bare link tags and non-resolvable tags are ignored",
+			reply: "salut [youtube] [tweet:] [tiktok:  ] [image] [lien] [lien: site] [video] [fichier] [sticker: Wave]",
+			want:  nil,
+		},
+		{
+			name:  "plain text has no tags",
+			reply: "juste du texte normal",
+			want:  nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, ParseMediaTags(tc.reply))
+		})
+	}
+}
+
+func TestDiscordCDNAndCanonicalize(t *testing.T) {
+	require.True(t, IsDiscordCDNURL("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&is=2"))
+	require.True(t, IsDiscordCDNURL("https://MEDIA.DISCORDAPP.NET/attachments/1/2/cat.gif?width=100"))
+	require.False(t, IsDiscordCDNURL("https://tenor.com/view/cat-gif-123"))
+	require.False(t, IsDiscordCDNURL("https://example.com/?ref=cdn.discordapp.com"))
+
+	require.Equal(t,
+		"https://cdn.discordapp.com/attachments/1/2/cat.gif",
+		CanonicalizeMediaURL("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&is=2"),
+	)
+	require.Equal(t,
+		"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+		CanonicalizeMediaURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+	)
+}
+
+func TestExtractMediaURLs(t *testing.T) {
+	msg := Message{
+		Content: "regarde https://tenor.com/view/cat-smile-gif-12345678, " +
+			"https://cdn.discordapp.com/attachments/1/2/funny-cat.gif?ex=abc&is=def! " +
+			"https://youtu.be/abc123. " +
+			"https://twitter.com/user/status/42 " +
+			"https://example.com/page " +
+			"https://tenor.com/view/12345678",
+		Embeds: []MessageEmbed{
+			{URL: "https://youtu.be/abc123", Title: "Best Video [HD]"},
+			{URL: "https://twitter.com/user/status/42", Description: "Tweet body"},
+		},
+	}
+
+	got := ExtractMediaURLs(msg)
+	require.Equal(t, []ExtractedMedia{
+		{URL: "https://tenor.com/view/cat-smile-gif-12345678", Kind: "gif", Description: "cat smile"},
+		{URL: "https://cdn.discordapp.com/attachments/1/2/funny-cat.gif", Kind: "gif", Description: "funny cat"},
+		{URL: "https://youtu.be/abc123", Kind: "youtube", Description: "Best Video HD"},
+		{URL: "https://twitter.com/user/status/42", Kind: "tweet", Description: "Tweet body"},
+		{URL: "https://tenor.com/view/12345678", Kind: "gif", Description: ""},
+	}, got)
+
+	// Undescribed link without embed is not extracted.
+	undescribed := Message{Content: "https://youtu.be/noembed"}
+	require.Empty(t, ExtractMediaURLs(undescribed))
+
+	// Duplicate Discord CDN URL with different query tokens is deduplicated.
+	dupCDN := Message{
+		Content: "https://cdn.discordapp.com/attachments/1/2/dance.gif?ex=1 https://cdn.discordapp.com/attachments/1/2/dance.gif?ex=2",
+	}
+	require.Equal(t, []ExtractedMedia{
+		{URL: "https://cdn.discordapp.com/attachments/1/2/dance.gif", Kind: "gif", Description: "dance"},
+	}, ExtractMediaURLs(dupCDN))
+}
+
+func TestAssembleMediaReply(t *testing.T) {
+	require.Equal(t, "mdr\nhttps://tenor.com/view/cat-1", AssembleMediaReply("mdr", "https://tenor.com/view/cat-1"))
+	require.Equal(t, "https://tenor.com/view/cat-1", AssembleMediaReply("", "https://tenor.com/view/cat-1"))
+	require.Equal(t, "https://tenor.com/view/cat-1", AssembleMediaReply("   ", "https://tenor.com/view/cat-1"))
+	require.Equal(t, "mdr", AssembleMediaReply("mdr", ""))
+	require.Equal(t, "", AssembleMediaReply("", ""))
+}
+

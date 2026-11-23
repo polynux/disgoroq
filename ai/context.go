@@ -383,3 +383,21 @@ func messageMedia(message discord.Message) ([]MessageAttachment, []string, []Mes
 
 	return attachments, stickers, embeds
 }
+
+// MessageFromDiscord converts a Discord message into an ai.Message with the
+// normalized text and media metadata needed by the media-tag renderer and media library.
+func MessageFromDiscord(message discord.Message) Message {
+	normalizedContent := emoji.NormalizeDiscordEmojiShortcodes(message.Content)
+	attachments, stickers, embeds := messageMedia(message)
+	return Message{
+		Content:     normalizedContent,
+		Text:        normalizedContent,
+		AuthorID:    message.Author.ID.String(),
+		AuthorNick:  message.Author.Username,
+		MessageID:   message.ID.String(),
+		AuthorBot:   message.Author.Bot || message.WebhookID != nil,
+		Attachments: attachments,
+		Stickers:    stickers,
+		Embeds:      embeds,
+	}
+}

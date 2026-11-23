@@ -47,6 +47,9 @@ type ChatRequest struct {
 	Images          []ImageContext        // Images referenced in messages
 	AttachmentCache *AttachmentCacheInput // Optional detached attachment summary cache key
 	BotName         string                // Bot's display name, the speaker of its lines in completion mode
+	BotID           string                // Bot's Discord user ID (for channel repeat-window checks)
+	GuildID         string                // Discord guild ID
+	ChannelID       string                // Discord channel ID
 	TargetMessageID string                // Discord message the completion should answer
 	TargetFromBot   bool                  // Triggering message was written by another bot or a webhook
 	SessionID       string                // Optional stable conversation key for providers that route by session
@@ -133,6 +136,7 @@ type VisionRequest struct {
 // ChatResponse contains the AI-generated text response
 type ChatResponse struct {
 	Content          string // Generated text
+	MediaURL         string // Optional media library URL appended on its own line in Content
 	ToolCalls        []ToolCall
 	Provider         string // Provider that generated the response
 	Model            string // Model that generated the response

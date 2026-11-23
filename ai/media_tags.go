@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -516,3 +517,180 @@ func isPythonSpace(r rune) bool {
 	}
 	return r >= 0x2000 && r <= 0x200a
 }
+
+// mediaResolvableTagPattern matches tags that can be resolved by the media library:
+// bare [gif] and described [gif: ...], [youtube: ...], [tweet: ...], [tiktok: ...],
+// [insta: ...], [son: ...], [steam: ...].
+var mediaResolvableTagPattern = regexp.MustCompile(`(?i)\[(gif|youtube|tweet|tiktok|insta|son|steam)(?::([^\]]*))?\]`)
+
+// ExtractedMedia represents a gif or described-link URL extracted from a message
+// using the v1 media-tag rules.
+type ExtractedMedia struct {
+	URL         string
+	Kind        string
+	Description string
+}
+
+// MediaTag represents a resolvable media tag found in a raw completion reply.
+type MediaTag struct {
+	Raw         string
+	Kind        string
+	Description string
+}
+
+// IsDiscordCDNURL reports whether raw points to cdn.discordapp.com or media.discordapp.net.
+func IsDiscordCDNURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
+		host := strings.ToLower(u.Hostname())
+		return host == "cdn.discordapp.com" || host == "media.discordapp.net"
+	}
+	if !strings.Contains(trimmed, "://") {
+		if u, err := url.Parse("https://" + trimmed); err == nil && u.Host != "" {
+			host := strings.ToLower(u.Hostname())
+			return host == "cdn.discordapp.com" || host == "media.discordapp.net"
+		}
+	}
+	return false
+}
+
+// CanonicalizeMediaURL removes the query string from Discord CDN URLs and leaves
+// all other URLs unchanged.
+func CanonicalizeMediaURL(raw string) string {
+	if !IsDiscordCDNURL(raw) {
+		return raw
+	}
+	if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+		return raw[:idx]
+	}
+	return raw
+}
+
+// ExtractAllURLs returns all canonicalized URLs found in content after stripping
+// trailing punctuation.
+func ExtractAllURLs(content string) []string {
+	matches := mediaURLPattern.FindAllString(content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	urls := make([]string, 0, len(matches))
+	for _, match := range matches {
+		raw, _ := stripMediaURLTrailingPunctuation(match)
+		if raw == "" {
+			continue
+		}
+		urls = append(urls, CanonicalizeMediaURL(raw))
+	}
+	return urls
+}
+
+func isDescribedLinkKind(kind string) bool {
+	switch kind {
+	case "youtube", "tweet", "tiktok", "insta", "son", "steam":
+		return true
+	default:
+		return false
+	}
+}
+
+// ExtractMediaURLs extracts gif and described-link URLs from msg using the same
+// URL detection, kind classification, gif words, embed description matching,
+// trailing-punctuation stripping, and Discord CDN canonicalization as v1 rendering.
+func ExtractMediaURLs(msg Message) []ExtractedMedia {
+	matches := mediaURLPattern.FindAllString(msg.Content, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+
+	nonGifURLs := 0
+	for _, match := range matches {
+		raw, _ := stripMediaURLTrailingPunctuation(match)
+		if mediaURLKind(raw, true) != "gif" {
+			nonGifURLs++
+		}
+	}
+
+	seen := make(map[string]bool, len(matches))
+	result := make([]ExtractedMedia, 0, len(matches))
+	for _, match := range matches {
+		raw, _ := stripMediaURLTrailingPunctuation(match)
+		if raw == "" {
+			continue
+		}
+		kind := mediaURLKind(raw, true)
+		var description string
+		switch {
+		case kind == "gif":
+			words := gifWordsFromSegment(lastURLPathSegment(raw))
+			description = strings.Join(words, " ")
+		case isDescribedLinkKind(kind):
+			embed := mediaEmbedForURL(msg.Embeds, raw, nonGifURLs)
+			if embed == nil {
+				continue
+			}
+			description = cleanMediaDescription(embed.Title)
+			if description == "" {
+				description = cleanMediaDescription(embed.Description)
+			}
+			if description == "" {
+				continue
+			}
+		default:
+			continue
+		}
+
+		canonical := CanonicalizeMediaURL(raw)
+		if seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		result = append(result, ExtractedMedia{
+			URL:         canonical,
+			Kind:        kind,
+			Description: description,
+		})
+	}
+	return result
+}
+
+// ParseMediaTags returns resolvable media tags found in a raw completion reply
+// in order of appearance: bare [gif], [gif: words], and described link tags
+// ([youtube: ...], [tweet: ...], [tiktok: ...], [insta: ...], [son: ...], [steam: ...]).
+func ParseMediaTags(reply string) []MediaTag {
+	matches := mediaResolvableTagPattern.FindAllStringSubmatch(reply, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	var tags []MediaTag
+	for _, match := range matches {
+		kind := strings.ToLower(match[1])
+		desc := collapseMediaWhitespace(match[2])
+		if kind != "gif" && desc == "" {
+			continue
+		}
+		tags = append(tags, MediaTag{
+			Raw:         match[0],
+			Kind:        kind,
+			Description: desc,
+		})
+	}
+	return tags
+}
+
+// AssembleMediaReply appends mediaURL on its own line after cleanedText, or
+// returns mediaURL alone when cleanedText is empty.
+func AssembleMediaReply(cleanedText, mediaURL string) string {
+	text := strings.TrimSpace(cleanedText)
+	urlStr := strings.TrimSpace(mediaURL)
+	if urlStr == "" {
+		return text
+	}
+	if text == "" {
+		return urlStr
+	}
+	return text + "\n" + urlStr
+}
+

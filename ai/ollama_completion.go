@@ -43,6 +43,33 @@ type ollamaGenerateResponse struct {
 	PromptEvalCount int    `json:"prompt_eval_count,omitempty"`
 }
 
+// MediaResolveRequest carries the raw completion reply and context needed
+// to resolve media tags into real URLs from the media library.
+type MediaResolveRequest struct {
+	RawReply   string
+	GuildID    string
+	ChannelID  string
+	BotID      string
+	TargetText string // v1-rendered text of the message being answered
+}
+
+// MediaResolveResult holds the resolved media URL and match details.
+type MediaResolveResult struct {
+	Tag        string
+	URL        string
+	Similarity float64
+}
+
+// MediaResolver resolves media tags in raw completion replies.
+type MediaResolver interface {
+	Resolve(ctx context.Context, req MediaResolveRequest) (MediaResolveResult, bool)
+}
+
+// SetMediaResolver attaches an optional media library resolver to completion mode.
+func (o *OllamaProvider) SetMediaResolver(resolver MediaResolver) {
+	o.mediaResolver = resolver
+}
+
 // SetCompletionMode switches chat requests to raw chat-log completion.
 func (o *OllamaProvider) SetCompletionMode(enabled bool) {
 	o.completion = enabled
@@ -70,14 +97,16 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 	if req.TargetFromBot || completionTargetIsBot(req.Messages, req.TargetMessageID) {
 		return o.emptyCompletion(req), nil
 	}
+	names := completionNames(req.Messages)
 	// The target must be present and render to something; answering without it
 	// would make the model answer the previous line.
 	if req.TargetMessageID != "" {
 		target, ok := completionTargetMessage(req.Messages, req.TargetMessageID)
-		if !ok || strings.TrimSpace(completionText(target, completionNames(req.Messages), o.completionMediaTags)) == "" {
+		if !ok || strings.TrimSpace(completionText(target, names, o.completionMediaTags)) == "" {
 			return o.emptyCompletion(req), nil
 		}
 	}
+	targetV1Text := completionTargetV1Text(req.Messages, req.TargetMessageID, names)
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 || maxTokens > completionMaxTokens {
 		maxTokens = completionMaxTokens
@@ -96,9 +125,21 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		if finishReason == "" {
 			finishReason = "stop"
 		}
-		content := cleanCompletionReply(generated.Response, req.BotName)
+		var mediaURL string
+		if o.mediaResolver != nil {
+			if resolved, ok := o.mediaResolver.Resolve(ctx, MediaResolveRequest{
+				RawReply:   generated.Response,
+				GuildID:    req.GuildID,
+				ChannelID:  req.ChannelID,
+				BotID:      req.BotID,
+				TargetText: targetV1Text,
+			}); ok {
+				mediaURL = resolved.URL
+			}
+		}
+		content := AssembleMediaReply(cleanCompletionReply(generated.Response, req.BotName), mediaURL)
 		response := &ChatResponse{
-			Content: content, Model: model,
+			Content: content, MediaURL: mediaURL, Model: model,
 			TokensUsed:   generated.EvalCount + generated.PromptEvalCount,
 			PromptTokens: generated.PromptEvalCount, CompletionTokens: generated.EvalCount,
 			FinishReason: finishReason, EmptyCompletion: content == "" && attempt == 1,
@@ -319,16 +360,44 @@ func completionTargetIsBot(messages []Message, targetMessageID string) bool {
 	return ok && target.AuthorBot
 }
 
+// RenderCompletionTextV1 renders msg using the v1 media-tag contract and
+// completion text normalization (mentions, custom emojis, line cap).
+func RenderCompletionTextV1(msg Message, names map[string]string) string {
+	return completionText(msg, names, MediaTagsV1)
+}
+
+func completionTargetV1Text(messages []Message, targetMessageID string, names map[string]string) string {
+	if targetMessageID != "" {
+		if target, ok := completionTargetMessage(messages, targetMessageID); ok {
+			return completionText(target, names, MediaTagsV1)
+		}
+		return ""
+	}
+	for idx := len(messages) - 1; idx >= 0; idx-- {
+		msg := messages[idx]
+		if msg.Role == RoleUser && !msg.AuthorBot {
+			if rendered := completionText(msg, names, MediaTagsV1); rendered != "" {
+				return rendered
+			}
+		}
+	}
+	return ""
+}
+
 // cleanCompletionReply drops what the bot should not post as text: a leading
 // "name: " speaker, @mentions (the model learned them from the chat) and URL
 // placeholders, and turns the speaker tag back into the bot's name.
 func cleanCompletionReply(reply, botName string) string {
-	reply = completionLeadingSpeaker.ReplaceAllString(strings.TrimSpace(reply), "")
+	trimmed := strings.TrimSpace(reply)
+	// Avoid mistaking a leading media tag like "[gif: cat]" for a "speaker: " prefix.
+	if loc := completionPlaceholder.FindStringIndex(trimmed); loc == nil || loc[0] > 0 {
+		trimmed = completionLeadingSpeaker.ReplaceAllString(trimmed, "")
+	}
 	if botName == "" {
 		botName = "bot"
 	}
-	reply = strings.ReplaceAll(reply, "§bot", botName)
-	reply = completionReplyMention.ReplaceAllString(reply, "")
-	reply = completionPlaceholder.ReplaceAllString(reply, "")
-	return strings.Join(strings.Fields(reply), " ")
+	trimmed = strings.ReplaceAll(trimmed, "§bot", botName)
+	trimmed = completionReplyMention.ReplaceAllString(trimmed, "")
+	trimmed = completionPlaceholder.ReplaceAllString(trimmed, "")
+	return strings.Join(strings.Fields(trimmed), " ")
 }
