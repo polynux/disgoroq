@@ -340,6 +340,25 @@
    ],
    "v1": "[fichier]",
    "v0": "[image]"
+  },
+  {
+   "name": "brackets removed before whitespace collapse (affects the 60 cut)",
+   "content": "https://youtu.be/abc",
+   "embeds": [
+    {
+     "url": "https://youtu.be/abc",
+     "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa [ bzzzzzzzzzz",
+     "description": ""
+    }
+   ],
+   "v1": "[youtube: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bzzzzzzzzzz]",
+   "v0": "[youtube]"
+  },
+  {
+   "name": "\\.gif\\b uses Unicode word characters",
+   "content": "https://example.com/foo.gifé",
+   "v1": "[lien]",
+   "v0": "[lien]"
   }
  ],
  "revision": 3

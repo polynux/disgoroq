@@ -7,7 +7,7 @@ import (
 )
 
 // Media tag rendering, shared with the training data: see
-// docs/06-media-tags.md (revision 2) in discord-ia-waldo. Models trained on v0
+// docs/06-media-tags.md (revision 3) in discord-ia-waldo. Models trained on v0
 // prompts know the bracketed placeholders; v1 prompts carry descriptive tags.
 const (
 	MediaTagsV0 = "v0"
@@ -27,7 +27,8 @@ var (
 	mediaSchemePattern = regexp.MustCompile(`(?i)^[a-z][a-z0-9+.-]*://`)
 
 	// Legacy URL kind patterns, searched anywhere in the whole URL string.
-	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif\b`)
+	// \b as in Python: a Unicode letter, digit or _ after ".gif" means no boundary.
+	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif(?:$|[^\p{L}\p{N}_])`)
 	mediaYouTubeKindPattern = regexp.MustCompile(`(?i)youtube\.com|youtu\.be`)
 	mediaTweetKindPattern   = regexp.MustCompile(`(?i)twitter\.com|//x\.com|twimg\.com|fxtwitter|vxtwitter|fixupx`)
 	mediaTikTokKindPattern  = regexp.MustCompile(`(?i)tiktok\.com|tnktok\.com`)
@@ -479,10 +480,9 @@ func mediaAttachmentTagV1(attachment MessageAttachment) string {
 // cleanMediaDescription collapses whitespace, removes brackets, and cuts the
 // description to 60 code points at its last space.
 func cleanMediaDescription(value string) string {
-	cleaned := strings.Join(mediaFields(value), " ")
-	cleaned = strings.ReplaceAll(cleaned, "[", "")
-	cleaned = strings.ReplaceAll(cleaned, "]", "")
-	cleaned = trimMediaSpace(cleaned)
+	// Brackets go first, then whitespace collapses, as in the reference.
+	cleaned := strings.ReplaceAll(strings.ReplaceAll(value, "[", ""), "]", "")
+	cleaned = trimMediaSpace(strings.Join(mediaFields(cleaned), " "))
 
 	runes := []rune(cleaned)
 	if len(runes) <= mediaDescriptionMaxRunes {
