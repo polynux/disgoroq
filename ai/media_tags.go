@@ -28,7 +28,7 @@ var (
 
 	// Legacy URL kind patterns, searched anywhere in the whole URL string.
 	// \b as in Python: a Unicode letter, digit or _ after ".gif" means no boundary.
-	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif(?:$|[^\p{L}\p{N}_])`)
+	mediaGifKindPattern     = regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif(?:$|(?-i:[^\p{L}\p{N}_]))`)
 	mediaYouTubeKindPattern = regexp.MustCompile(`(?i)youtube\.com|youtu\.be`)
 	mediaTweetKindPattern   = regexp.MustCompile(`(?i)twitter\.com|//x\.com|twimg\.com|fxtwitter|vxtwitter|fixupx`)
 	mediaTikTokKindPattern  = regexp.MustCompile(`(?i)tiktok\.com|tnktok\.com`)
@@ -477,12 +477,12 @@ func mediaAttachmentTagV1(attachment MessageAttachment) string {
 	}
 }
 
-// cleanMediaDescription collapses whitespace, removes brackets, and cuts the
+// cleanMediaDescription removes brackets, collapses whitespace, and cuts the
 // description to 60 code points at its last space.
 func cleanMediaDescription(value string) string {
 	// Brackets go first, then whitespace collapses, as in the reference.
 	cleaned := strings.ReplaceAll(strings.ReplaceAll(value, "[", ""), "]", "")
-	cleaned = trimMediaSpace(strings.Join(mediaFields(cleaned), " "))
+	cleaned = strings.Join(mediaFields(cleaned), " ")
 
 	runes := []rune(cleaned)
 	if len(runes) <= mediaDescriptionMaxRunes {
