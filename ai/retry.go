@@ -182,7 +182,7 @@ func isRetryableProviderError(err error) bool {
 		// Groq rejects a malformed tool call the model generated with a 400
 		// "tool_use_failed"; its docs say to retry, since a new sample can succeed.
 		if statusErr.StatusCode == http.StatusBadRequest && strings.Contains(statusErr.Message, "tool_use_failed") {
-			return true
+			return !isQuotaMessage(statusErr.Message)
 		}
 		if statusErr.StatusCode >= http.StatusBadRequest {
 			return false

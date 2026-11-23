@@ -259,6 +259,8 @@ func TestOpenrouterErrorInsideOKResponse(t *testing.T) {
 		{"502 in the body is retried", `{"error":{"code":502,"message":"Provider returned error"}}`, http.StatusBadGateway, 3},
 		{"string code is parsed", `{"error":{"code":"429","message":"Rate limit exceeded: free-models-per-min."}}`, http.StatusTooManyRequests, 3},
 		{"missing code is treated as a transient upstream error", `{"error":{"message":"Provider returned error"}}`, http.StatusBadGateway, 3},
+		{"missing code with quota wording is final", `{"error":{"message":"insufficient_quota: add credits"}}`, http.StatusPaymentRequired, 1},
+		{"empty error choice does not hide the error", `{"error":{"code":402,"message":"Insufficient credits"},"choices":[{"message":{"content":""},"finish_reason":"error"}]}`, http.StatusPaymentRequired, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -331,4 +333,29 @@ func TestOpenrouterVisionHTTPErrorIsTypedAndFinal(t *testing.T) {
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusNotFound, httpErr.StatusCode)
 	assert.Contains(t, httpErr.Message, "No endpoints found")
+}
+
+func TestOpenrouterVisionErrorInsideOKResponse(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"error":{"code":402,"message":"Provider returned error"}}`)
+	}))
+	defer server.Close()
+
+	provider, err := NewOpenrouterProvider(server.URL, "test-key", false)
+	require.NoError(t, err)
+
+	wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "google/gemini-2.5-flash", "google/gemini-2.5-flash", nil)
+	_, err = wrapper.Vision(context.Background(), &VisionRequest{
+		Instruction: "describe",
+		ImageURL:    "data:image/png;base64,AAAA",
+	})
+
+	require.Error(t, err)
+	var httpErr *ProviderHTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusPaymentRequired, httpErr.StatusCode)
+	assert.Equal(t, int32(1), calls.Load())
 }

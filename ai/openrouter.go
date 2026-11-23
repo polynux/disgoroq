@@ -239,12 +239,18 @@ func openrouterReasoningConfig(thinkingEnabled bool) *openrouterReasoning {
 // envelopeError turns an error reported inside a 200 response into a typed
 // ProviderHTTPError, using the code OpenRouter puts in the body, so the retry
 // rules see the real status. It returns nil when there is no error, or when
-// choices came back anyway.
+// the first choice still carries content or tool calls (a partial reply).
 func (r *openrouterChatResponse) envelopeError(body []byte) error {
-	if r.Error == nil || len(r.Choices) > 0 {
+	if r.Error == nil {
+		return nil
+	}
+	if len(r.Choices) > 0 && (r.Choices[0].Message.Content != "" || len(r.Choices[0].Message.ToolCalls) > 0) {
 		return nil
 	}
 	status := http.StatusBadGateway // unknown upstream failure: treat as transient
+	if isQuotaMessage(r.Error.Message) {
+		status = http.StatusPaymentRequired // no usable code, but the account is out of credits
+	}
 	switch code := r.Error.Code.(type) {
 	case float64:
 		if code >= 400 && code < 600 {
