@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/config"
+	"polynux/disgoroq/medialibrary"
 	"polynux/disgoroq/memory"
 )
 
@@ -120,3 +122,45 @@ func TestBuildSummaryProviderConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveMediaEmbeddingConfig(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Memory.OllamaURL = "http://memory-ollama:11434"
+	cfg.Memory.EmbeddingModel = "custom-embed"
+	cfg.AI.Ollama.URL = "http://ai-ollama:11434"
+
+	url, model := resolveMediaEmbeddingConfig(cfg)
+	if url != "http://memory-ollama:11434" || model != "custom-embed" {
+		t.Fatalf("got (%q, %q), want (http://memory-ollama:11434, custom-embed)", url, model)
+	}
+
+	cfg.Memory.OllamaURL = ""
+	cfg.Memory.EmbeddingModel = ""
+	url, model = resolveMediaEmbeddingConfig(cfg)
+	if url != "http://ai-ollama:11434" || model != "nomic-embed-text" {
+		t.Fatalf("fallback got (%q, %q), want (http://ai-ollama:11434, nomic-embed-text)", url, model)
+	}
+}
+
+func TestFormatMediaSearchResults(t *testing.T) {
+	if got := formatMediaSearchResults(nil); got != "No matches found.\n" {
+		t.Fatalf("empty results = %q", got)
+	}
+	out := formatMediaSearchResults([]medialibrary.SearchHit{
+		{
+			Similarity: 0.9123,
+			Entry: medialibrary.Entry{
+				Kind:        "gif",
+				Uses:        7,
+				Description: "cat smile",
+				URL:         "https://tenor.com/view/cat-smile-1",
+			},
+		},
+	})
+	for _, want := range []string{"0.9123", "gif", "7", "cat smile", "https://tenor.com/view/cat-smile-1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+

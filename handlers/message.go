@@ -22,6 +22,7 @@ import (
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/medialibrary"
 	"polynux/disgoroq/memory"
 	"polynux/disgoroq/triggerwords"
 	"polynux/disgoroq/utils"
@@ -33,6 +34,7 @@ type MessageHandler struct {
 	repo           *database.Repository
 	contextBuilder *ai.ContextBuilder
 	memoryService  memory.Service
+	mediaLibrary   *medialibrary.Service
 	emojiManager   *emoji.Manager
 	defaultPrompt  string
 	triggerWords   []string
@@ -59,6 +61,11 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 	}
 }
 
+// SetMediaLibrary attaches the media library service used for asynchronous live indexing.
+func (h *MessageHandler) SetMediaLibrary(ml *medialibrary.Service) {
+	h.mediaLibrary = ml
+}
+
 func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client := e.Client()
 	m := e.Message
@@ -78,6 +85,22 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 		_ = h.repo.SetChannelLastMessage(cacheCtx, m.GuildID.String(), m.ChannelID.String(), time.Now().Unix())
 	}
 	cacheCancel()
+
+	// Update media library asynchronously from human guild messages without blocking replies.
+	if h.mediaLibrary != nil && m.GuildID != nil && !m.Author.Bot && m.WebhookID == nil {
+		message := m
+		go func() {
+			defer recoverListenerPanic("media library update")
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.mediaLibrary.RecordDiscordMessage(ctx, message); err != nil {
+				logger.Warn("Media library live update failed",
+					zap.String("guild_id", message.GuildID.String()),
+					zap.String("message_id", message.ID.String()),
+					zap.Error(err))
+			}
+		}()
+	}
 
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
 	if h.memoryService != nil && m.GuildID != nil {
@@ -310,6 +333,9 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		Temperature:     temperature,
 		MaxTokens:       database.DefaultMaxTokens,
 		BotName:         botNick,
+		BotID:           client.ID().String(),
+		GuildID:         m.GuildID.String(),
+		ChannelID:       m.ChannelID.String(),
 		TargetMessageID: m.ID.String(),
 		TargetFromBot:   m.Author.Bot || m.WebhookID != nil,
 		SessionID:       chatSessionID(m.GuildID, m.ChannelID),
@@ -360,12 +386,7 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		return
 	}
 
-	response.Content = utils.NormalizeBotText(response.Content)
-
-	// Convert emoji shortcodes to Discord format (if emoji manager is available)
-	if h.emojiManager != nil {
-		response.Content = h.emojiManager.ConvertShortcodesToDiscordEmojis(response.Content, m.GuildID.String())
-	}
+	response.Content = h.postProcessReply(response.Content, response.MediaURL, m.GuildID.String())
 
 	if response.Content == "" {
 		if h.aiservice.IsCompletionMode(response) {
@@ -413,6 +434,35 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 	if h.votesConfig.Enabled && rand.Float64() < h.votesConfig.Probability && m.GuildID != nil && createdMessage != nil {
 		go h.addReplyVoteReactions(*createdMessage, m, response, providerName)
 	}
+}
+
+// postProcessReply normalizes reply text and converts emoji shortcodes without
+// altering a media library URL appended to the reply.
+func (h *MessageHandler) postProcessReply(content, mediaURL, guildID string) string {
+	if mediaURL == "" {
+		content = utils.NormalizeBotText(content)
+		if h.emojiManager != nil {
+			content = h.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
+		}
+		return content
+	}
+	textPart := stripTrailingMediaURL(content, mediaURL)
+	textPart = utils.NormalizeBotText(textPart)
+	if h.emojiManager != nil && textPart != "" {
+		textPart = h.emojiManager.ConvertShortcodesToDiscordEmojis(textPart, guildID)
+	}
+	return ai.AssembleMediaReply(textPart, mediaURL)
+}
+
+func stripTrailingMediaURL(content, mediaURL string) string {
+	if content == mediaURL {
+		return ""
+	}
+	suffix := "\n" + mediaURL
+	if strings.HasSuffix(content, suffix) {
+		return strings.TrimSuffix(content, suffix)
+	}
+	return content
 }
 
 // passRateLimit applies the per-guild reply rate limit (explicit triggers

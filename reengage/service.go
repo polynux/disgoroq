@@ -285,6 +285,10 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		Images:       processedMessage.Images,
 		Temperature:  database.DefaultTemperature,
 		MaxTokens:    database.DefaultMaxTokens,
+		BotName:      botNick,
+		BotID:        s.client.ID().String(),
+		GuildID:      guildID,
+		ChannelID:    channelID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to generate AI response: %w", err)
@@ -294,9 +298,24 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		return fmt.Errorf("received empty response from AI service")
 	}
 
-	content := utils.NormalizeBotText(response.Content)
-	if s.emojiManager != nil {
-		content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
+	content := response.Content
+	if response.MediaURL == "" {
+		content = utils.NormalizeBotText(content)
+		if s.emojiManager != nil {
+			content = s.emojiManager.ConvertShortcodesToDiscordEmojis(content, guildID)
+		}
+	} else {
+		textPart := content
+		if content == response.MediaURL {
+			textPart = ""
+		} else {
+			textPart = strings.TrimSuffix(content, "\n"+response.MediaURL)
+		}
+		textPart = utils.NormalizeBotText(textPart)
+		if s.emojiManager != nil && textPart != "" {
+			textPart = s.emojiManager.ConvertShortcodesToDiscordEmojis(textPart, guildID)
+		}
+		content = ai.AssembleMediaReply(textPart, response.MediaURL)
 	}
 
 	createdMessage, err := s.client.Rest.CreateMessage(channelIDSnowflake, discord.MessageCreate{

@@ -136,3 +136,25 @@ func TestSkipCompletionTargetUsesPrimaryProviderWithFallback(t *testing.T) {
 		t.Fatalf("non-Ollama primary with chain %q must keep chat behaviour", completionFallback.Name())
 	}
 }
+
+func TestPostProcessReplyPreservesMediaURL(t *testing.T) {
+	h := &MessageHandler{}
+	mediaURL := "https://tenor.com/view/chauffeur-coiffeur-12345"
+
+	got := h.postProcessReply("quoi feur\n"+mediaURL, mediaURL, "g1")
+	want := "quoi fleur\n" + mediaURL
+	if got != want {
+		t.Fatalf("postProcessReply(text+url) = %q, want %q", got, want)
+	}
+
+	gotOnly := h.postProcessReply(mediaURL, mediaURL, "g1")
+	if gotOnly != mediaURL {
+		t.Fatalf("postProcessReply(url only) = %q, want %q", gotOnly, mediaURL)
+	}
+
+	gotNoMedia := h.postProcessReply("quoi feur", "", "g1")
+	if gotNoMedia != "quoi fleur" {
+		t.Fatalf("postProcessReply(no media) = %q, want %q", gotNoMedia, "quoi fleur")
+	}
+}
+

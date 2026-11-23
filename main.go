@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -27,6 +29,7 @@ import (
 	"polynux/disgoroq/emoji"
 	"polynux/disgoroq/handlers"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/medialibrary"
 	"polynux/disgoroq/memory"
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
@@ -40,6 +43,10 @@ var (
 	sendDirectHoroscope     bool
 	sendDirectFartingFriday bool
 	clearCommands           bool
+	importMediaLibrary      string
+	mediaSearchQuery        string
+	mediaSearchGuild        string
+	mediaSearchTrigger      bool
 )
 
 func init() {
@@ -47,6 +54,10 @@ func init() {
 	flag.BoolVar(&sendDirectHoroscope, "sendDirectHoroscope", false, "Send horoscope directly")
 	flag.BoolVar(&sendDirectFartingFriday, "sendFartingFriday", false, "Send farting friday directly")
 	flag.BoolVar(&clearCommands, "clearCommands", false, "Clear all registered commands")
+	flag.StringVar(&importMediaLibrary, "import-media-library", "", "Import media library entries from a JSONL file and exit")
+	flag.StringVar(&mediaSearchQuery, "media-search", "", "Search media library entries by query text and exit (requires -guild)")
+	flag.StringVar(&mediaSearchGuild, "guild", "", "Guild ID for -media-search")
+	flag.BoolVar(&mediaSearchTrigger, "trigger", false, "Search trigger embeddings instead of description embeddings in -media-search")
 	if !runningUnderGoTest() {
 		flag.Parse()
 	}
@@ -76,6 +87,35 @@ func main() {
 
 	// Initialize logger with configuration
 	logger.InitFromConfig(&cfg.Logging)
+
+	// CLI modes run without opening a Discord connection and exit when done.
+	if importMediaLibrary != "" || mediaSearchQuery != "" {
+		if importMediaLibrary != "" && mediaSearchQuery != "" {
+			logger.Fatal("Cannot combine -import-media-library and -media-search")
+		}
+		utils.SetLogger(logger.Log)
+		utils.InitializeDB(&cfg.Database, local)
+
+		cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+		var cliErr error
+		if importMediaLibrary != "" {
+			cliErr = runMediaLibraryImport(cliCtx, cfg, importMediaLibrary, os.Stdout)
+		} else {
+			cliErr = runMediaLibrarySearch(cliCtx, cfg, mediaSearchQuery, mediaSearchGuild, mediaSearchTrigger, os.Stdout)
+		}
+		cliStop()
+
+		if err := utils.DB.Close(); err != nil {
+			logger.Error("Error closing database", zap.Error(err))
+		}
+		logger.Sync()
+		if cliErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", cliErr)
+			os.Exit(1)
+		}
+		return
+	}
+
 	logger.Info("Starting DisgoroQ bot")
 
 	// Create slog adapter for disgo
@@ -119,6 +159,41 @@ func main() {
 	eventRepo := logger.NewEventRepository(utils.DB, logger.Log)
 	logger.SetEventRepository(eventRepo)
 	repo := database.NewRepository()
+
+	// Initialize media library service if enabled.
+	var mediaLibraryService *medialibrary.Service
+	if cfg.MediaLibrary.Enabled {
+		embURL, embModel := resolveMediaEmbeddingConfig(cfg)
+		mediaEmbedder, err := memory.NewOllamaEmbeddingProviderWithConfig(embURL, embModel)
+		if err != nil {
+			logger.Warn("Failed to create media library embedding provider; vector search disabled, exact match still active",
+				zap.String("ollama_url", embURL),
+				zap.String("embedding_model", embModel),
+				zap.Error(err))
+			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), nil, cfg.MediaLibrary)
+		} else {
+			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), mediaEmbedder, cfg.MediaLibrary)
+			hcCtx, hcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if hcErr := mediaEmbedder.HealthCheck(hcCtx); hcErr != nil {
+				logger.Warn("Media library embedding provider unavailable at startup; exact match active, vector search will retry",
+					zap.String("ollama_url", embURL),
+					zap.String("embedding_model", embModel),
+					zap.Error(hcErr))
+			} else {
+				logger.Info("Media library initialized",
+					zap.String("ollama_url", embURL),
+					zap.String("embedding_model", embModel),
+					zap.Float64("min_similarity", cfg.MediaLibrary.MinSimilarity),
+					zap.Float64("min_trigger_similarity", cfg.MediaLibrary.MinTriggerSimilarity),
+					zap.Bool("cross_guild", cfg.MediaLibrary.CrossGuild),
+					zap.Bool("allow_discord_cdn", cfg.MediaLibrary.AllowDiscordCDN),
+					zap.Int("repeat_window", cfg.MediaLibrary.RepeatWindow))
+			}
+			hcCancel()
+		}
+	} else {
+		logger.Info("Media library disabled by configuration")
+	}
 
 	// Create AI service configuration from central config
 	aiServiceConfig := ai.ServiceConfig{
@@ -187,6 +262,9 @@ func main() {
 				SafeSearch:      cfg.AI.Tools.Search.SafeSearch,
 			},
 		},
+	}
+	if mediaLibraryService != nil {
+		aiServiceConfig.MediaResolver = mediaLibraryService
 	}
 
 	if err := aiServiceConfig.Validate(); err != nil {
@@ -283,6 +361,9 @@ func main() {
 	logger.Info("Emoji manager initialized")
 
 	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Votes)
+	if mediaLibraryService != nil {
+		messageHandler.SetMediaLibrary(mediaLibraryService)
+	}
 	voteHandler := handlers.NewVoteHandler(client, repo, cfg.Votes)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
@@ -521,3 +602,86 @@ func clearAllCommands(client *bot.Client) {
 
 	logger.Info("Commands cleared", zap.Int("total_deleted", totalDeleted))
 }
+
+// resolveMediaEmbeddingConfig determines the Ollama URL and embedding model for
+// the media library so it works even when memory.enabled is false.
+func resolveMediaEmbeddingConfig(cfg *config.Config) (string, string) {
+	embURL := strings.TrimSpace(cfg.Memory.OllamaURL)
+	if embURL == "" {
+		embURL = strings.TrimSpace(cfg.AI.Ollama.URL)
+	}
+	if embURL == "" {
+		embURL = "http://localhost:11434"
+	}
+	embModel := strings.TrimSpace(cfg.Memory.EmbeddingModel)
+	if embModel == "" {
+		embModel = "nomic-embed-text"
+	}
+	return embURL, embModel
+}
+
+func runMediaLibraryImport(ctx context.Context, cfg *config.Config, path string, out io.Writer) error {
+	embURL, embModel := resolveMediaEmbeddingConfig(cfg)
+	embedder, err := memory.NewOllamaEmbeddingProviderWithConfig(embURL, embModel)
+	if err != nil {
+		return fmt.Errorf("create embedding provider (%s, %s): %w", embURL, embModel, err)
+	}
+	hcCtx, hcCancel := context.WithTimeout(ctx, 10*time.Second)
+	err = embedder.HealthCheck(hcCtx)
+	hcCancel()
+	if err != nil {
+		return fmt.Errorf("embedding provider unavailable (%s, %s): %w", embURL, embModel, err)
+	}
+
+	svc := medialibrary.NewService(medialibrary.NewRepository(utils.DB), embedder, cfg.MediaLibrary)
+	summary, err := svc.ImportFile(ctx, path, func(s medialibrary.ImportSummary) {
+		logger.Info("Media library import progress",
+			zap.Int("rows", s.Rows),
+			zap.Int("embeddings_computed", s.EmbeddingsComputed),
+			zap.Int("embeddings_reused", s.EmbeddingsReused),
+			zap.Int("skipped", s.Skipped))
+	})
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(out, "Media library import complete: rows=%d embeddings_computed=%d embeddings_reused=%d skipped=%d\n",
+		summary.Rows, summary.EmbeddingsComputed, summary.EmbeddingsReused, summary.Skipped)
+	return nil
+}
+
+func runMediaLibrarySearch(ctx context.Context, cfg *config.Config, query, guildID string, useTrigger bool, out io.Writer) error {
+	guildID = strings.TrimSpace(guildID)
+	if guildID == "" {
+		return fmt.Errorf("-guild is required with -media-search")
+	}
+	embURL, embModel := resolveMediaEmbeddingConfig(cfg)
+	embedder, err := memory.NewOllamaEmbeddingProviderWithConfig(embURL, embModel)
+	if err != nil {
+		return fmt.Errorf("create embedding provider (%s, %s): %w", embURL, embModel, err)
+	}
+
+	svc := medialibrary.NewService(medialibrary.NewRepository(utils.DB), embedder, cfg.MediaLibrary)
+	hits, err := svc.Search(ctx, guildID, query, useTrigger, 10)
+	if err != nil {
+		return err
+	}
+	_, _ = io.WriteString(out, formatMediaSearchResults(hits))
+	return nil
+}
+
+func formatMediaSearchResults(hits []medialibrary.SearchHit) string {
+	if len(hits) == 0 {
+		return "No matches found.\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-6s %-8s %-6s %-32s %s\n", "SIM", "KIND", "USES", "DESCRIPTION", "URL")
+	for _, hit := range hits {
+		desc := strings.ReplaceAll(hit.Entry.Description, "\n", " ")
+		if desc == "" {
+			desc = "-"
+		}
+		fmt.Fprintf(&b, "%.4f %-8s %-6d %-32s %s\n", hit.Similarity, hit.Entry.Kind, hit.Entry.Uses, desc, hit.Entry.URL)
+	}
+	return b.String()
+}
+
