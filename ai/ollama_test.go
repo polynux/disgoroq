@@ -458,13 +458,14 @@ func TestLatestUserMessageSkipsMediaOnlyMessages(t *testing.T) {
 	messages := []Message{
 		{Role: RoleUser, Content: "<@1>Alice: regarde https://example.com", Text: "regarde https://example.com", AuthorNick: "Alice"},
 		{Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", AuthorNick: "Bob", MediaOnly: true},
+		{Role: RoleUser, Content: "<@3>Charlie: et alors ?", Text: "et alors ?", AuthorNick: "Charlie"},
 	}
 
-	assert.Equal(t, 0, latestUserMessageIndex(messages))
+	assert.Equal(t, 2, latestUserMessageIndex(messages))
 	latest := latestUserMessage(messages)
 	require.NotNil(t, latest)
-	assert.Equal(t, "regarde https://example.com", latest.Text)
-	previous := previousUserMessageBefore(messages, 1)
+	assert.Equal(t, "et alors ?", latest.Text)
+	previous := previousUserMessageBefore(messages, 2)
 	require.NotNil(t, previous)
 	assert.Equal(t, "regarde https://example.com", previous.Text)
 
