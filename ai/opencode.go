@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"go.uber.org/zap"
+
+	"polynux/disgoroq/logger"
 )
 
 const (
@@ -126,7 +130,7 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 		ToolChoice:      buildOpenAIToolChoice(req.ToolChoice),
 		MaxTokens:       req.MaxTokens,
 		Temperature:     req.Temperature,
-		ReasoningEffort: opencodeReasoningEffort(o.thinkingEnabled),
+		ReasoningEffort: opencodeReasoningEffort(req.Model, o.thinkingEnabled),
 		Stream:          false,
 	})
 	if err != nil {
@@ -146,16 +150,30 @@ func (o *OpencodeProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRes
 		return nil, fmt.Errorf("OpenCode chat response did not contain any choices")
 	}
 
+	choice := response.Choices[0]
+	toolCalls := parseOpenAIToolCalls(choice.Message.ToolCalls)
+	if choice.Message.Content == "" && len(toolCalls) == 0 && choice.Message.ReasoningContent != "" {
+		model := response.Model
+		if model == "" {
+			model = req.Model
+		}
+		logger.Warn("OpenCode chat response returned reasoning_content without final content",
+			zap.String("model", model),
+			zap.Bool("thinking_enabled", o.thinkingEnabled),
+			zap.Int("reasoning_length", len(choice.Message.ReasoningContent)),
+			zap.String("finish_reason", choice.FinishReason))
+	}
+
 	return &ChatResponse{
-		Content:          response.Choices[0].Message.Content,
-		ToolCalls:        parseOpenAIToolCalls(response.Choices[0].Message.ToolCalls),
+		Content:          choice.Message.Content,
+		ToolCalls:        toolCalls,
 		Model:            response.Model,
 		TokensUsed:       response.Usage.TotalTokens,
 		PromptTokens:     response.Usage.PromptTokens,
 		CompletionTokens: response.Usage.CompletionTokens,
 		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
 		CacheWriteTokens: response.Usage.PromptTokensDetails.CacheWriteTokens,
-		FinishReason:     response.Choices[0].FinishReason,
+		FinishReason:     choice.FinishReason,
 	}, nil
 }
 
@@ -181,7 +199,7 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 		},
 		MaxTokens:       req.MaxTokens,
 		Temperature:     req.Temperature,
-		ReasoningEffort: opencodeReasoningEffort(o.thinkingEnabled),
+		ReasoningEffort: opencodeReasoningEffort(req.Model, o.thinkingEnabled),
 		Stream:          false,
 	})
 	if err != nil {
@@ -201,15 +219,28 @@ func (o *OpencodeProvider) Vision(ctx context.Context, req *VisionRequest) (*Vis
 		return nil, fmt.Errorf("OpenCode vision response did not contain any choices")
 	}
 
+	choice := response.Choices[0]
+	if choice.Message.Content == "" && choice.Message.ReasoningContent != "" {
+		model := response.Model
+		if model == "" {
+			model = req.Model
+		}
+		logger.Warn("OpenCode vision response returned reasoning_content without final content",
+			zap.String("model", model),
+			zap.Bool("thinking_enabled", o.thinkingEnabled),
+			zap.Int("reasoning_length", len(choice.Message.ReasoningContent)),
+			zap.String("finish_reason", choice.FinishReason))
+	}
+
 	return &VisionResponse{
-		Description:      response.Choices[0].Message.Content,
+		Description:      choice.Message.Content,
 		Model:            response.Model,
 		TokensUsed:       response.Usage.TotalTokens,
 		PromptTokens:     response.Usage.PromptTokens,
 		CompletionTokens: response.Usage.CompletionTokens,
 		CachedTokens:     response.Usage.PromptTokensDetails.CachedTokens,
 		CacheWriteTokens: response.Usage.PromptTokensDetails.CacheWriteTokens,
-		FinishReason:     response.Choices[0].FinishReason,
+		FinishReason:     choice.FinishReason,
 	}, nil
 }
 
@@ -265,8 +296,9 @@ type opencodeChatResponse struct {
 	Model   string `json:"model"`
 	Choices []struct {
 		Message struct {
-			Content   string           `json:"content"`
-			ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
+			Content          string           `json:"content"`
+			ReasoningContent string           `json:"reasoning_content,omitempty"`
+			ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -281,9 +313,13 @@ type opencodeChatResponse struct {
 	} `json:"usage"`
 }
 
-func opencodeReasoningEffort(thinkingEnabled bool) string {
+func opencodeReasoningEffort(model string, thinkingEnabled bool) string {
 	if thinkingEnabled {
 		return ""
+	}
+	normalizedModel := strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(normalizedModel, "muse-") {
+		return "minimal"
 	}
 	return "none"
 }

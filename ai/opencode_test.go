@@ -466,3 +466,203 @@ func TestOpencodeInlineImagesWithRetryWrapper(t *testing.T) {
 		assert.Equal(t, []string{"deepseek-v4.1-flash", "deepseek-v4-pro"}, seenModels)
 	})
 }
+
+func TestOpencodeReasoningEffort(t *testing.T) {
+	tests := []struct {
+		name            string
+		model           string
+		thinkingEnabled bool
+		wantField       bool
+		wantEffort      string
+	}{
+		{
+			name:            "deepseek thinking off sends none",
+			model:           "deepseek-v4.1-flash",
+			thinkingEnabled: false,
+			wantField:       true,
+			wantEffort:      "none",
+		},
+		{
+			name:            "muse 1.3 thinking off sends minimal",
+			model:           "muse-spark-1.3-contributor",
+			thinkingEnabled: false,
+			wantField:       true,
+			wantEffort:      "minimal",
+		},
+		{
+			name:            "muse 1.2 thinking off sends minimal",
+			model:           "muse-spark-1.2-contributor",
+			thinkingEnabled: false,
+			wantField:       true,
+			wantEffort:      "minimal",
+		},
+		{
+			name:            "deepseek thinking on omits reasoning_effort",
+			model:           "deepseek-v4.1-flash",
+			thinkingEnabled: true,
+			wantField:       false,
+		},
+		{
+			name:            "muse thinking on omits reasoning_effort",
+			model:           "muse-spark-1.3-contributor",
+			thinkingEnabled: true,
+			wantField:       false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var chatRaw map[string]any
+			var visionRaw map[string]any
+			var callCount int
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				require.NoError(t, err)
+				var raw map[string]any
+				require.NoError(t, json.Unmarshal(body, &raw))
+				callCount++
+				if callCount == 1 {
+					chatRaw = raw
+				} else {
+					visionRaw = raw
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_, err = io.WriteString(w, `{"model":"`+tc.model+`","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+				require.NoError(t, err)
+			}))
+			defer server.Close()
+
+			provider, err := NewOpencodeProvider(server.URL, "test-key", tc.thinkingEnabled)
+			require.NoError(t, err)
+
+			_, err = provider.Chat(context.Background(), &ChatRequest{
+				Model:    tc.model,
+				Messages: []Message{{Role: RoleUser, Content: "hi"}},
+			})
+			require.NoError(t, err)
+
+			_, err = provider.Vision(context.Background(), &VisionRequest{
+				Model:       tc.model,
+				Instruction: "describe",
+				ImageURL:    "data:image/png;base64,iVBORw0KGgo=",
+			})
+			require.NoError(t, err)
+
+			for _, payload := range []map[string]any{chatRaw, visionRaw} {
+				val, exists := payload["reasoning_effort"]
+				assert.Equal(t, tc.wantField, exists)
+				if tc.wantField {
+					assert.Equal(t, tc.wantEffort, val)
+				}
+			}
+		})
+	}
+}
+
+func TestOpencodeReasoningResponses(t *testing.T) {
+	t.Run("empty content with reasoning_content succeeds without leaking reasoning", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"","reasoning_content":"step 1: think about reply"},"finish_reason":"length"}],"usage":{"prompt_tokens":20,"completion_tokens":200,"total_tokens":220}}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model:    "deepseek-v4.1-flash",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Content)
+		assert.Equal(t, "length", resp.FinishReason)
+		assert.Equal(t, 220, resp.TokensUsed)
+	})
+
+	t.Run("null content with reasoning_content succeeds without crashing", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":null,"reasoning_content":"internal thoughts"},"finish_reason":"length"}]}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model:    "deepseek-v4.1-flash",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Content)
+		assert.Equal(t, "length", resp.FinishReason)
+	})
+
+	t.Run("content alongside reasoning_content returns only final content", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"final reply","reasoning_content":"internal thoughts"},"finish_reason":"stop"}]}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model:    "deepseek-v4.1-flash",
+			Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "final reply", resp.Content)
+		assert.Equal(t, "stop", resp.FinishReason)
+	})
+
+	t.Run("empty content with reasoning_content and tool_calls parses tool calls", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":null,"reasoning_content":"I should fetch that URL","tool_calls":[{"id":"call-1","type":"function","function":{"name":"web_fetch","arguments":"{\"url\":\"https://example.com\"}"}}]},"finish_reason":"tool_calls"}]}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model:    "deepseek-v4.1-flash",
+			Messages: []Message{{Role: RoleUser, Content: "check https://example.com"}},
+		})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Content)
+		require.Len(t, resp.ToolCalls, 1)
+		assert.Equal(t, "web_fetch", resp.ToolCalls[0].Function.Name)
+		assert.Equal(t, FinishReasonToolCalls, resp.FinishReason)
+	})
+
+	t.Run("vision empty content with reasoning_content succeeds without crashing", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := io.WriteString(w, `{"model":"deepseek-v4.1-flash","choices":[{"message":{"content":"","reasoning_content":"looking at image"},"finish_reason":"length"}]}`)
+			require.NoError(t, err)
+		}))
+		defer server.Close()
+
+		provider, err := NewOpencodeProvider(server.URL, "test-key", true)
+		require.NoError(t, err)
+
+		resp, err := provider.Vision(context.Background(), &VisionRequest{
+			Model:       "deepseek-v4.1-flash",
+			Instruction: "describe",
+			ImageURL:    "data:image/png;base64,iVBORw0KGgo=",
+		})
+		require.NoError(t, err)
+		assert.Empty(t, resp.Description)
+		assert.Equal(t, "length", resp.FinishReason)
+	})
+}
