@@ -211,18 +211,10 @@ func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image Im
 		return
 	}
 
-	defaultProvider, defaultModel := r.visionCacheScope()
-	providerName, visionModel := defaultProvider, defaultModel
-	if response != nil && response.Provider != "" {
-		providerName = response.Provider
-		if response.Model != "" {
-			visionModel = response.Model
-		} else if response.Provider != defaultProvider {
-			visionModel = ""
-		}
-	} else if response != nil && response.Model != "" {
-		visionModel = response.Model
-	}
+	// Write under the same key getCachedImageDescription reads: the configured
+	// vision provider and model. Keying on the answering fallback provider, or on
+	// the model name a provider echoes back, would store entries no read finds.
+	providerName, visionModel := r.visionCacheScope()
 	if providerName == "" || visionModel == "" {
 		return
 	}

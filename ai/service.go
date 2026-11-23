@@ -340,7 +340,12 @@ func NewService(config ServiceConfig) *Service {
 			visionProviders = append(visionProviders, wrapper)
 		}
 
-		addVisionProvider(buildProvider(config.VisionProvider))
+		configuredVision := buildProvider(config.VisionProvider)
+		if configuredVision == nil {
+			logger.Warn("Configured vision provider could not be created; image descriptions fall back to the other providers",
+				zap.String("vision_provider", config.VisionProvider))
+		}
+		addVisionProvider(configuredVision)
 		if config.FallbackEnabled {
 			for _, provider := range wrappedProviders {
 				if wrapper, ok := provider.(*RetryWrapper); ok {

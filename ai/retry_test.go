@@ -1131,7 +1131,7 @@ func TestRetryWrapperVisionChainAttachmentCacheScope(t *testing.T) {
 	ollama.AssertExpectations(t)
 }
 
-func TestRetryWrapperVisionChainFallbackStoresUnderFallbackProviderScope(t *testing.T) {
+func TestRetryWrapperVisionChainFallbackDescriptionIsReused(t *testing.T) {
 	image := ImageContext{URL: "https://example.com/dog.png", Type: "image/png"}
 	cache := newMemoryAttachmentCache()
 
@@ -1139,7 +1139,7 @@ func TestRetryWrapperVisionChainFallbackStoresUnderFallbackProviderScope(t *test
 	ollama.On("Name").Return(ProviderOllama)
 	ollama.On("Chat", mock.Anything, mock.MatchedBy(func(req *ChatRequest) bool {
 		return strings.Contains(req.Messages[0].Content, "groq fallback description")
-	})).Return(&ChatResponse{Content: "ok", FinishReason: "stop"}, nil).Once()
+	})).Return(&ChatResponse{Content: "ok", FinishReason: "stop"}, nil).Twice()
 
 	opencode := new(MockProvider)
 	opencode.On("Name").Return(ProviderOpencode)
@@ -1162,15 +1162,18 @@ func TestRetryWrapperVisionChainFallbackStoresUnderFallbackProviderScope(t *test
 	})
 	require.NoError(t, err)
 
-	// Stored under fallback provider/model, not poisoning primary vision provider's cache key.
-	_, foundPrimary, err := cache.GetAttachmentCache(context.Background(), attachmentCacheKey(imageDescriptionCacheInput(image), ProviderOpencode, "deepseek-v4.1-flash"))
+	// Stored under the key reads use (the configured vision provider and model),
+	// so the next message with the same image does not call any vision model.
+	entry, found, err := cache.GetAttachmentCache(context.Background(), attachmentCacheKey(imageDescriptionCacheInput(image), ProviderOpencode, "deepseek-v4.1-flash"))
 	require.NoError(t, err)
-	assert.False(t, foundPrimary)
-
-	entry, foundFallback, err := cache.GetAttachmentCache(context.Background(), attachmentCacheKey(imageDescriptionCacheInput(image), ProviderGroq, "scout"))
-	require.NoError(t, err)
-	require.True(t, foundFallback)
+	require.True(t, found)
 	assert.Equal(t, "groq fallback description", entry.Content)
+
+	_, err = chatWrapper.Chat(context.Background(), &ChatRequest{
+		Messages: []Message{{Role: "user", Content: "look again", ImageRefs: []int{0}}},
+		Images:   []ImageContext{image},
+	})
+	require.NoError(t, err)
 
 	opencode.AssertNumberOfCalls(t, "Vision", 1)
 	groq.AssertNumberOfCalls(t, "Vision", 1)
@@ -1185,6 +1188,63 @@ func TestProviderChainVisionSkipsFallbackWhenContextCanceled(t *testing.T) {
 	first.On("Vision", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
 		cancel()
 	}).Return(nil, context.Canceled).Once()
+
+	second := new(MockProvider)
+	second.On("Name").Return(ProviderGroq)
+
+	chain := NewProviderChain(first, second)
+	_, err := chain.Vision(ctx, &VisionRequest{Instruction: "describe", ImageURL: "https://example.com/a.png"})
+	require.Error(t, err)
+	second.AssertNotCalled(t, "Vision", mock.Anything, mock.Anything)
+}
+
+// The provider may echo a different model name than the configured one; the
+// description must still be found again.
+func TestRetryWrapperImageCacheIgnoresEchoedModelName(t *testing.T) {
+	image := ImageContext{URL: "https://example.com/cat.png", Type: "image/png"}
+	cache := newMemoryAttachmentCache()
+
+	provider := new(MockProvider)
+	provider.On("Name").Return(ProviderOllama)
+	provider.On("Vision", mock.Anything, mock.Anything).Return(&VisionResponse{Description: "a cat", Model: "llava:latest"}, nil).Once()
+
+	wrapper := NewRetryWrapper(provider, testRetryConfig(), 1, "luciole", "llava", cache)
+	first := wrapper.describeImagesForChat(context.Background(), []ImageContext{image}, "")
+	second := wrapper.describeImagesForChat(context.Background(), []ImageContext{image}, "")
+
+	assert.Equal(t, map[int]string{0: "a cat"}, first)
+	assert.Equal(t, first, second)
+	provider.AssertNumberOfCalls(t, "Vision", 1)
+}
+
+// With a vision chain set, the session ID still reaches the vision provider.
+func TestRetryWrapperVisionChainPassesSessionID(t *testing.T) {
+	chat := new(MockProvider)
+	chat.On("Name").Return(ProviderOllama)
+
+	vision := new(MockProvider)
+	vision.On("Name").Return(ProviderOpencode)
+	vision.On("Vision", mock.Anything, mock.MatchedBy(func(req *VisionRequest) bool {
+		return req.SessionID == "guild:channel"
+	})).Return(&VisionResponse{Description: "a cat"}, nil).Once()
+
+	chatWrapper := NewRetryWrapper(chat, testRetryConfig(), 1, "luciole", "", nil)
+	visionWrapper := NewRetryWrapper(vision, testRetryConfig(), 1, "deepseek-v4.1-flash", "deepseek-v4.1-flash", nil)
+	chatWrapper.SetVisionChain(NewProviderChain(visionWrapper))
+
+	descriptions := chatWrapper.describeImagesForChat(context.Background(), []ImageContext{{URL: "https://example.com/a.png", Type: "image/png"}}, "guild:channel")
+	assert.Equal(t, map[int]string{0: "a cat"}, descriptions)
+	vision.AssertExpectations(t)
+}
+
+func TestProviderChainVisionStopsAfterEmptyResponseWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	first := new(MockProvider)
+	first.On("Name").Return(ProviderOpencode)
+	first.On("Vision", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		cancel()
+	}).Return(&VisionResponse{Description: ""}, nil).Once()
 
 	second := new(MockProvider)
 	second.On("Name").Return(ProviderGroq)

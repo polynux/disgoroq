@@ -209,7 +209,7 @@ func (c *ProviderChain) Vision(ctx context.Context, req *VisionRequest) (*Vision
 			zap.Int("attempt", i+1))
 
 		// Continue to next provider if available
-		if i < len(c.providers)-1 {
+		if i < len(c.providers)-1 && ctx.Err() == nil {
 			continue
 		}
 
