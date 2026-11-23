@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/disgoorg/disgo/discord"
 
@@ -34,6 +35,12 @@ type SearchHit struct {
 	Similarity float64
 }
 
+// LookupFilter holds SQL-level filters applied before LIMIT in media lookups.
+type LookupFilter struct {
+	AllowDiscordCDN bool
+	ExcludeURLs     []string
+}
+
 // Repository wraps sqlc queries for media_library and cached discord_messages.
 type Repository struct {
 	queries *db.Queries
@@ -49,6 +56,35 @@ func nullableBlob(b []byte) any {
 		return nil
 	}
 	return b
+}
+
+func allowDiscordCDNArg(allow bool) int64 {
+	if allow {
+		return 1
+	}
+	return 0
+}
+
+// encodeExcludeURLs builds a newline-framed list ("\nurl1\nurl2\n") for exact
+// whole-URL matching via SQLite INSTR(?, char(10) || url || char(10)) = 0.
+func encodeExcludeURLs(urls []string) string {
+	if len(urls) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	seen := make(map[string]bool, len(urls))
+	for _, u := range urls {
+		if u == "" || strings.ContainsRune(u, '\n') || seen[u] {
+			continue
+		}
+		seen[u] = true
+		if b.Len() == 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(u)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func distanceToSimilarity(raw any) (float64, bool) {
@@ -90,14 +126,14 @@ func (r *Repository) GetEntry(ctx context.Context, rawURL, guildID string) (*Ent
 	}
 	return &Entry{
 		ID:                   row.ID,
-		GuildID:              row.GuildID,
-		URL:                  row.Url,
-		Kind:                 row.Kind,
-		Description:          row.Description,
+		GuildID:              string(row.GuildID),
+		URL:                  string(row.Url),
+		Kind:                 string(row.Kind),
+		Description:          string(row.Description),
 		Uses:                 row.Uses,
 		FirstSeen:            row.FirstSeen,
 		LastSeen:             row.LastSeen,
-		TriggerText:          row.TriggerText,
+		TriggerText:          string(row.TriggerText),
 		DescriptionEmbedding: descEmb,
 		TriggerEmbedding:     trigEmb,
 	}, nil
@@ -132,12 +168,14 @@ func (r *Repository) UpsertLive(ctx context.Context, entry Entry) error {
 	})
 }
 
-func (r *Repository) FindExactDescription(ctx context.Context, guildID, kind, description string, limit int) ([]Entry, error) {
+func (r *Repository) FindExactDescription(ctx context.Context, guildID, kind, description string, filter LookupFilter, limit int) ([]Entry, error) {
 	rows, err := r.queries.FindMediaLibraryExactDescription(ctx, db.FindMediaLibraryExactDescriptionParams{
-		GuildID: guildID,
-		Kind:    kind,
-		LOWER:   description,
-		Limit:   int64(limit),
+		GuildID:         guildID,
+		Kind:            kind,
+		Description:     description,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -146,25 +184,27 @@ func (r *Repository) FindExactDescription(ctx context.Context, guildID, kind, de
 	for i, row := range rows {
 		out[i] = Entry{
 			ID:          row.ID,
-			GuildID:     row.GuildID,
-			URL:         row.Url,
-			Kind:        row.Kind,
-			Description: row.Description,
+			GuildID:     string(row.GuildID),
+			URL:         string(row.Url),
+			Kind:        string(row.Kind),
+			Description: string(row.Description),
 			Uses:        row.Uses,
 			FirstSeen:   row.FirstSeen,
 			LastSeen:    row.LastSeen,
-			TriggerText: row.TriggerText,
+			TriggerText: string(row.TriggerText),
 		}
 	}
 	return out, nil
 }
 
-func (r *Repository) FindExactDescriptionCrossGuild(ctx context.Context, excludeGuildID, kind, description string, limit int) ([]Entry, error) {
+func (r *Repository) FindExactDescriptionCrossGuild(ctx context.Context, excludeGuildID, kind, description string, filter LookupFilter, limit int) ([]Entry, error) {
 	rows, err := r.queries.FindMediaLibraryExactDescriptionCrossGuild(ctx, db.FindMediaLibraryExactDescriptionCrossGuildParams{
-		GuildID: excludeGuildID,
-		Kind:    kind,
-		LOWER:   description,
-		Limit:   int64(limit),
+		ExcludeGuildID:  excludeGuildID,
+		Kind:            kind,
+		Description:     description,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -173,25 +213,27 @@ func (r *Repository) FindExactDescriptionCrossGuild(ctx context.Context, exclude
 	for i, row := range rows {
 		out[i] = Entry{
 			ID:          row.ID,
-			GuildID:     row.GuildID,
-			URL:         row.Url,
-			Kind:        row.Kind,
-			Description: row.Description,
+			GuildID:     string(row.GuildID),
+			URL:         string(row.Url),
+			Kind:        string(row.Kind),
+			Description: string(row.Description),
 			Uses:        row.Uses,
 			FirstSeen:   row.FirstSeen,
 			LastSeen:    row.LastSeen,
-			TriggerText: row.TriggerText,
+			TriggerText: string(row.TriggerText),
 		}
 	}
 	return out, nil
 }
 
-func (r *Repository) SearchByDescription(ctx context.Context, guildID, kind string, queryBlob []byte, limit int) ([]SearchHit, error) {
+func (r *Repository) SearchByDescription(ctx context.Context, guildID, kind string, queryBlob []byte, filter LookupFilter, limit int) ([]SearchHit, error) {
 	rows, err := r.queries.SearchMediaLibraryByDescription(ctx, db.SearchMediaLibraryByDescriptionParams{
-		Vector32: queryBlob,
-		GuildID:  guildID,
-		Kind:     kind,
-		Limit:    int64(limit),
+		QueryEmbedding:  queryBlob,
+		GuildID:         guildID,
+		Kind:            kind,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -205,14 +247,14 @@ func (r *Repository) SearchByDescription(ctx context.Context, guildID, kind stri
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -220,12 +262,14 @@ func (r *Repository) SearchByDescription(ctx context.Context, guildID, kind stri
 	return out, nil
 }
 
-func (r *Repository) SearchByDescriptionCrossGuild(ctx context.Context, excludeGuildID, kind string, queryBlob []byte, limit int) ([]SearchHit, error) {
+func (r *Repository) SearchByDescriptionCrossGuild(ctx context.Context, excludeGuildID, kind string, queryBlob []byte, filter LookupFilter, limit int) ([]SearchHit, error) {
 	rows, err := r.queries.SearchMediaLibraryByDescriptionCrossGuild(ctx, db.SearchMediaLibraryByDescriptionCrossGuildParams{
-		Vector32: queryBlob,
-		GuildID:  excludeGuildID,
-		Kind:     kind,
-		Limit:    int64(limit),
+		QueryEmbedding:  queryBlob,
+		ExcludeGuildID:  excludeGuildID,
+		Kind:            kind,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -239,14 +283,14 @@ func (r *Repository) SearchByDescriptionCrossGuild(ctx context.Context, excludeG
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -254,12 +298,14 @@ func (r *Repository) SearchByDescriptionCrossGuild(ctx context.Context, excludeG
 	return out, nil
 }
 
-func (r *Repository) SearchByTrigger(ctx context.Context, guildID, kind string, queryBlob []byte, limit int) ([]SearchHit, error) {
+func (r *Repository) SearchByTrigger(ctx context.Context, guildID, kind string, queryBlob []byte, filter LookupFilter, limit int) ([]SearchHit, error) {
 	rows, err := r.queries.SearchMediaLibraryByTrigger(ctx, db.SearchMediaLibraryByTriggerParams{
-		Vector32: queryBlob,
-		GuildID:  guildID,
-		Kind:     kind,
-		Limit:    int64(limit),
+		QueryEmbedding:  queryBlob,
+		GuildID:         guildID,
+		Kind:            kind,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -273,14 +319,14 @@ func (r *Repository) SearchByTrigger(ctx context.Context, guildID, kind string, 
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -288,12 +334,14 @@ func (r *Repository) SearchByTrigger(ctx context.Context, guildID, kind string, 
 	return out, nil
 }
 
-func (r *Repository) SearchByTriggerCrossGuild(ctx context.Context, excludeGuildID, kind string, queryBlob []byte, limit int) ([]SearchHit, error) {
+func (r *Repository) SearchByTriggerCrossGuild(ctx context.Context, excludeGuildID, kind string, queryBlob []byte, filter LookupFilter, limit int) ([]SearchHit, error) {
 	rows, err := r.queries.SearchMediaLibraryByTriggerCrossGuild(ctx, db.SearchMediaLibraryByTriggerCrossGuildParams{
-		Vector32: queryBlob,
-		GuildID:  excludeGuildID,
-		Kind:     kind,
-		Limit:    int64(limit),
+		QueryEmbedding:  queryBlob,
+		ExcludeGuildID:  excludeGuildID,
+		Kind:            kind,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
 	})
 	if err != nil {
 		return nil, err
@@ -307,14 +355,14 @@ func (r *Repository) SearchByTriggerCrossGuild(ctx context.Context, excludeGuild
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -340,14 +388,14 @@ func (r *Repository) SearchAllKindsByDescription(ctx context.Context, guildID st
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -373,14 +421,14 @@ func (r *Repository) SearchAllKindsByTrigger(ctx context.Context, guildID string
 		out = append(out, SearchHit{
 			Entry: Entry{
 				ID:          row.ID,
-				GuildID:     row.GuildID,
-				URL:         row.Url,
-				Kind:        row.Kind,
-				Description: row.Description,
+				GuildID:     string(row.GuildID),
+				URL:         string(row.Url),
+				Kind:        string(row.Kind),
+				Description: string(row.Description),
 				Uses:        row.Uses,
 				FirstSeen:   row.FirstSeen,
 				LastSeen:    row.LastSeen,
-				TriggerText: row.TriggerText,
+				TriggerText: string(row.TriggerText),
 			},
 			Similarity: sim,
 		})
@@ -392,11 +440,19 @@ func (r *Repository) GetRecentBotMessages(ctx context.Context, channelID, botID 
 	if limit <= 0 || channelID == "" || botID == "" {
 		return nil, nil
 	}
-	return r.queries.GetRecentBotMessagesByChannel(ctx, db.GetRecentBotMessagesByChannelParams{
+	rows, err := r.queries.GetRecentBotMessagesByChannel(ctx, db.GetRecentBotMessagesByChannelParams{
 		ChannelID: channelID,
 		AuthorID:  botID,
 		Limit:     int64(limit),
 	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(rows))
+	for i, raw := range rows {
+		out[i] = string(raw)
+	}
+	return out, nil
 }
 
 func (r *Repository) GetDiscordMessageByID(ctx context.Context, messageID string) (*discord.Message, error) {

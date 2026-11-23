@@ -282,15 +282,21 @@ WHERE message_id = ? AND deleted_at IS NULL
 LIMIT 1;
 
 -- name: GetRecentBotMessagesByChannel :many
-SELECT content
+SELECT CAST(content AS BLOB) AS content
 FROM discord_messages
 WHERE channel_id = ? AND author_id = ? AND deleted_at IS NULL
 ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
 LIMIT ?;
 
 -- name: GetMediaLibraryEntry :one
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen,
-       trigger_text, description_embedding, trigger_embedding
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       description_embedding, trigger_embedding
 FROM media_library
 WHERE url = ? AND guild_id = ?
 LIMIT 1;
@@ -326,53 +332,193 @@ ON CONFLICT(url, guild_id) DO UPDATE SET
     trigger_embedding = COALESCE(excluded.trigger_embedding, media_library.trigger_embedding);
 
 -- name: FindMediaLibraryExactDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+WHERE guild_id = sqlc.arg(guild_id)
+  AND kind = sqlc.arg(kind)
+  AND description != ''
+  AND LOWER(description) = LOWER(sqlc.arg(description))
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: FindMediaLibraryExactDescriptionCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+WHERE guild_id != sqlc.arg(exclude_guild_id)
+  AND kind = sqlc.arg(kind)
+  AND description != ''
+  AND LOWER(description) = LOWER(sqlc.arg(description))
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: SearchMediaLibraryByDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(description_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(description_embedding, vector32(sqlc.arg(query_embedding))) as distance
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND description_embedding IS NOT NULL
+WHERE guild_id = sqlc.arg(guild_id)
+  AND kind = sqlc.arg(kind)
+  AND description_embedding IS NOT NULL
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: SearchMediaLibraryByDescriptionCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(description_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(description_embedding, vector32(sqlc.arg(query_embedding))) as distance
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND description_embedding IS NOT NULL
+WHERE guild_id != sqlc.arg(exclude_guild_id)
+  AND kind = sqlc.arg(kind)
+  AND description_embedding IS NOT NULL
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: SearchMediaLibraryByTrigger :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(sqlc.arg(query_embedding))) as distance
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND trigger_embedding IS NOT NULL
+WHERE guild_id = sqlc.arg(guild_id)
+  AND kind = sqlc.arg(kind)
+  AND trigger_embedding IS NOT NULL
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: SearchMediaLibraryByTriggerCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(sqlc.arg(query_embedding))) as distance
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND trigger_embedding IS NOT NULL
+WHERE guild_id != sqlc.arg(exclude_guild_id)
+  AND kind = sqlc.arg(kind)
+  AND trigger_embedding IS NOT NULL
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?;
+LIMIT sqlc.arg(result_limit);
 
 -- name: SearchMediaLibraryAllKindsByDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
        vector_distance_cos(description_embedding, vector32(?)) as distance
 FROM media_library
 WHERE guild_id = ? AND description_embedding IS NOT NULL
@@ -380,7 +526,13 @@ ORDER BY distance ASC, uses DESC, last_seen DESC
 LIMIT ?;
 
 -- name: SearchMediaLibraryAllKindsByTrigger :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
        vector_distance_cos(trigger_embedding, vector32(?)) as distance
 FROM media_library
 WHERE guild_id = ? AND trigger_embedding IS NOT NULL

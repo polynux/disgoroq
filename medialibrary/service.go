@@ -1,9 +1,11 @@
 package medialibrary
 
 import (
+	"container/list"
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/disgoorg/disgo/discord"
@@ -21,14 +23,80 @@ const (
 	// LiveTriggerWindow is the max age of a previous human message to count as a trigger.
 	LiveTriggerWindow = 5 * time.Minute
 
-	recentChannelScanLimit = 20
+	defaultLookupTimeout   = 3 * time.Second
+	lookupCandidateLimit   = 5
+	recentChannelScanLimit = 200
+	liveQueueSize          = 128
+	liveJobTimeout         = 30 * time.Second
+	seenPairsCapacity      = 4096
 )
+
+type liveJob struct {
+	msg        discord.Message
+	updateOnly bool
+}
+
+type seenPair struct {
+	messageID string
+	url       string
+}
+
+// seenPairLRU is a small bounded LRU tracking (messageID, url) pairs already
+// counted in live updates so MESSAGE_UPDATE unfurls never double-count uses.
+type seenPairLRU struct {
+	cap   int
+	order *list.List
+	index map[seenPair]*list.Element
+}
+
+func newSeenPairLRU(capacity int) *seenPairLRU {
+	if capacity <= 0 {
+		capacity = seenPairsCapacity
+	}
+	return &seenPairLRU{
+		cap:   capacity,
+		order: list.New(),
+		index: make(map[seenPair]*list.Element, capacity),
+	}
+}
+
+func (l *seenPairLRU) has(pair seenPair) bool {
+	if elem, ok := l.index[pair]; ok {
+		l.order.MoveToFront(elem)
+		return true
+	}
+	return false
+}
+
+func (l *seenPairLRU) add(pair seenPair) {
+	if elem, ok := l.index[pair]; ok {
+		l.order.MoveToFront(elem)
+		return
+	}
+	if l.order.Len() >= l.cap {
+		if oldest := l.order.Back(); oldest != nil {
+			l.order.Remove(oldest)
+			delete(l.index, oldest.Value.(seenPair))
+		}
+	}
+	elem := l.order.PushFront(pair)
+	l.index[pair] = elem
+}
 
 // Service provides completion-mode media tag lookup, live indexing, import, and search.
 type Service struct {
 	repo     *Repository
 	embedder Embedder
 	cfg      config.MediaLibraryConfig
+
+	workerMu sync.Mutex
+	jobs     chan liveJob
+	closed   bool
+	workerWG sync.WaitGroup
+	queueCap int
+
+	seenMu  sync.Mutex
+	seenLRU *seenPairLRU
 }
 
 // NewService creates a media library service.
@@ -37,11 +105,124 @@ func NewService(repo *Repository, embedder Embedder, cfg config.MediaLibraryConf
 		repo:     repo,
 		embedder: embedder,
 		cfg:      cfg,
+		queueCap: liveQueueSize,
+		seenLRU:  newSeenPairLRU(seenPairsCapacity),
 	}
 }
 
-// Resolve implements ai.MediaResolver. It inspects resolvable media tags in
-// req.RawReply and returns the first matching URL from the media library.
+func (s *Service) lookupTimeout() time.Duration {
+	if s.cfg.LookupTimeoutMs > 0 {
+		return time.Duration(s.cfg.LookupTimeoutMs) * time.Millisecond
+	}
+	return defaultLookupTimeout
+}
+
+func (s *Service) startWorkerLocked() {
+	capacity := s.queueCap
+	if capacity <= 0 {
+		capacity = liveQueueSize
+	}
+	jobs := make(chan liveJob, capacity)
+	s.jobs = jobs
+	s.workerWG.Add(1)
+	go s.runWorker(jobs)
+}
+
+func (s *Service) runWorker(jobs <-chan liveJob) {
+	defer s.workerWG.Done()
+	for job := range jobs {
+		s.processLiveJob(job)
+	}
+}
+
+func (s *Service) processLiveJob(job liveJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("Recovered panic in media library worker",
+				zap.String("message_id", job.msg.ID.String()),
+				zap.Any("panic", r))
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), liveJobTimeout)
+	defer cancel()
+
+	var err error
+	if job.updateOnly {
+		err = s.RecordDiscordMessageUpdate(ctx, job.msg)
+	} else {
+		err = s.RecordDiscordMessage(ctx, job.msg)
+	}
+	if err != nil {
+		logger.Warn("Media library live update failed",
+			zap.String("message_id", job.msg.ID.String()),
+			zap.Error(err))
+	}
+}
+
+func (s *Service) enqueue(job liveJob) bool {
+	if s == nil || !s.cfg.Enabled || s.repo == nil {
+		return false
+	}
+	s.workerMu.Lock()
+	if s.closed {
+		s.workerMu.Unlock()
+		return false
+	}
+	if s.jobs == nil {
+		s.startWorkerLocked()
+	}
+	select {
+	case s.jobs <- job:
+		s.workerMu.Unlock()
+		return true
+	default:
+		s.workerMu.Unlock()
+		logger.Debug("Media library live queue full, dropping message",
+			zap.String("message_id", job.msg.ID.String()),
+			zap.Bool("update_only", job.updateOnly))
+		return false
+	}
+}
+
+// EnqueueMessage queues a human guild MessageCreate for serialized live indexing.
+// Drops with a debug log if the bounded queue is full or after Close.
+func (s *Service) EnqueueMessage(msg discord.Message) bool {
+	if msg.GuildID == nil || msg.Author.Bot || msg.WebhookID != nil {
+		return false
+	}
+	return s.enqueue(liveJob{msg: msg, updateOnly: false})
+}
+
+// EnqueueMessageUpdate queues a human guild MessageUpdate with embeds for
+// serialized live indexing of unfurled link descriptions.
+func (s *Service) EnqueueMessageUpdate(msg discord.Message) bool {
+	if msg.GuildID == nil || msg.Author.Bot || msg.WebhookID != nil || len(msg.Embeds) == 0 {
+		return false
+	}
+	return s.enqueue(liveJob{msg: msg, updateOnly: true})
+}
+
+// Close stops accepting new live-indexing jobs and drains all queued jobs before returning.
+func (s *Service) Close() {
+	if s == nil {
+		return
+	}
+	s.workerMu.Lock()
+	if s.closed {
+		s.workerMu.Unlock()
+		return
+	}
+	s.closed = true
+	if s.jobs != nil {
+		close(s.jobs)
+	}
+	s.workerMu.Unlock()
+	s.workerWG.Wait()
+}
+
+// Resolve implements ai.MediaResolver. It runs under a dedicated short timeout
+// independent of the completion context so a slow or hung embedder only strips
+// tags and never consumes the completion retry budget.
 func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.MediaResolveResult, bool) {
 	if s == nil || !s.cfg.Enabled || s.repo == nil || req.GuildID == "" {
 		return ai.MediaResolveResult{}, false
@@ -52,32 +233,41 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		return ai.MediaResolveResult{}, false
 	}
 
-	recentURLs := s.recentBotURLs(ctx, req.ChannelID, req.BotID)
-	candidateLimit := s.candidateLimit()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	lookupCtx, cancel := context.WithTimeout(baseCtx, s.lookupTimeout())
+	defer cancel()
+
+	excludeList, recentURLs := s.recentBotURLs(lookupCtx, req.ChannelID, req.BotID)
+	filter := LookupFilter{
+		AllowDiscordCDN: s.cfg.AllowDiscordCDN,
+		ExcludeURLs:     excludeList,
+	}
 
 	for _, tag := range tags {
+		if lookupCtx.Err() != nil {
+			logger.Warn("Media library lookup timed out",
+				zap.String("tag", tag.Raw),
+				zap.String("guild_id", req.GuildID),
+				zap.Error(lookupCtx.Err()))
+			return ai.MediaResolveResult{}, false
+		}
 		if tag.Description != "" {
-			if result, ok := s.resolveDescribedTag(ctx, req.GuildID, tag, recentURLs, candidateLimit); ok {
+			if result, ok := s.resolveDescribedTag(lookupCtx, req.GuildID, tag, filter, recentURLs); ok {
 				return result, true
 			}
 			continue
 		}
 		if tag.Kind == "gif" {
-			if result, ok := s.resolveBareGifTag(ctx, req.GuildID, tag, req.TargetText, recentURLs, candidateLimit); ok {
+			if result, ok := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs); ok {
 				return result, true
 			}
 		}
 	}
 
 	return ai.MediaResolveResult{}, false
-}
-
-func (s *Service) candidateLimit() int {
-	limit := s.cfg.RepeatWindow*2 + 20
-	if limit < 50 {
-		limit = 50
-	}
-	return limit
 }
 
 func (s *Service) eligible(rawURL string, recentURLs map[string]bool) bool {
@@ -90,32 +280,36 @@ func (s *Service) eligible(rawURL string, recentURLs map[string]bool) bool {
 	return true
 }
 
-func (s *Service) recentBotURLs(ctx context.Context, channelID, botID string) map[string]bool {
+func (s *Service) recentBotURLs(ctx context.Context, channelID, botID string) ([]string, map[string]bool) {
 	if s.cfg.RepeatWindow <= 0 || channelID == "" || botID == "" {
-		return nil
+		return nil, nil
 	}
 	messages, err := s.repo.GetRecentBotMessages(ctx, channelID, botID, s.cfg.RepeatWindow)
 	if err != nil {
 		logger.Warn("Media library failed to read recent bot messages for repeat window",
 			zap.String("channel_id", channelID),
 			zap.Error(err))
-		return nil
+		return nil, nil
 	}
 	if len(messages) == 0 {
-		return nil
+		return nil, nil
 	}
 	seen := make(map[string]bool, len(messages))
+	list := make([]string, 0, len(messages))
 	for _, content := range messages {
 		for _, u := range ai.ExtractAllURLs(content) {
-			seen[u] = true
+			if !seen[u] {
+				seen[u] = true
+				list = append(list, u)
+			}
 		}
 	}
-	return seen
+	return list, seen
 }
 
-func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag ai.MediaTag, recentURLs map[string]bool, limit int) (ai.MediaResolveResult, bool) {
+func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag ai.MediaTag, filter LookupFilter, recentURLs map[string]bool) (ai.MediaResolveResult, bool) {
 	// 1. Exact description match in the same guild (ordered by uses DESC, last_seen DESC).
-	exactRows, err := s.repo.FindExactDescription(ctx, guildID, tag.Kind, tag.Description, limit)
+	exactRows, err := s.repo.FindExactDescription(ctx, guildID, tag.Kind, tag.Description, filter, lookupCandidateLimit)
 	if err != nil {
 		logger.Warn("Media library exact description lookup failed",
 			zap.String("tag", tag.Raw),
@@ -143,7 +337,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 				zap.String("guild_id", guildID),
 				zap.Error(err))
 		} else {
-			hits, err := s.repo.SearchByDescription(ctx, guildID, tag.Kind, queryBlob, limit)
+			hits, err := s.repo.SearchByDescription(ctx, guildID, tag.Kind, queryBlob, filter, lookupCandidateLimit)
 			if err != nil {
 				logger.Warn("Media library description vector search failed",
 					zap.String("tag", tag.Raw),
@@ -168,8 +362,8 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	}
 
 	// 3. Optional cross-guild fallback (exact, then vector).
-	if s.cfg.CrossGuild {
-		crossExact, err := s.repo.FindExactDescriptionCrossGuild(ctx, guildID, tag.Kind, tag.Description, limit)
+	if s.cfg.CrossGuild && ctx.Err() == nil {
+		crossExact, err := s.repo.FindExactDescriptionCrossGuild(ctx, guildID, tag.Kind, tag.Description, filter, lookupCandidateLimit)
 		if err != nil {
 			logger.Warn("Media library cross-guild exact lookup failed",
 				zap.String("tag", tag.Raw),
@@ -186,8 +380,8 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 			return ai.MediaResolveResult{Tag: tag.Raw, URL: chosen.URL, Similarity: 1.0}, true
 		}
 
-		if len(queryBlob) > 0 {
-			crossHits, err := s.repo.SearchByDescriptionCrossGuild(ctx, guildID, tag.Kind, queryBlob, limit)
+		if len(queryBlob) > 0 && ctx.Err() == nil {
+			crossHits, err := s.repo.SearchByDescriptionCrossGuild(ctx, guildID, tag.Kind, queryBlob, filter, lookupCandidateLimit)
 			if err != nil {
 				logger.Warn("Media library cross-guild description search failed",
 					zap.String("tag", tag.Raw),
@@ -219,7 +413,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	return ai.MediaResolveResult{}, false
 }
 
-func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.MediaTag, targetText string, recentURLs map[string]bool, limit int) (ai.MediaResolveResult, bool) {
+func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.MediaTag, targetText string, filter LookupFilter, recentURLs map[string]bool) (ai.MediaResolveResult, bool) {
 	trimmedTarget := strings.TrimSpace(targetText)
 	if trimmedTarget == "" || s.embedder == nil {
 		logger.Info("Media library no match",
@@ -240,7 +434,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 	}
 
 	bestSim := 0.0
-	hits, err := s.repo.SearchByTrigger(ctx, guildID, "gif", queryBlob, limit)
+	hits, err := s.repo.SearchByTrigger(ctx, guildID, "gif", queryBlob, filter, lookupCandidateLimit)
 	if err != nil {
 		logger.Warn("Media library trigger vector search failed",
 			zap.String("tag", tag.Raw),
@@ -262,8 +456,8 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 		}
 	}
 
-	if s.cfg.CrossGuild {
-		crossHits, err := s.repo.SearchByTriggerCrossGuild(ctx, guildID, "gif", queryBlob, limit)
+	if s.cfg.CrossGuild && ctx.Err() == nil {
+		crossHits, err := s.repo.SearchByTriggerCrossGuild(ctx, guildID, "gif", queryBlob, filter, lookupCandidateLimit)
 		if err != nil {
 			logger.Warn("Media library cross-guild trigger search failed",
 				zap.String("tag", tag.Raw),
@@ -312,18 +506,80 @@ func firstEligibleHit(hits []SearchHit, okFn func(string) bool) (SearchHit, bool
 	return SearchHit{}, false
 }
 
+func (s *Service) hasSeenPair(messageID, url string) bool {
+	if messageID == "" {
+		return false
+	}
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	if s.seenLRU == nil {
+		s.seenLRU = newSeenPairLRU(seenPairsCapacity)
+	}
+	return s.seenLRU.has(seenPair{messageID: messageID, url: url})
+}
+
+func (s *Service) markSeenPair(messageID, url string) {
+	if messageID == "" {
+		return
+	}
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	if s.seenLRU == nil {
+		s.seenLRU = newSeenPairLRU(seenPairsCapacity)
+	}
+	s.seenLRU.add(seenPair{messageID: messageID, url: url})
+}
+
 // RecordDiscordMessage indexes gif and described-link URLs from a human guild
-// message, updating counts, timestamps, trigger texts, and embeddings.
+// message create event, updating counts, timestamps, trigger texts, and embeddings.
 func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message) error {
+	return s.recordDiscordMessage(ctx, msg, false)
+}
+
+// RecordDiscordMessageUpdate indexes described non-gif links whose embeds arrived
+// in a MESSAGE_UPDATE event without double-counting uses for already-indexed pairs.
+func (s *Service) RecordDiscordMessageUpdate(ctx context.Context, msg discord.Message) error {
+	return s.recordDiscordMessage(ctx, msg, true)
+}
+
+func (s *Service) recordDiscordMessage(ctx context.Context, msg discord.Message, updateOnly bool) error {
 	if s == nil || !s.cfg.Enabled || s.repo == nil {
 		return nil
 	}
 	if msg.GuildID == nil || msg.Author.Bot || msg.WebhookID != nil {
 		return nil
 	}
+	if updateOnly && len(msg.Embeds) == 0 {
+		return nil
+	}
 
 	items := ai.ExtractMediaURLs(ai.MessageFromDiscord(msg))
+	if updateOnly {
+		filtered := items[:0]
+		for _, item := range items {
+			if item.Kind != "gif" && item.Description != "" {
+				filtered = append(filtered, item)
+			}
+		}
+		items = filtered
+	}
 	if len(items) == 0 {
+		return nil
+	}
+
+	msgID := ""
+	if msg.ID != 0 {
+		msgID = msg.ID.String()
+	}
+
+	pending := make([]ai.ExtractedMedia, 0, len(items))
+	for _, item := range items {
+		if s.hasSeenPair(msgID, item.URL) {
+			continue
+		}
+		pending = append(pending, item)
+	}
+	if len(pending) == 0 {
 		return nil
 	}
 
@@ -332,15 +588,17 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 	ts := msgTime.Unix()
 	newTrigger := s.resolveLiveTriggerText(ctx, msg, msgTime)
 
-	for _, item := range items {
+	for _, item := range pending {
 		existing, err := s.repo.GetEntry(ctx, item.URL, guildID)
 		if err != nil {
-			logger.Warn("Media library failed to load existing entry before live update",
+			logger.Warn("Media library failed to load existing entry before live update; skipping URL",
 				zap.String("url", item.URL),
 				zap.String("guild_id", guildID),
 				zap.Error(err))
+			continue
 		}
 
+		storedDesc := item.Description
 		effectiveDesc := item.Description
 		existingTrigger := ""
 		if existing != nil {
@@ -350,6 +608,7 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 			existingTrigger = existing.TriggerText
 		}
 		mergedTrigger := prependTriggerText(existingTrigger, newTrigger, MaxTriggerTexts)
+		storedTrigger := mergedTrigger
 
 		var descEmb []byte
 		if effectiveDesc != "" && s.embedder != nil &&
@@ -360,6 +619,10 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 					zap.String("url", item.URL),
 					zap.String("guild_id", guildID),
 					zap.Error(err))
+				// Never advance description past a failed embedding when an existing embedding is valid.
+				if existing != nil && existing.Description != effectiveDesc && len(existing.DescriptionEmbedding) > 0 {
+					storedDesc = existing.Description
+				}
 			}
 		}
 
@@ -372,6 +635,10 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 					zap.String("url", item.URL),
 					zap.String("guild_id", guildID),
 					zap.Error(err))
+				// Never advance trigger_text past a failed embedding when an existing embedding is valid.
+				if existing != nil && existing.TriggerText != mergedTrigger && len(existing.TriggerEmbedding) > 0 {
+					storedTrigger = existing.TriggerText
+				}
 			}
 		}
 
@@ -379,10 +646,10 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 			GuildID:              guildID,
 			URL:                  item.URL,
 			Kind:                 item.Kind,
-			Description:          item.Description,
+			Description:          storedDesc,
 			FirstSeen:            ts,
 			LastSeen:             ts,
-			TriggerText:          mergedTrigger,
+			TriggerText:          storedTrigger,
 			DescriptionEmbedding: descEmb,
 			TriggerEmbedding:     trigEmb,
 		}); err != nil {
@@ -390,27 +657,17 @@ func (s *Service) RecordDiscordMessage(ctx context.Context, msg discord.Message)
 				zap.String("url", item.URL),
 				zap.String("guild_id", guildID),
 				zap.Error(err))
+			continue
 		}
+
+		s.markSeenPair(msgID, item.URL)
 	}
 
 	return nil
 }
 
 func (s *Service) resolveLiveTriggerText(ctx context.Context, msg discord.Message, msgTime time.Time) string {
-	names := make(map[string]string)
-	addNames := func(m discord.Message) {
-		if m.Author.ID != 0 && m.Author.Username != "" {
-			names[m.Author.ID.String()] = m.Author.Username
-		}
-		for _, u := range m.Mentions {
-			if u.ID != 0 && u.Username != "" {
-				names[u.ID.String()] = u.Username
-			}
-		}
-	}
-	addNames(msg)
-
-	// 1. Replied-to message takes priority.
+	// 1. Replied-to message takes priority (plain v1 render, matching exporter).
 	if msg.MessageReference != nil && msg.MessageReference.MessageID != nil {
 		refMsg := msg.ReferencedMessage
 		if refMsg == nil {
@@ -420,20 +677,16 @@ func (s *Service) resolveLiveTriggerText(ctx context.Context, msg discord.Messag
 			}
 		}
 		if refMsg != nil {
-			addNames(*refMsg)
-			if rendered := strings.TrimSpace(ai.RenderCompletionTextV1(ai.MessageFromDiscord(*refMsg), names)); rendered != "" {
+			if rendered := strings.TrimSpace(ai.RenderMediaMessage(ai.MessageFromDiscord(*refMsg), ai.MediaTagsV1)); rendered != "" {
 				return rendered
 			}
 		}
 	}
 
-	// 2. Previous human message in the same channel within 5 minutes.
+	// 2. Previous human message in the same channel within 5 minutes (bounded scan).
 	recent, err := s.repo.GetRecentDiscordMessagesByChannel(ctx, msg.ChannelID.String(), recentChannelScanLimit)
 	if err != nil {
 		return ""
-	}
-	for _, cand := range recent {
-		addNames(cand)
 	}
 	for _, cand := range recent {
 		if cand.ID == msg.ID {
@@ -449,7 +702,7 @@ func (s *Service) resolveLiveTriggerText(ctx context.Context, msg discord.Messag
 		if msgTime.Sub(candTime) > LiveTriggerWindow {
 			break
 		}
-		if rendered := strings.TrimSpace(ai.RenderCompletionTextV1(ai.MessageFromDiscord(cand), names)); rendered != "" {
+		if rendered := strings.TrimSpace(ai.RenderMediaMessage(ai.MessageFromDiscord(cand), ai.MediaTagsV1)); rendered != "" {
 			return rendered
 		}
 	}

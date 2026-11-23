@@ -106,7 +106,7 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 			return o.emptyCompletion(req), nil
 		}
 	}
-	targetV1Text := completionTargetV1Text(req.Messages, req.TargetMessageID, names)
+	targetV1Text := completionTargetV1Text(req.Messages, req.TargetMessageID)
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 || maxTokens > completionMaxTokens {
 		maxTokens = completionMaxTokens
@@ -360,23 +360,22 @@ func completionTargetIsBot(messages []Message, targetMessageID string) bool {
 	return ok && target.AuthorBot
 }
 
-// RenderCompletionTextV1 renders msg using the v1 media-tag contract and
-// completion text normalization (mentions, custom emojis, line cap).
-func RenderCompletionTextV1(msg Message, names map[string]string) string {
-	return completionText(msg, names, MediaTagsV1)
-}
-
-func completionTargetV1Text(messages []Message, targetMessageID string, names map[string]string) string {
+func completionTargetV1Text(messages []Message, targetMessageID string) string {
+	renderPlainV1 := func(msg Message) string {
+		rendered := msg
+		rendered.Content = msg.Text
+		return strings.TrimSpace(RenderMediaMessage(rendered, MediaTagsV1))
+	}
 	if targetMessageID != "" {
 		if target, ok := completionTargetMessage(messages, targetMessageID); ok {
-			return completionText(target, names, MediaTagsV1)
+			return renderPlainV1(target)
 		}
 		return ""
 	}
 	for idx := len(messages) - 1; idx >= 0; idx-- {
 		msg := messages[idx]
 		if msg.Role == RoleUser && !msg.AuthorBot {
-			if rendered := completionText(msg, names, MediaTagsV1); rendered != "" {
+			if rendered := renderPlainV1(msg); rendered != "" {
 				return rendered
 			}
 		}

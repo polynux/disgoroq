@@ -17,6 +17,10 @@ import (
 	"polynux/disgoroq/logger"
 )
 
+// MaxConsecutiveImportEmbedErrors is the threshold of consecutive embedding
+// failures after which ImportJSONL aborts with an error.
+const MaxConsecutiveImportEmbedErrors = 20
+
 // ImportRecord matches one JSONL line for -import-media-library.
 type ImportRecord struct {
 	URL          string   `json:"url"`
@@ -49,7 +53,8 @@ func (s *Service) ImportFile(ctx context.Context, path string, progress func(Imp
 
 // ImportJSONL imports JSONL records into media_library idempotently and resumably.
 // Re-importing overwrites counts, dates, and triggers, while reusing existing
-// embeddings whenever the stored text is unchanged.
+// embeddings whenever the stored text is unchanged. It aborts after
+// MaxConsecutiveImportEmbedErrors consecutive embedding failures.
 func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(ImportSummary)) (ImportSummary, error) {
 	if s == nil || s.repo == nil {
 		return ImportSummary{}, fmt.Errorf("media library repository is not initialized")
@@ -60,6 +65,7 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 
 	var summary ImportSummary
 	lineNum := 0
+	consecutiveEmbedErrors := 0
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return summary, err
@@ -110,10 +116,13 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 			summary.Skipped++
 			continue
 		}
-		if firstSeen == 0 {
+		if firstSeen == 0 && lastSeen == 0 {
+			now := time.Now().Unix()
+			firstSeen = now
+			lastSeen = now
+		} else if firstSeen == 0 {
 			firstSeen = lastSeen
-		}
-		if lastSeen == 0 {
+		} else if lastSeen == 0 {
 			lastSeen = firstSeen
 		}
 
@@ -133,12 +142,20 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 			} else if s.embedder != nil {
 				descEmb, err = EmbedDocument(ctx, s.embedder, description)
 				if err != nil {
+					consecutiveEmbedErrors++
 					logger.Warn("Failed to compute description embedding during import",
 						zap.Int("line", lineNum),
 						zap.String("url", canonicalURL),
+						zap.Int("consecutive_failures", consecutiveEmbedErrors),
 						zap.Error(err))
-				} else if len(descEmb) > 0 {
-					summary.EmbeddingsComputed++
+					if consecutiveEmbedErrors >= MaxConsecutiveImportEmbedErrors {
+						return summary, fmt.Errorf("aborting import after %d consecutive embedding failures: %w", consecutiveEmbedErrors, err)
+					}
+				} else {
+					consecutiveEmbedErrors = 0
+					if len(descEmb) > 0 {
+						summary.EmbeddingsComputed++
+					}
 				}
 			}
 		}
@@ -151,12 +168,20 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 			} else if s.embedder != nil {
 				trigEmb, err = EmbedDocument(ctx, s.embedder, triggerText)
 				if err != nil {
+					consecutiveEmbedErrors++
 					logger.Warn("Failed to compute trigger embedding during import",
 						zap.Int("line", lineNum),
 						zap.String("url", canonicalURL),
+						zap.Int("consecutive_failures", consecutiveEmbedErrors),
 						zap.Error(err))
-				} else if len(trigEmb) > 0 {
-					summary.EmbeddingsComputed++
+					if consecutiveEmbedErrors >= MaxConsecutiveImportEmbedErrors {
+						return summary, fmt.Errorf("aborting import after %d consecutive embedding failures: %w", consecutiveEmbedErrors, err)
+					}
+				} else {
+					consecutiveEmbedErrors = 0
+					if len(trigEmb) > 0 {
+						summary.EmbeddingsComputed++
+					}
 				}
 			}
 		}
@@ -193,24 +218,29 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 	return summary, nil
 }
 
+// joinTriggerTexts keeps the most recent maxItems non-empty unique trigger texts
+// from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]).
 func joinTriggerTexts(triggers []string, maxItems int) string {
-	if len(triggers) == 0 {
+	if len(triggers) == 0 || maxItems <= 0 {
 		return ""
 	}
-	out := make([]string, 0, min(len(triggers), maxItems))
+	reversed := make([]string, 0, min(len(triggers), maxItems))
 	seen := make(map[string]bool, maxItems)
-	for _, raw := range triggers {
-		cleaned := strings.TrimSpace(strings.ReplaceAll(raw, "\n", " "))
+	for i := len(triggers) - 1; i >= 0; i-- {
+		cleaned := strings.TrimSpace(strings.ReplaceAll(triggers[i], "\n", " "))
 		if cleaned == "" || seen[cleaned] {
 			continue
 		}
-		out = append(out, cleaned)
+		reversed = append(reversed, cleaned)
 		seen[cleaned] = true
-		if len(out) >= maxItems {
+		if len(reversed) >= maxItems {
 			break
 		}
 	}
-	return strings.Join(out, "\n")
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	return strings.Join(reversed, "\n")
 }
 
 func parseImportTimestamp(raw string) (int64, error) {

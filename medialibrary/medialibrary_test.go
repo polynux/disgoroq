@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -821,7 +822,7 @@ func TestImportJSONLIdempotencyAndResumability(t *testing.T) {
 
 	embedder := newFakeEmbedder()
 	embedder.set("search_document: cat smile", unitVec2D(1, 0))
-	embedder.set("search_document: bonjour\nsalut\nhey", unitVec2D(0, 1))
+	embedder.set("search_document: salut\nhey\nextra fourth", unitVec2D(0, 1))
 	// Simulate a transient embedding error on one trigger during the first run.
 	embedder.setErr("search_document: retry me", errors.New("temporary ollama timeout"))
 
@@ -845,7 +846,7 @@ func TestImportJSONLIdempotencyAndResumability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, e1)
 	assert.Equal(t, int64(5), e1.Uses)
-	assert.Equal(t, "bonjour\nsalut\nhey", e1.TriggerText)
+	assert.Equal(t, "salut\nhey\nextra fourth", e1.TriggerText)
 	assert.Len(t, e1.DescriptionEmbedding, EmbeddingDim*4)
 	assert.Len(t, e1.TriggerEmbedding, EmbeddingDim*4)
 
@@ -861,7 +862,7 @@ func TestImportJSONLIdempotencyAndResumability(t *testing.T) {
 	embedder.set("search_document: retry me", unitVec2D(1, 1))
 
 	jsonl2 := strings.Join([]string{
-		`{"url":"https://tenor.com/view/cat-smile-1","kind":"gif","description":"cat smile","guild_id":"g1","uses":9,"first_seen":"2024-01-01T10:00:00Z","last_seen":"2024-06-01T12:00:00Z","trigger_texts":["bonjour","salut","hey"]}`,
+		`{"url":"https://tenor.com/view/cat-smile-1","kind":"gif","description":"cat smile","guild_id":"g1","uses":9,"first_seen":"2024-01-01T10:00:00Z","last_seen":"2024-06-01T12:00:00Z","trigger_texts":["bonjour","salut","hey","extra fourth"]}`,
 		`{"url":"https://cdn.discordapp.com/attachments/1/2/a.gif?ex=999","kind":"gif","description":"","guild_id":"g1","uses":4,"first_seen":"2024-02-01T00:00:00Z","last_seen":"2024-04-01T00:00:00Z","trigger_texts":["retry me"]}`,
 	}, "\n")
 
@@ -946,3 +947,595 @@ func TestSearchCLIHelper(t *testing.T) {
 	assert.Equal(t, "https://tenor.com/view/a-1", trigHits[1].Entry.URL)
 	assert.InDelta(t, 0.60, trigHits[1].Similarity, 1e-3)
 }
+
+func TestLibSQLLosslessTextRoundTrip(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	urlEndingZ := "https://giphy.com/gifs/dragon-ball-abc123Z"
+	descEndingZ := "dragon ball Z"
+	trigEndingZ := "watching Z"
+	dateURL := "https://tenor.com/view/date-clip-2024Z"
+	dateDesc := "2024-05-01T12:00:00Z"
+	shortDateDesc := "2024-05-01"
+
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              "g1Z",
+		URL:                  urlEndingZ,
+		Kind:                 "gif",
+		Description:          descEndingZ,
+		Uses:                 4,
+		FirstSeen:            100,
+		LastSeen:             200,
+		TriggerText:          trigEndingZ,
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.95)),
+		TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.94)),
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              "g1Z",
+		URL:                  dateURL,
+		Kind:                 "gif",
+		Description:          dateDesc,
+		Uses:                 3,
+		FirstSeen:            100,
+		LastSeen:             200,
+		TriggerText:          shortDateDesc,
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.90)),
+		TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.89)),
+	}))
+
+	// Direct GetEntry round-trip.
+	gotZ, err := repo.GetEntry(ctx, urlEndingZ, "g1Z")
+	require.NoError(t, err)
+	require.NotNil(t, gotZ)
+	assert.Equal(t, "g1Z", gotZ.GuildID)
+	assert.Equal(t, urlEndingZ, gotZ.URL)
+	assert.Equal(t, descEndingZ, gotZ.Description)
+	assert.Equal(t, trigEndingZ, gotZ.TriggerText)
+
+	gotDate, err := repo.GetEntry(ctx, dateURL, "g1Z")
+	require.NoError(t, err)
+	require.NotNil(t, gotDate)
+	assert.Equal(t, dateURL, gotDate.URL)
+	assert.Equal(t, dateDesc, gotDate.Description)
+	assert.Equal(t, shortDateDesc, gotDate.TriggerText)
+
+	// Exact, vector, and Search CLI paths all preserve trailing Z and date strings.
+	embedder := newFakeEmbedder()
+	embedder.set("search_query: anime", unitVec2D(1, 0))
+	embedder.set("search_query: trig", unitVec2D(1, 0))
+	svc := NewService(repo, embedder, defaultEnabledConfig())
+
+	exactRes, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:  "g1Z",
+		RawReply: "[gif: " + descEndingZ + "]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, urlEndingZ, exactRes.URL)
+
+	dateExactRes, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:  "g1Z",
+		RawReply: "[gif: " + dateDesc + "]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, dateURL, dateExactRes.URL)
+
+	vecRes, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:  "g1Z",
+		RawReply: "[gif: anime]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, urlEndingZ, vecRes.URL)
+
+	trigRes, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:    "g1Z",
+		RawReply:   "[gif]",
+		TargetText: "trig",
+	})
+	require.True(t, ok)
+	assert.Equal(t, urlEndingZ, trigRes.URL)
+
+	searchHits, err := svc.Search(ctx, "g1Z", "anime", false, 10)
+	require.NoError(t, err)
+	require.Len(t, searchHits, 2)
+	assert.Equal(t, urlEndingZ, searchHits[0].Entry.URL)
+	assert.Equal(t, descEndingZ, searchHits[0].Entry.Description)
+	assert.Equal(t, dateURL, searchHits[1].Entry.URL)
+	assert.Equal(t, dateDesc, searchHits[1].Entry.Description)
+
+	// Bot repeat-window query also preserves a trailing Z on a bare URL message.
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	botID := snowflake.ID(9000)
+	insertCachedMessage(t, conn, discord.Message{
+		ID:        snowflake.ID(901),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+		Content:   urlEndingZ,
+		CreatedAt: time.Unix(1700000000, 0),
+	})
+	botMsgs, err := repo.GetRecentBotMessages(ctx, chID.String(), botID.String(), 5)
+	require.NoError(t, err)
+	require.Equal(t, []string{urlEndingZ}, botMsgs)
+}
+
+func TestResolveSQLPreLimitFiltering(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	botID := snowflake.ID(9000)
+	baseTime := time.Unix(1700000000, 0)
+
+	// Insert more Discord CDN rows and more repeat-window rows than lookupCandidateLimit (5),
+	// all ranked higher than the single eligible Tenor row.
+	for i := 0; i < 8; i++ {
+		cdnHost := "https://cdn.discordapp.com"
+		if i%2 == 1 {
+			cdnHost = "https://media.discordapp.net"
+		}
+		require.NoError(t, repo.UpsertImport(ctx, Entry{
+			GuildID:              gID.String(),
+			URL:                  fmt.Sprintf("%s/attachments/1/2/cat-%d.gif", cdnHost, i),
+			Kind:                 "gif",
+			Description:          "cat",
+			Uses:                 int64(100 - i),
+			FirstSeen:            100,
+			LastSeen:             500,
+			TriggerText:          "meow",
+			DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.99)),
+			TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.99)),
+		}))
+	}
+
+	for i := 0; i < 8; i++ {
+		recentURL := fmt.Sprintf("https://tenor.com/view/recent-cat-%d", i)
+		require.NoError(t, repo.UpsertImport(ctx, Entry{
+			GuildID:              gID.String(),
+			URL:                  recentURL,
+			Kind:                 "gif",
+			Description:          "cat",
+			Uses:                 int64(80 - i),
+			FirstSeen:            100,
+			LastSeen:             400,
+			TriggerText:          "meow",
+			DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.96)),
+			TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.96)),
+		}))
+		insertCachedMessage(t, conn, discord.Message{
+			ID:        snowflake.ID(200 + i),
+			GuildID:   &gID,
+			ChannelID: chID,
+			Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+			Content:   recentURL,
+			CreatedAt: baseTime.Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	eligibleURL := "https://tenor.com/view/eligible-cat-99"
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              gID.String(),
+		URL:                  eligibleURL,
+		Kind:                 "gif",
+		Description:          "cat",
+		Uses:                 1,
+		FirstSeen:            100,
+		LastSeen:             100,
+		TriggerText:          "meow",
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.85)),
+		TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.85)),
+	}))
+
+	embedder := newFakeEmbedder()
+	embedder.set("search_query: kitty", unitVec2D(1, 0))
+	embedder.set("search_query: meow now", unitVec2D(1, 0))
+
+	cfg := defaultEnabledConfig()
+	cfg.RepeatWindow = 20
+	svc := NewService(repo, embedder, cfg)
+
+	// Exact match must still reach the eligible row past 16 ineligible higher-ranked rows.
+	res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:   gID.String(),
+		ChannelID: chID.String(),
+		BotID:     botID.String(),
+		RawReply:  "[gif: cat]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, eligibleURL, res.URL)
+
+	// Description vector search must still reach the eligible row past 16 ineligible rows.
+	res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:   gID.String(),
+		ChannelID: chID.String(),
+		BotID:     botID.String(),
+		RawReply:  "[gif: kitty]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, eligibleURL, res.URL)
+
+	// Trigger vector search must still reach the eligible row past 16 ineligible rows.
+	res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:    gID.String(),
+		ChannelID:  chID.String(),
+		BotID:      botID.String(),
+		RawReply:   "[gif]",
+		TargetText: "meow now",
+	})
+	require.True(t, ok)
+	assert.Equal(t, eligibleURL, res.URL)
+}
+
+type blockingEmbedder struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingEmbedder) GenerateEmbedding(ctx context.Context, _ string) ([]float32, error) {
+	if b.started != nil {
+		select {
+		case b.started <- struct{}{}:
+		default:
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-b.release:
+		return unitVec2D(1, 0), nil
+	}
+}
+
+func TestResolveIndependentShortTimeout(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              "g1",
+		URL:                  "https://tenor.com/view/cat-1",
+		Kind:                 "gif",
+		Description:          "happy cat",
+		Uses:                 3,
+		FirstSeen:            100,
+		LastSeen:             100,
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.92)),
+	}))
+
+	// 1. Slow embedder is cut short by LookupTimeoutMs without cancelling caller ctx.
+	slow := &blockingEmbedder{release: make(chan struct{})}
+	cfg := defaultEnabledConfig()
+	cfg.LookupTimeoutMs = 40
+	svc := NewService(repo, slow, cfg)
+
+	parentCtx, parentCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer parentCancel()
+
+	start := time.Now()
+	_, ok := svc.Resolve(parentCtx, ai.MediaResolveRequest{
+		GuildID:  "g1",
+		RawReply: "[gif: smiling kitty]",
+	})
+	elapsed := time.Since(start)
+	assert.False(t, ok)
+	assert.Less(t, elapsed, 500*time.Millisecond)
+	assert.NoError(t, parentCtx.Err(), "parent completion context must stay uncancelled")
+	close(slow.release)
+
+	// 2. Independent of caller cancellation: a fast lookup succeeds even if parent ctx is already cancelled.
+	cancelledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	fastEmbedder := newFakeEmbedder()
+	fastEmbedder.set("search_query: smiling kitty", unitVec2D(1, 0))
+	fastSvc := NewService(repo, fastEmbedder, cfg)
+
+	res, ok := fastSvc.Resolve(cancelledCtx, ai.MediaResolveRequest{
+		GuildID:  "g1",
+		RawReply: "[gif: smiling kitty]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, "https://tenor.com/view/cat-1", res.URL)
+}
+
+func TestLiveWorkerBoundedQueueDrainAndErrorSafety(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	aliceID := snowflake.ID(3001)
+	t0 := time.Unix(1700001000, 0)
+
+	// 1. Bounded worker drops when full and drains queued jobs on Close.
+	blocker := &blockingEmbedder{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	svc := NewService(repo, blocker, defaultEnabledConfig())
+	svc.queueCap = 1
+
+	msg1 := discord.Message{
+		ID:        snowflake.ID(1001),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "https://tenor.com/view/job-one-1",
+		CreatedAt: t0,
+	}
+	msg2 := discord.Message{
+		ID:        snowflake.ID(1002),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "https://tenor.com/view/job-two-2",
+		CreatedAt: t0.Add(time.Second),
+	}
+	msg3 := discord.Message{
+		ID:        snowflake.ID(1003),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "https://tenor.com/view/job-three-3",
+		CreatedAt: t0.Add(2 * time.Second),
+	}
+
+	require.True(t, svc.EnqueueMessage(msg1))
+	<-blocker.started // worker popped msg1 and is blocked in embedder
+	require.True(t, svc.EnqueueMessage(msg2), "second job should occupy buffer slot")
+	assert.False(t, svc.EnqueueMessage(msg3), "third job should be dropped when bounded queue is full")
+
+	close(blocker.release)
+	svc.Close() // drains msg1 and msg2 cleanly before returning
+	assert.False(t, svc.EnqueueMessage(msg3), "enqueue after Close must return false")
+
+	e1, err := repo.GetEntry(ctx, "https://tenor.com/view/job-one-1", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, e1)
+	e2, err := repo.GetEntry(ctx, "https://tenor.com/view/job-two-2", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, e2)
+	e3, err := repo.GetEntry(ctx, "https://tenor.com/view/job-three-3", gID.String())
+	require.NoError(t, err)
+	assert.Nil(t, e3, "dropped job should not have been indexed")
+
+	// 2. Failed embedding must NOT advance description or trigger_text past an existing valid embedding.
+	embedder := newFakeEmbedder()
+	origDescVec := unitVec2D(1, 0)
+	origTrigVec := unitVec2D(0, 1)
+	embedder.set("search_document: old title", origDescVec)
+	embedder.set("search_document: old trigger", origTrigVec)
+
+	liveSvc := NewService(repo, embedder, defaultEnabledConfig())
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              gID.String(),
+		URL:                  "https://www.youtube.com/watch?v=keepme",
+		Kind:                 "youtube",
+		Description:          "old title",
+		Uses:                 2,
+		FirstSeen:            t0.Unix(),
+		LastSeen:             t0.Unix(),
+		TriggerText:          "old trigger",
+		DescriptionEmbedding: mustBlob(t, origDescVec),
+		TriggerEmbedding:     mustBlob(t, origTrigVec),
+	}))
+
+	// Fail both new description and new merged trigger embeddings.
+	embedder.setErr("search_document: new title", errors.New("ollama down"))
+	embedder.setErr("search_document: new trigger\nold trigger", errors.New("ollama down"))
+
+	refID := snowflake.ID(1050)
+	insertCachedMessage(t, conn, discord.Message{
+		ID:        refID,
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "new trigger",
+		CreatedAt: t0.Add(time.Minute),
+	})
+	require.NoError(t, liveSvc.RecordDiscordMessage(ctx, discord.Message{
+		ID:               snowflake.ID(1051),
+		GuildID:          &gID,
+		ChannelID:        chID,
+		Author:           discord.User{ID: aliceID, Username: "alice"},
+		Content:          "https://www.youtube.com/watch?v=keepme",
+		Embeds:           []discord.Embed{{URL: "https://www.youtube.com/watch?v=keepme", Title: "new title"}},
+		MessageReference: &discord.MessageReference{MessageID: &refID},
+		CreatedAt:        t0.Add(2 * time.Minute),
+	}))
+
+	kept, err := repo.GetEntry(ctx, "https://www.youtube.com/watch?v=keepme", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, kept)
+	assert.Equal(t, int64(3), kept.Uses)
+	assert.Equal(t, "old title", kept.Description, "description must not advance past failed embedding")
+	assert.Equal(t, "old trigger", kept.TriggerText, "trigger_text must not advance past failed embedding")
+	assert.Equal(t, mustBlob(t, origDescVec), kept.DescriptionEmbedding)
+	assert.Equal(t, mustBlob(t, origTrigVec), kept.TriggerEmbedding)
+
+	// 3. GetEntry DB error skips the URL instead of treating it as new.
+	closedDB, closedRepo := setupMediaTestDB(t)
+	require.NoError(t, closedDB.Close())
+	brokenSvc := NewService(closedRepo, newFakeEmbedder(), defaultEnabledConfig())
+	require.NoError(t, brokenSvc.RecordDiscordMessage(ctx, discord.Message{
+		ID:        snowflake.ID(1099),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "https://tenor.com/view/should-skip-1",
+		CreatedAt: t0,
+	}))
+}
+
+func TestRecordDiscordMessageUpdateUnfurlAndDedupe(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+	svc := NewService(repo, newFakeEmbedder(), defaultEnabledConfig())
+
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	aliceID := snowflake.ID(3001)
+	msgID := snowflake.ID(2001)
+	t0 := time.Unix(1700002000, 0)
+
+	// Step 1: MESSAGE_CREATE has a Tenor GIF and a YouTube link without embeds yet.
+	createMsg := discord.Message{
+		ID:        msgID,
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   "https://tenor.com/view/cat-jump-1 https://www.youtube.com/watch?v=unfurl1",
+		CreatedAt: t0,
+	}
+	require.NoError(t, svc.RecordDiscordMessage(ctx, createMsg))
+
+	gifEntry, err := repo.GetEntry(ctx, "https://tenor.com/view/cat-jump-1", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, gifEntry)
+	assert.Equal(t, int64(1), gifEntry.Uses)
+
+	ytBefore, err := repo.GetEntry(ctx, "https://www.youtube.com/watch?v=unfurl1", gID.String())
+	require.NoError(t, err)
+	assert.Nil(t, ytBefore, "undescribed YouTube link should not be indexed before unfurl")
+
+	// Step 2: MESSAGE_UPDATE arrives with the unfurled YouTube embed.
+	updateMsg := createMsg
+	updateMsg.Embeds = []discord.Embed{
+		{
+			URL:   "https://www.youtube.com/watch?v=unfurl1",
+			Title: "Unfurled Video Title",
+		},
+	}
+	require.NoError(t, svc.RecordDiscordMessageUpdate(ctx, updateMsg))
+
+	ytAfter, err := repo.GetEntry(ctx, "https://www.youtube.com/watch?v=unfurl1", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, ytAfter)
+	assert.Equal(t, "youtube", ytAfter.Kind)
+	assert.Equal(t, "Unfurled Video Title", ytAfter.Description)
+	assert.Equal(t, int64(1), ytAfter.Uses)
+
+	gifAfter, err := repo.GetEntry(ctx, "https://tenor.com/view/cat-jump-1", gID.String())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), gifAfter.Uses, "GIF uses must not be counted twice on MESSAGE_UPDATE")
+
+	// Step 3: A second MESSAGE_UPDATE for the same message must not double-count YouTube uses.
+	require.NoError(t, svc.RecordDiscordMessageUpdate(ctx, updateMsg))
+	ytFinal, err := repo.GetEntry(ctx, "https://www.youtube.com/watch?v=unfurl1", gID.String())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), ytFinal.Uses, "repeat MESSAGE_UPDATE must not double-count uses")
+}
+
+func TestLiveTriggerPlainV1AndDeepScan(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+	svc := NewService(repo, newFakeEmbedder(), defaultEnabledConfig())
+
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	aliceID := snowflake.ID(3001)
+	bobID := snowflake.ID(3002)
+	botID := snowflake.ID(9000)
+	t0 := time.Unix(1700003000, 0)
+
+	// Previous human message with >300 chars and a raw <@id> mention, followed by 25 bot messages
+	// all within the 5-minute window (proves we scan past the old 20-message cap and keep plain v1 text).
+	longHumanText := "<@3001> " + strings.Repeat("bonjour ", 45) + "fin"
+	require.Greater(t, len(longHumanText), 300)
+	insertCachedMessage(t, conn, discord.Message{
+		ID:        snowflake.ID(3000),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: aliceID, Username: "alice"},
+		Content:   longHumanText,
+		CreatedAt: t0.Add(-3 * time.Minute),
+	})
+	for i := 0; i < 25; i++ {
+		insertCachedMessage(t, conn, discord.Message{
+			ID:        snowflake.ID(3001 + i),
+			GuildID:   &gID,
+			ChannelID: chID,
+			Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+			Content:   "bot chatter",
+			CreatedAt: t0.Add(-2*time.Minute + time.Duration(i)*time.Second),
+		})
+	}
+
+	msg := discord.Message{
+		ID:        snowflake.ID(3100),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: bobID, Username: "bob"},
+		Content:   "https://tenor.com/view/deep-scan-1",
+		CreatedAt: t0,
+	}
+	require.NoError(t, svc.RecordDiscordMessage(ctx, msg))
+
+	entry, err := repo.GetEntry(ctx, "https://tenor.com/view/deep-scan-1", gID.String())
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, longHumanText, entry.TriggerText)
+}
+
+func TestImportMissingDatesAndConsecutiveEmbedFailureAbort(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	// 1. Missing dates default to last_seen / now instead of 0.
+	embedder := newFakeEmbedder()
+	svc := NewService(repo, embedder, defaultEnabledConfig())
+
+	before := time.Now().Unix()
+	jsonlDates := strings.Join([]string{
+		`{"url":"https://tenor.com/view/no-dates-1","kind":"gif","description":"no dates","guild_id":"g1","uses":1}`,
+		`{"url":"https://tenor.com/view/only-last-2","kind":"gif","description":"only last","guild_id":"g1","uses":1,"last_seen":"2024-05-01T12:00:00Z"}`,
+		`{"url":"https://tenor.com/view/only-first-3","kind":"gif","description":"only first","guild_id":"g1","uses":1,"first_seen":"2024-04-01T12:00:00Z"}`,
+	}, "\n")
+
+	sum, err := svc.ImportJSONL(ctx, strings.NewReader(jsonlDates), nil)
+	require.NoError(t, err)
+	after := time.Now().Unix()
+	assert.Equal(t, 3, sum.Rows)
+
+	e1, err := repo.GetEntry(ctx, "https://tenor.com/view/no-dates-1", "g1")
+	require.NoError(t, err)
+	require.NotNil(t, e1)
+	assert.GreaterOrEqual(t, e1.FirstSeen, before)
+	assert.LessOrEqual(t, e1.FirstSeen, after)
+	assert.Equal(t, e1.FirstSeen, e1.LastSeen)
+
+	wantLast, _ := time.Parse(time.RFC3339, "2024-05-01T12:00:00Z")
+	e2, err := repo.GetEntry(ctx, "https://tenor.com/view/only-last-2", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, wantLast.Unix(), e2.FirstSeen)
+	assert.Equal(t, wantLast.Unix(), e2.LastSeen)
+
+	wantFirst, _ := time.Parse(time.RFC3339, "2024-04-01T12:00:00Z")
+	e3, err := repo.GetEntry(ctx, "https://tenor.com/view/only-first-3", "g1")
+	require.NoError(t, err)
+	assert.Equal(t, wantFirst.Unix(), e3.FirstSeen)
+	assert.Equal(t, wantFirst.Unix(), e3.LastSeen)
+
+	// 2. Abort after 20 consecutive embedding failures; a success resets the counter.
+	failEmbedder := newFakeEmbedder()
+	var lines []string
+	// 19 failures, then 1 success (resets counter), then 20 consecutive failures (aborts).
+	for i := 0; i < 19; i++ {
+		desc := fmt.Sprintf("fail-a-%d", i)
+		failEmbedder.setErr("search_document: "+desc, errors.New("embed err"))
+		lines = append(lines, fmt.Sprintf(`{"url":"https://tenor.com/view/fa-%d","kind":"gif","description":%q,"guild_id":"g1","uses":1}`, i, desc))
+	}
+	lines = append(lines, `{"url":"https://tenor.com/view/ok-reset","kind":"gif","description":"ok-reset","guild_id":"g1","uses":1}`)
+	for i := 0; i < 25; i++ {
+		desc := fmt.Sprintf("fail-b-%d", i)
+		failEmbedder.setErr("search_document: "+desc, errors.New("embed err"))
+		lines = append(lines, fmt.Sprintf(`{"url":"https://tenor.com/view/fb-%d","kind":"gif","description":%q,"guild_id":"g1","uses":1}`, i, desc))
+	}
+
+	abortSvc := NewService(repo, failEmbedder, defaultEnabledConfig())
+	abortSum, err := abortSvc.ImportJSONL(ctx, strings.NewReader(strings.Join(lines, "\n")), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "20 consecutive embedding failures")
+	// 19 failed rows + 1 ok row + 19 failed rows before the 20th aborted = 39 rows written.
+	assert.Equal(t, 39, abortSum.Rows)
+}
+

@@ -111,38 +111,65 @@ func (q *Queries) DeleteSummariesForUser(ctx context.Context, arg DeleteSummarie
 }
 
 const findMediaLibraryExactDescription = `-- name: FindMediaLibraryExactDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+WHERE guild_id = ?1
+  AND kind = ?2
+  AND description != ''
+  AND LOWER(description) = LOWER(?3)
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type FindMediaLibraryExactDescriptionParams struct {
-	GuildID string
-	Kind    string
-	LOWER   string
-	Limit   int64
+	GuildID         string
+	Kind            string
+	Description     string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type FindMediaLibraryExactDescriptionRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 }
 
 func (q *Queries) FindMediaLibraryExactDescription(ctx context.Context, arg FindMediaLibraryExactDescriptionParams) ([]FindMediaLibraryExactDescriptionRow, error) {
 	rows, err := q.db.QueryContext(ctx, findMediaLibraryExactDescription,
 		arg.GuildID,
 		arg.Kind,
-		arg.LOWER,
-		arg.Limit,
+		arg.Description,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -176,38 +203,65 @@ func (q *Queries) FindMediaLibraryExactDescription(ctx context.Context, arg Find
 }
 
 const findMediaLibraryExactDescriptionCrossGuild = `-- name: FindMediaLibraryExactDescriptionCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND description != '' AND LOWER(description) = LOWER(?)
+WHERE guild_id != ?1
+  AND kind = ?2
+  AND description != ''
+  AND LOWER(description) = LOWER(?3)
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type FindMediaLibraryExactDescriptionCrossGuildParams struct {
-	GuildID string
-	Kind    string
-	LOWER   string
-	Limit   int64
+	ExcludeGuildID  string
+	Kind            string
+	Description     string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type FindMediaLibraryExactDescriptionCrossGuildRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 }
 
 func (q *Queries) FindMediaLibraryExactDescriptionCrossGuild(ctx context.Context, arg FindMediaLibraryExactDescriptionCrossGuildParams) ([]FindMediaLibraryExactDescriptionCrossGuildRow, error) {
 	rows, err := q.db.QueryContext(ctx, findMediaLibraryExactDescriptionCrossGuild,
-		arg.GuildID,
+		arg.ExcludeGuildID,
 		arg.Kind,
-		arg.LOWER,
-		arg.Limit,
+		arg.Description,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -683,8 +737,14 @@ func (q *Queries) GetLatestSummaryForUser(ctx context.Context, arg GetLatestSumm
 }
 
 const getMediaLibraryEntry = `-- name: GetMediaLibraryEntry :one
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen,
-       trigger_text, description_embedding, trigger_embedding
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       description_embedding, trigger_embedding
 FROM media_library
 WHERE url = ? AND guild_id = ?
 LIMIT 1
@@ -695,9 +755,23 @@ type GetMediaLibraryEntryParams struct {
 	GuildID string
 }
 
-func (q *Queries) GetMediaLibraryEntry(ctx context.Context, arg GetMediaLibraryEntryParams) (MediaLibrary, error) {
+type GetMediaLibraryEntryRow struct {
+	ID                   int64
+	GuildID              []byte
+	Url                  []byte
+	Kind                 []byte
+	Description          []byte
+	Uses                 int64
+	FirstSeen            int64
+	LastSeen             int64
+	TriggerText          []byte
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+}
+
+func (q *Queries) GetMediaLibraryEntry(ctx context.Context, arg GetMediaLibraryEntryParams) (GetMediaLibraryEntryRow, error) {
 	row := q.db.QueryRowContext(ctx, getMediaLibraryEntry, arg.Url, arg.GuildID)
-	var i MediaLibrary
+	var i GetMediaLibraryEntryRow
 	err := row.Scan(
 		&i.ID,
 		&i.GuildID,
@@ -746,7 +820,7 @@ func (q *Queries) GetMessageVote(ctx context.Context, messageID string) (Message
 }
 
 const getRecentBotMessagesByChannel = `-- name: GetRecentBotMessagesByChannel :many
-SELECT content
+SELECT CAST(content AS BLOB) AS content
 FROM discord_messages
 WHERE channel_id = ? AND author_id = ? AND deleted_at IS NULL
 ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
@@ -759,15 +833,15 @@ type GetRecentBotMessagesByChannelParams struct {
 	Limit     int64
 }
 
-func (q *Queries) GetRecentBotMessagesByChannel(ctx context.Context, arg GetRecentBotMessagesByChannelParams) ([]string, error) {
+func (q *Queries) GetRecentBotMessagesByChannel(ctx context.Context, arg GetRecentBotMessagesByChannelParams) ([][]byte, error) {
 	rows, err := q.db.QueryContext(ctx, getRecentBotMessagesByChannel, arg.ChannelID, arg.AuthorID, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items [][]byte
 	for rows.Next() {
-		var content string
+		var content []byte
 		if err := rows.Scan(&content); err != nil {
 			return nil, err
 		}
@@ -1187,7 +1261,13 @@ func (q *Queries) MarkMessagesAsProcessed(ctx context.Context, arg MarkMessagesA
 }
 
 const searchMediaLibraryAllKindsByDescription = `-- name: SearchMediaLibraryAllKindsByDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
        vector_distance_cos(description_embedding, vector32(?)) as distance
 FROM media_library
 WHERE guild_id = ? AND description_embedding IS NOT NULL
@@ -1203,14 +1283,14 @@ type SearchMediaLibraryAllKindsByDescriptionParams struct {
 
 type SearchMediaLibraryAllKindsByDescriptionRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
@@ -1249,7 +1329,13 @@ func (q *Queries) SearchMediaLibraryAllKindsByDescription(ctx context.Context, a
 }
 
 const searchMediaLibraryAllKindsByTrigger = `-- name: SearchMediaLibraryAllKindsByTrigger :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
        vector_distance_cos(trigger_embedding, vector32(?)) as distance
 FROM media_library
 WHERE guild_id = ? AND trigger_embedding IS NOT NULL
@@ -1265,14 +1351,14 @@ type SearchMediaLibraryAllKindsByTriggerParams struct {
 
 type SearchMediaLibraryAllKindsByTriggerRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
@@ -1311,40 +1397,66 @@ func (q *Queries) SearchMediaLibraryAllKindsByTrigger(ctx context.Context, arg S
 }
 
 const searchMediaLibraryByDescription = `-- name: SearchMediaLibraryByDescription :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(description_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(description_embedding, vector32(?1)) as distance
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND description_embedding IS NOT NULL
+WHERE guild_id = ?2
+  AND kind = ?3
+  AND description_embedding IS NOT NULL
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type SearchMediaLibraryByDescriptionParams struct {
-	Vector32 interface{}
-	GuildID  string
-	Kind     string
-	Limit    int64
+	QueryEmbedding  interface{}
+	GuildID         string
+	Kind            string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type SearchMediaLibraryByDescriptionRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
 func (q *Queries) SearchMediaLibraryByDescription(ctx context.Context, arg SearchMediaLibraryByDescriptionParams) ([]SearchMediaLibraryByDescriptionRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByDescription,
-		arg.Vector32,
+		arg.QueryEmbedding,
 		arg.GuildID,
 		arg.Kind,
-		arg.Limit,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -1379,40 +1491,66 @@ func (q *Queries) SearchMediaLibraryByDescription(ctx context.Context, arg Searc
 }
 
 const searchMediaLibraryByDescriptionCrossGuild = `-- name: SearchMediaLibraryByDescriptionCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(description_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(description_embedding, vector32(?1)) as distance
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND description_embedding IS NOT NULL
+WHERE guild_id != ?2
+  AND kind = ?3
+  AND description_embedding IS NOT NULL
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type SearchMediaLibraryByDescriptionCrossGuildParams struct {
-	Vector32 interface{}
-	GuildID  string
-	Kind     string
-	Limit    int64
+	QueryEmbedding  interface{}
+	ExcludeGuildID  string
+	Kind            string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type SearchMediaLibraryByDescriptionCrossGuildRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
 func (q *Queries) SearchMediaLibraryByDescriptionCrossGuild(ctx context.Context, arg SearchMediaLibraryByDescriptionCrossGuildParams) ([]SearchMediaLibraryByDescriptionCrossGuildRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByDescriptionCrossGuild,
-		arg.Vector32,
-		arg.GuildID,
+		arg.QueryEmbedding,
+		arg.ExcludeGuildID,
 		arg.Kind,
-		arg.Limit,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -1447,40 +1585,66 @@ func (q *Queries) SearchMediaLibraryByDescriptionCrossGuild(ctx context.Context,
 }
 
 const searchMediaLibraryByTrigger = `-- name: SearchMediaLibraryByTrigger :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?1)) as distance
 FROM media_library
-WHERE guild_id = ? AND kind = ? AND trigger_embedding IS NOT NULL
+WHERE guild_id = ?2
+  AND kind = ?3
+  AND trigger_embedding IS NOT NULL
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type SearchMediaLibraryByTriggerParams struct {
-	Vector32 interface{}
-	GuildID  string
-	Kind     string
-	Limit    int64
+	QueryEmbedding  interface{}
+	GuildID         string
+	Kind            string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type SearchMediaLibraryByTriggerRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
 func (q *Queries) SearchMediaLibraryByTrigger(ctx context.Context, arg SearchMediaLibraryByTriggerParams) ([]SearchMediaLibraryByTriggerRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByTrigger,
-		arg.Vector32,
+		arg.QueryEmbedding,
 		arg.GuildID,
 		arg.Kind,
-		arg.Limit,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
@@ -1515,40 +1679,66 @@ func (q *Queries) SearchMediaLibraryByTrigger(ctx context.Context, arg SearchMed
 }
 
 const searchMediaLibraryByTriggerCrossGuild = `-- name: SearchMediaLibraryByTriggerCrossGuild :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text,
-       vector_distance_cos(trigger_embedding, vector32(?)) as distance
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text,
+       vector_distance_cos(trigger_embedding, vector32(?1)) as distance
 FROM media_library
-WHERE guild_id != ? AND kind = ? AND trigger_embedding IS NOT NULL
+WHERE guild_id != ?2
+  AND kind = ?3
+  AND trigger_embedding IS NOT NULL
+  AND (
+      ?4 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?5, char(10) || url || char(10)) = 0
 ORDER BY distance ASC, uses DESC, last_seen DESC
-LIMIT ?
+LIMIT ?6
 `
 
 type SearchMediaLibraryByTriggerCrossGuildParams struct {
-	Vector32 interface{}
-	GuildID  string
-	Kind     string
-	Limit    int64
+	QueryEmbedding  interface{}
+	ExcludeGuildID  string
+	Kind            string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
 }
 
 type SearchMediaLibraryByTriggerCrossGuildRow struct {
 	ID          int64
-	GuildID     string
-	Url         string
-	Kind        string
-	Description string
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
 	Uses        int64
 	FirstSeen   int64
 	LastSeen    int64
-	TriggerText string
+	TriggerText []byte
 	Distance    interface{}
 }
 
 func (q *Queries) SearchMediaLibraryByTriggerCrossGuild(ctx context.Context, arg SearchMediaLibraryByTriggerCrossGuildParams) ([]SearchMediaLibraryByTriggerCrossGuildRow, error) {
 	rows, err := q.db.QueryContext(ctx, searchMediaLibraryByTriggerCrossGuild,
-		arg.Vector32,
-		arg.GuildID,
+		arg.QueryEmbedding,
+		arg.ExcludeGuildID,
 		arg.Kind,
-		arg.Limit,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
 	)
 	if err != nil {
 		return nil, err
