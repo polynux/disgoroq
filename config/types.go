@@ -41,6 +41,7 @@ type DatabaseConfig struct {
 // AIConfig contains AI service configuration.
 type AIConfig struct {
 	PrimaryProvider   string           `yaml:"primary_provider"`
+	VisionProvider    string           `yaml:"vision_provider"`
 	Groq              GroqConfig       `yaml:"groq"`
 	Ollama            OllamaConfig     `yaml:"ollama"`
 	Opencode          OpencodeConfig   `yaml:"opencode"`

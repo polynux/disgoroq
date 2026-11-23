@@ -123,6 +123,7 @@ func main() {
 	// Create AI service configuration from central config
 	aiServiceConfig := ai.ServiceConfig{
 		PrimaryProvider:             cfg.AI.PrimaryProvider,
+		VisionProvider:              cfg.AI.VisionProvider,
 		GroqAPIKey:                  cfg.AI.Groq.APIKey,
 		GroqModel:                   cfg.AI.Groq.Model,
 		GroqVisionModel:             cfg.AI.Groq.VisionModel,
@@ -200,6 +201,7 @@ func main() {
 	// Log AI service configuration
 	logger.Info("AI service initialized",
 		zap.String("primary_provider", aiServiceConfig.PrimaryProvider),
+		zap.String("vision_provider", aiServiceConfig.VisionProvider),
 		zap.Bool("fallback_enabled", aiService.IsFallbackAvailable()),
 		zap.Int("max_retries", aiServiceConfig.RetryConfig.MaxRetries),
 		zap.Duration("retry_delay", aiServiceConfig.RetryConfig.InitialDelay))

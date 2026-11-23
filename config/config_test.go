@@ -978,6 +978,9 @@ func TestDefaultConfig(t *testing.T) {
 	if config.AI.PrimaryProvider != AIProviderGroq {
 		t.Errorf("Default AI.PrimaryProvider = %v, want %v", config.AI.PrimaryProvider, AIProviderGroq)
 	}
+	if config.AI.VisionProvider != "" {
+		t.Errorf("Default AI.VisionProvider = %q, want empty", config.AI.VisionProvider)
+	}
 	if !config.AI.Groq.ThinkingEnabled {
 		t.Error("Default AI.Groq.ThinkingEnabled should be true")
 	}
@@ -1093,4 +1096,272 @@ func TestMemoryConfigNoMaxContextMessages(t *testing.T) {
 	}
 	// Compile-time proof the field no longer exists:
 	// cfg.Memory.MaxContextMessages would fail to compile.
+}
+
+func TestVisionProviderValidation(t *testing.T) {
+	baseConfig := func() *Config {
+		cfg := DefaultConfig()
+		cfg.Discord.Token = "test-token"
+		cfg.Database.Local = true
+		cfg.Memory.Enabled = false
+		return cfg
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "empty vision_provider preserves old requirement for ollama vision_model on ollama primary",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.VisionProvider = ""
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.ollama.vision_model cannot be empty when ollama is enabled",
+		},
+		{
+			name: "empty vision_provider preserves old requirement for ollama vision_model on groq primary",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderGroq
+				cfg.AI.VisionProvider = ""
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.ollama.vision_model cannot be empty when ollama is enabled",
+		},
+		{
+			name: "empty vision_provider with ollama primary and vision_model passes",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.VisionProvider = ""
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = "llava"
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown vision_provider rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.VisionProvider = "anthropic"
+			},
+			wantErr: true,
+			errMsg:  "ai.vision_provider must be one of",
+		},
+		{
+			name: "disabled opencode vision_provider rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.VisionProvider = AIProviderOpencode
+				cfg.AI.Opencode.Enabled = false
+			},
+			wantErr: true,
+			errMsg:  `ai.opencode.enabled must be true when ai.vision_provider is "opencode"`,
+		},
+		{
+			name: "disabled ollama vision_provider rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.VisionProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = false
+			},
+			wantErr: true,
+			errMsg:  `ai.ollama.enabled must be true when ai.vision_provider is "ollama"`,
+		},
+		{
+			name: "disabled openrouter vision_provider rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.VisionProvider = AIProviderOpenrouter
+				cfg.AI.Openrouter.Enabled = false
+			},
+			wantErr: true,
+			errMsg:  `ai.openrouter.enabled must be true when ai.vision_provider is "openrouter"`,
+		},
+		{
+			name: "groq vision_provider without api_key rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.VisionProvider = AIProviderGroq
+				cfg.AI.Groq.APIKey = ""
+			},
+			wantErr: true,
+			errMsg:  `ai.groq.api_key is required when ai.vision_provider is "groq"`,
+		},
+		{
+			name: "opencode vision_provider with empty vision_model rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.VisionProvider = AIProviderOpencode
+				cfg.AI.Opencode.Enabled = true
+				cfg.AI.Opencode.APIKey = "opencode-key"
+				cfg.AI.Opencode.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.opencode.vision_model cannot be empty when opencode is enabled",
+		},
+		{
+			name: "openrouter vision_provider with empty vision_model rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.VisionProvider = AIProviderOpenrouter
+				cfg.AI.Openrouter.Enabled = true
+				cfg.AI.Openrouter.APIKey = "openrouter-key"
+				cfg.AI.Openrouter.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.openrouter.vision_model cannot be empty when openrouter is enabled",
+		},
+		{
+			name: "groq vision_provider with empty vision_model rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.VisionProvider = AIProviderGroq
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.Groq.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.groq.vision_model cannot be empty",
+		},
+		{
+			name: "ollama vision_provider with empty vision_model rejected",
+			mutate: func(cfg *Config) {
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.VisionProvider = AIProviderOllama
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+			},
+			wantErr: true,
+			errMsg:  "ai.ollama.vision_model cannot be empty when ollama is enabled",
+		},
+		{
+			name: "ollama primary with opencode vision_provider allows empty ollama vision_model",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.VisionProvider = AIProviderOpencode
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.Opencode.Enabled = true
+				cfg.AI.Opencode.APIKey = "opencode-key"
+				cfg.AI.Opencode.VisionModel = "deepseek-v4.1-flash"
+			},
+			wantErr: false,
+		},
+		{
+			name: "ollama primary with groq vision_provider allows empty ollama vision_model",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.VisionProvider = AIProviderGroq
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.Groq.VisionModel = "meta-llama/llama-4-scout-17b-16e-instruct"
+			},
+			wantErr: false,
+		},
+		{
+			name: "ollama primary with openrouter vision_provider allows empty ollama vision_model",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderOllama
+				cfg.AI.VisionProvider = AIProviderOpenrouter
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+				cfg.AI.Openrouter.Enabled = true
+				cfg.AI.Openrouter.APIKey = "openrouter-key"
+				cfg.AI.Openrouter.VisionModel = "google/gemini-2.5-flash"
+			},
+			wantErr: false,
+		},
+		{
+			name: "groq primary and groq vision_provider allows enabled ollama with empty vision_model",
+			mutate: func(cfg *Config) {
+				cfg.AI.PrimaryProvider = AIProviderGroq
+				cfg.AI.VisionProvider = AIProviderGroq
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.Ollama.Enabled = true
+				cfg.AI.Ollama.VisionModel = ""
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("Validate() error = %q, want substring %q", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestLoadVisionProviderFromYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	t.Setenv("DISCORD_TOKEN", "test-token")
+	t.Setenv("OPENCODE_API_KEY", "test-opencode-key")
+
+	configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  local: true
+
+memory:
+  enabled: false
+
+ai:
+  primary_provider: "ollama"
+  vision_provider: "opencode"
+  ollama:
+    enabled: true
+    url: "http://localhost:11434"
+    model: "luciole"
+    vision_model: ""
+  opencode:
+    enabled: true
+    base_url: "https://opencode.ai/inference/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model: "deepseek-v4.1-flash"
+    vision_model: "deepseek-v4.1-flash"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("Failed to write config file: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.AI.PrimaryProvider != AIProviderOllama {
+		t.Errorf("AI.PrimaryProvider = %q, want %q", cfg.AI.PrimaryProvider, AIProviderOllama)
+	}
+	if cfg.AI.VisionProvider != AIProviderOpencode {
+		t.Errorf("AI.VisionProvider = %q, want %q", cfg.AI.VisionProvider, AIProviderOpencode)
+	}
+	if cfg.AI.Ollama.VisionModel != "" {
+		t.Errorf("AI.Ollama.VisionModel = %q, want empty", cfg.AI.Ollama.VisionModel)
+	}
 }

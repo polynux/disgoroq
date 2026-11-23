@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,6 +21,7 @@ const (
 // ServiceConfig contains configuration for the AI service
 type ServiceConfig struct {
 	PrimaryProvider string
+	VisionProvider  string
 
 	// Primary provider configuration
 	GroqAPIKey          string
@@ -77,7 +79,7 @@ func (c *ServiceConfig) Validate() error {
 		if c.GroqModel == "" {
 			return fmt.Errorf("Groq model is required when groq is the primary provider")
 		}
-		if c.GroqVisionModel == "" {
+		if strings.TrimSpace(c.GroqVisionModel) == "" {
 			return fmt.Errorf("Groq vision model is required when groq is the primary provider")
 		}
 	case ProviderOllama:
@@ -90,7 +92,8 @@ func (c *ServiceConfig) Validate() error {
 		if c.OllamaModel == "" {
 			return fmt.Errorf("Ollama model is required when ollama is the primary provider")
 		}
-		if c.OllamaVisionModel == "" {
+		requireOllamaVision := c.VisionProvider == "" || c.VisionProvider == ProviderOllama
+		if requireOllamaVision && strings.TrimSpace(c.OllamaVisionModel) == "" {
 			return fmt.Errorf("Ollama vision model is required when ollama is the primary provider")
 		}
 	case ProviderOpencode:
@@ -106,7 +109,7 @@ func (c *ServiceConfig) Validate() error {
 		if c.OpencodeModel == "" {
 			return fmt.Errorf("OpenCode model is required when opencode is the primary provider")
 		}
-		if c.OpencodeVisionModel == "" {
+		if strings.TrimSpace(c.OpencodeVisionModel) == "" {
 			return fmt.Errorf("OpenCode vision model is required when opencode is the primary provider")
 		}
 	case ProviderOpenrouter:
@@ -122,11 +125,60 @@ func (c *ServiceConfig) Validate() error {
 		if c.OpenrouterModel == "" {
 			return fmt.Errorf("OpenRouter model is required when openrouter is the primary provider")
 		}
-		if c.OpenrouterVisionModel == "" {
+		if strings.TrimSpace(c.OpenrouterVisionModel) == "" {
 			return fmt.Errorf("OpenRouter vision model is required when openrouter is the primary provider")
 		}
 	default:
 		return fmt.Errorf("unsupported primary provider %q", c.PrimaryProvider)
+	}
+
+	switch c.VisionProvider {
+	case "":
+	case ProviderGroq:
+		if c.GroqAPIKey == "" {
+			return fmt.Errorf("GROQ_API_KEY is required when groq is the vision provider")
+		}
+		if strings.TrimSpace(c.GroqVisionModel) == "" {
+			return fmt.Errorf("Groq vision model is required when groq is the vision provider")
+		}
+	case ProviderOllama:
+		if !c.OllamaEnabled {
+			return fmt.Errorf("ollama must be enabled when ollama is the vision provider")
+		}
+		if c.OllamaURL == "" {
+			return fmt.Errorf("Ollama URL is required when ollama is the vision provider")
+		}
+		if strings.TrimSpace(c.OllamaVisionModel) == "" {
+			return fmt.Errorf("Ollama vision model is required when ollama is the vision provider")
+		}
+	case ProviderOpencode:
+		if !c.OpencodeEnabled {
+			return fmt.Errorf("opencode must be enabled when opencode is the vision provider")
+		}
+		if c.OpencodeBaseURL == "" {
+			return fmt.Errorf("OpenCode base URL is required when opencode is the vision provider")
+		}
+		if c.OpencodeAPIKey == "" {
+			return fmt.Errorf("OpenCode API key is required when opencode is the vision provider")
+		}
+		if strings.TrimSpace(c.OpencodeVisionModel) == "" {
+			return fmt.Errorf("OpenCode vision model is required when opencode is the vision provider")
+		}
+	case ProviderOpenrouter:
+		if !c.OpenrouterEnabled {
+			return fmt.Errorf("openrouter must be enabled when openrouter is the vision provider")
+		}
+		if c.OpenrouterBaseURL == "" {
+			return fmt.Errorf("OpenRouter base URL is required when openrouter is the vision provider")
+		}
+		if c.OpenrouterAPIKey == "" {
+			return fmt.Errorf("OpenRouter API key is required when openrouter is the vision provider")
+		}
+		if strings.TrimSpace(c.OpenrouterVisionModel) == "" {
+			return fmt.Errorf("OpenRouter vision model is required when openrouter is the vision provider")
+		}
+	default:
+		return fmt.Errorf("unsupported vision provider %q", c.VisionProvider)
 	}
 
 	if err := c.RetryConfig.Validate(); err != nil {
@@ -153,11 +205,12 @@ func (c ServiceConfig) primaryProvider() string {
 
 // Service is the high-level AI service that orchestrates providers, retries, and fallback
 type Service struct {
-	config   ServiceConfig
-	provider Provider
-	chain    *ProviderChain
-	scopes   []AttachmentCacheScope
-	tools    *ToolRegistry
+	config         ServiceConfig
+	provider       Provider
+	visionProvider Provider
+	chain          *ProviderChain
+	scopes         []AttachmentCacheScope
+	tools          *ToolRegistry
 }
 
 // NewService creates a new AI service with the given configuration
@@ -166,80 +219,97 @@ func NewService(config ServiceConfig) *Service {
 	var wrappedProviders []Provider
 	var chatCacheScopes []AttachmentCacheScope
 	primaryProvider := config.primaryProvider()
+	builtProviders := make(map[string]*RetryWrapper)
 
-	addProvider := func(providerName string) {
+	buildProvider := func(providerName string) *RetryWrapper {
+		if existing, ok := builtProviders[providerName]; ok {
+			return existing
+		}
+		var wrapper *RetryWrapper
 		switch providerName {
 		case ProviderGroq:
 			if config.GroqAPIKey == "" {
-				return
+				return nil
 			}
 			groqProvider := NewGroqProvider(config.GroqAPIKey, config.GroqThinkingEnabled)
-			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+			wrapper = NewRetryWrapper(
 				groqProvider,
 				config.RetryConfig,
 				config.MinResponseLength,
 				config.GroqModel,
 				config.GroqVisionModel,
 				config.AttachmentCache,
-			))
-			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderGroq, Model: config.GroqModel})
+			)
 		case ProviderOllama:
 			if !config.OllamaEnabled {
-				return
+				return nil
 			}
 			ollamaProvider, err := NewOllamaProvider(config.OllamaURL, config.OllamaThinkingEnabled)
 			if err != nil {
 				logger.Warn("Failed to create Ollama provider", zap.Error(err))
-				return
+				return nil
 			}
 			ollamaProvider.SetCompletionMode(config.OllamaCompletion)
 			ollamaProvider.SetCompletionConfig(config.OllamaCompletionSpeaker, config.OllamaCompletionPromptChars)
-			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+			wrapper = NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,
 				config.MinResponseLength,
 				config.OllamaModel,
 				config.OllamaVisionModel,
 				config.AttachmentCache,
-			))
-			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOllama, Model: config.OllamaModel})
+			)
 		case ProviderOpencode:
 			if !config.OpencodeEnabled || config.OpencodeAPIKey == "" {
-				return
+				return nil
 			}
 			opencodeProvider, err := NewOpencodeProvider(config.OpencodeBaseURL, config.OpencodeAPIKey, config.OpencodeThinkingEnabled)
 			if err != nil {
 				logger.Warn("Failed to create OpenCode provider", zap.Error(err))
-				return
+				return nil
 			}
-			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+			wrapper = NewRetryWrapper(
 				opencodeProvider,
 				config.RetryConfig,
 				config.MinResponseLength,
 				config.OpencodeModel,
 				config.OpencodeVisionModel,
 				config.AttachmentCache,
-			))
-			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOpencode, Model: config.OpencodeModel})
+			)
 		case ProviderOpenrouter:
 			if !config.OpenrouterEnabled || config.OpenrouterAPIKey == "" {
-				return
+				return nil
 			}
 			openrouterProvider, err := NewOpenrouterProvider(config.OpenrouterBaseURL, config.OpenrouterAPIKey, config.OpenrouterThinkingEnabled)
 			if err != nil {
 				logger.Warn("Failed to create OpenRouter provider", zap.Error(err))
-				return
+				return nil
 			}
-			wrappedProviders = append(wrappedProviders, NewRetryWrapper(
+			wrapper = NewRetryWrapper(
 				openrouterProvider,
 				config.RetryConfig,
 				config.MinResponseLength,
 				config.OpenrouterModel,
 				config.OpenrouterVisionModel,
 				config.AttachmentCache,
-			))
-			chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{Provider: ProviderOpenrouter, Model: config.OpenrouterModel})
+			)
 		}
+		if wrapper != nil {
+			builtProviders[providerName] = wrapper
+		}
+		return wrapper
+	}
+
+	addProvider := func(providerName string) {
+		wrapper := buildProvider(providerName)
+		if wrapper == nil {
+			return
+		}
+		wrappedProviders = append(wrappedProviders, wrapper)
+		chatCacheScopes = append(chatCacheScopes, AttachmentCacheScope{
+			Provider: wrapper.Name(),
+			Model:    wrapper.ChatModelName(),
+		})
 	}
 
 	addProvider(primaryProvider)
@@ -258,21 +328,58 @@ func NewService(config ServiceConfig) *Service {
 		return nil
 	}
 
-	// Describing an image for chat must survive one provider's vision model
-	// failing, so each wrapper falls back to the other providers' vision models.
-	for _, provider := range wrappedProviders {
-		wrapper, ok := provider.(*RetryWrapper)
-		if !ok {
-			continue
+	var visionProvider Provider
+	if config.VisionProvider != "" {
+		visionProviders := make([]Provider, 0, len(wrappedProviders)+1)
+		seen := make(map[string]bool, len(wrappedProviders)+1)
+		addVisionProvider := func(wrapper *RetryWrapper) {
+			if wrapper == nil || seen[wrapper.Name()] || strings.TrimSpace(wrapper.VisionModelName()) == "" {
+				return
+			}
+			seen[wrapper.Name()] = true
+			visionProviders = append(visionProviders, wrapper)
 		}
-		others := make([]Provider, 0, len(wrappedProviders)-1)
-		for _, other := range wrappedProviders {
-			if other != provider {
-				others = append(others, other)
+
+		configuredVision := buildProvider(config.VisionProvider)
+		if configuredVision == nil {
+			logger.Warn("Configured vision provider could not be created; image descriptions fall back to the other providers",
+				zap.String("vision_provider", config.VisionProvider))
+		}
+		addVisionProvider(configuredVision)
+		if config.FallbackEnabled {
+			for _, provider := range wrappedProviders {
+				if wrapper, ok := provider.(*RetryWrapper); ok {
+					addVisionProvider(wrapper)
+				}
 			}
 		}
-		if len(others) > 0 {
-			wrapper.SetVisionFallback(NewProviderChain(others...).Vision)
+
+		if len(visionProviders) > 0 {
+			visionChain := NewProviderChain(visionProviders...)
+			visionProvider = visionChain
+			for _, provider := range wrappedProviders {
+				if wrapper, ok := provider.(*RetryWrapper); ok {
+					wrapper.SetVisionChain(visionChain)
+				}
+			}
+		}
+	} else {
+		// Describing an image for chat must survive one provider's vision model
+		// failing, so each wrapper falls back to the other providers' vision models.
+		for _, provider := range wrappedProviders {
+			wrapper, ok := provider.(*RetryWrapper)
+			if !ok {
+				continue
+			}
+			others := make([]Provider, 0, len(wrappedProviders)-1)
+			for _, other := range wrappedProviders {
+				if other != provider {
+					others = append(others, other)
+				}
+			}
+			if len(others) > 0 {
+				wrapper.SetVisionFallback(NewProviderChain(others...).Vision)
+			}
 		}
 	}
 
@@ -287,11 +394,12 @@ func NewService(config ServiceConfig) *Service {
 	}
 
 	return &Service{
-		config:   config,
-		provider: finalProvider,
-		chain:    chain,
-		scopes:   chatCacheScopes,
-		tools:    NewToolRegistry(config.ToolConfig),
+		config:         config,
+		provider:       finalProvider,
+		visionProvider: visionProvider,
+		chain:          chain,
+		scopes:         chatCacheScopes,
+		tools:          NewToolRegistry(config.ToolConfig),
 	}
 }
 
@@ -349,8 +457,13 @@ func (s *Service) Vision(ctx context.Context, req *VisionRequest) (*VisionRespon
 		zap.String("model", req.Model),
 		zap.String("image_url", req.ImageURL))
 
+	visionProvider := s.visionProvider
+	if visionProvider == nil {
+		visionProvider = s.provider
+	}
+
 	// Make the API call through the provider chain with retry wrapper
-	response, err := s.provider.Vision(ctx, req)
+	response, err := visionProvider.Vision(ctx, req)
 
 	duration := time.Since(start)
 
@@ -369,7 +482,7 @@ func (s *Service) Vision(ctx context.Context, req *VisionRequest) (*VisionRespon
 	}
 	providerName := response.Provider
 	if providerName == "" {
-		providerName = s.provider.Name()
+		providerName = visionProvider.Name()
 	}
 	logger.Info("AI service vision succeeded",
 		zap.String("model", modelName),
@@ -423,6 +536,7 @@ func (s *Service) ToolRegistry() *ToolRegistry {
 func (s *Service) GetProviderInfo() map[string]interface{} {
 	info := map[string]interface{}{
 		"primary_provider":   s.config.primaryProvider(),
+		"vision_provider":    s.config.VisionProvider,
 		"fallback_enabled":   s.config.FallbackEnabled,
 		"groq_enabled":       s.config.GroqAPIKey != "",
 		"ollama_enabled":     s.config.OllamaEnabled,
