@@ -141,6 +141,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 			formattedMessages = append(formattedMessages, Message{
 				Role:          "assistant",
 				Content:       normalizedContent,
+				Text:          normalizedContent,
 				AuthorID:      messages[idx].Author.ID.String(),
 				AuthorNick:    nick,
 				MessageID:     messages[idx].ID.String(),
@@ -155,6 +156,7 @@ func (cb *ContextBuilder) BuildContext(ctx context.Context, messages []discord.M
 			formattedMessages = append(formattedMessages, Message{
 				Role:        "user",
 				Content:     content.String(),
+				Text:        normalizedContent,
 				AuthorID:    messages[idx].Author.ID.String(),
 				AuthorNick:  nick,
 				MessageID:   messages[idx].ID.String(),

@@ -126,6 +126,12 @@ func recoverListenerPanic(what string) {
 	}
 }
 
+// skipCompletionTarget reports whether completion mode must not answer m:
+// another bot or a webhook wrote it. Chat mode keeps its current behaviour.
+func (h *MessageHandler) skipCompletionTarget(m discord.Message) bool {
+	return h.aiservice != nil && h.aiservice.CompletionModeEnabled() && (m.Author.Bot || m.WebhookID != nil)
+}
+
 func (h *MessageHandler) tryAcquireReplySlot() bool {
 	select {
 	case h.replySlots <- struct{}{}:
@@ -136,6 +142,12 @@ func (h *MessageHandler) tryAcquireReplySlot() bool {
 }
 
 func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Message) {
+	if h.skipCompletionTarget(m) {
+		logger.Debug("Completion mode ignores bot or webhook messages",
+			zap.String("message_id", m.ID.String()),
+			zap.String("author_id", m.Author.ID.String()))
+		return
+	}
 	decideCtx, decideCancel := appcontext.Message()
 	defer decideCancel()
 	ctx := decideCtx
@@ -299,6 +311,7 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 		MaxTokens:       database.DefaultMaxTokens,
 		BotName:         botNick,
 		TargetMessageID: m.ID.String(),
+		TargetFromBot:   m.Author.Bot || m.WebhookID != nil,
 		SessionID:       chatSessionID(m.GuildID, m.ChannelID),
 	})
 

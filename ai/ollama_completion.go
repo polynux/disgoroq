@@ -48,6 +48,11 @@ func (o *OllamaProvider) SetCompletionMode(enabled bool) {
 	o.completion = enabled
 }
 
+// CompletionMode reports whether raw chat-log completion is enabled.
+func (o *OllamaProvider) CompletionMode() bool {
+	return o.completion
+}
+
 func (o *OllamaProvider) SetCompletionConfig(speaker string, promptChars, botLines int, mediaTags string) {
 	o.completionSpeaker = speaker
 	if promptChars > 0 {
@@ -62,13 +67,16 @@ func (o *OllamaProvider) SetCompletionConfig(speaker string, promptChars, botLin
 func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	// Completion mode decides on its own whether to speak; answering another
 	// bot or a webhook is never wanted. Chat mode keeps its current behaviour.
-	if completionTargetIsBot(req.Messages, req.TargetMessageID) {
-		return &ChatResponse{
-			Provider:        o.Name(),
-			Model:           req.Model,
-			FinishReason:    FinishReasonStop,
-			EmptyCompletion: true,
-		}, nil
+	if req.TargetFromBot || completionTargetIsBot(req.Messages, req.TargetMessageID) {
+		return o.emptyCompletion(req), nil
+	}
+	// The target must be present and render to something; answering without it
+	// would make the model answer the previous line.
+	if req.TargetMessageID != "" {
+		target, ok := completionTargetMessage(req.Messages, req.TargetMessageID)
+		if !ok || strings.TrimSpace(completionText(target, completionNames(req.Messages), o.completionMediaTags)) == "" {
+			return o.emptyCompletion(req), nil
+		}
 	}
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 || maxTokens > completionMaxTokens {
@@ -145,12 +153,7 @@ func (o *OllamaProvider) generateCompletion(ctx context.Context, req *ChatReques
 // chat lines that fit the model's context, then the bot's speaker name. There
 // is no space after the colon: the tokenizer attaches it to the next word.
 func buildCompletionPrompt(messages []Message, botName, targetMessageID, completionSpeaker string, promptChars, botLines int, mediaTags string) string {
-	names := make(map[string]string)
-	for _, msg := range messages {
-		if msg.AuthorID != "" && msg.AuthorNick != "" {
-			names[msg.AuthorID] = msg.AuthorNick
-		}
-	}
+	names := completionNames(messages)
 	if botName == "" {
 		botName = "bot"
 	}
@@ -241,18 +244,12 @@ func IsErrorReply(text string) bool {
 	return false
 }
 
-// completionText returns a message's text as one training-format line: user
-// messages lose the context builder's "<@id>nick: " prefix, mentions become
-// @name, custom emojis :name:, and media is rendered with the media-tag
-// renderer for the configured contract version.
+// completionText returns a message's own text as one training-format line:
+// mentions become @name, custom emojis :name:, and media is rendered with the
+// media-tag renderer for the configured contract version. It reads Message.Text
+// so context prefixes and image descriptions never leak into the prompt.
 func completionText(msg Message, names map[string]string, mediaTags string) string {
-	text := msg.Content
-	if msg.Role == RoleUser {
-		text = strings.TrimPrefix(text, "<@"+msg.AuthorID+">"+msg.AuthorNick+": ")
-		if strings.HasPrefix(text, "[Document Summary]") {
-			return ""
-		}
-	}
+	text := msg.Text
 	text = completionUserMention.ReplaceAllStringFunc(text, func(mention string) string {
 		if name, ok := names[completionUserMention.FindStringSubmatch(mention)[1]]; ok {
 			return "@" + name
@@ -264,24 +261,62 @@ func completionText(msg Message, names map[string]string, mediaTags string) stri
 	rendered := msg
 	rendered.Content = strings.Join(strings.Fields(text), " ")
 	text = RenderMediaMessage(rendered, mediaTags)
-	if len(text) > completionLineChars {
-		text = strings.ToValidUTF8(text[:completionLineChars], "")
+	return limitCompletionLine(text, completionLineChars)
+}
+
+// limitCompletionLine caps a prompt line at maxRunes code points, cuts at the
+// last space, and drops a tag that would be cut in the middle.
+func limitCompletionLine(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
 	}
-	return text
+	cut := string(runes[:maxRunes])
+	if idx := strings.LastIndex(cut, " "); idx >= 0 {
+		cut = cut[:idx]
+	}
+	if open := strings.LastIndex(cut, "["); open > strings.LastIndex(cut, "]") {
+		cut = cut[:open]
+	}
+	return strings.TrimSpace(cut)
+}
+
+func completionNames(messages []Message) map[string]string {
+	names := make(map[string]string)
+	for _, msg := range messages {
+		if msg.AuthorID != "" && msg.AuthorNick != "" {
+			names[msg.AuthorID] = msg.AuthorNick
+		}
+	}
+	return names
+}
+
+func completionTargetMessage(messages []Message, targetMessageID string) (Message, bool) {
+	if targetMessageID == "" {
+		return Message{}, false
+	}
+	for _, msg := range messages {
+		if msg.MessageID == targetMessageID {
+			return msg, true
+		}
+	}
+	return Message{}, false
+}
+
+func (o *OllamaProvider) emptyCompletion(req *ChatRequest) *ChatResponse {
+	return &ChatResponse{
+		Provider:        o.Name(),
+		Model:           req.Model,
+		FinishReason:    FinishReasonStop,
+		EmptyCompletion: true,
+	}
 }
 
 // completionTargetIsBot reports whether the message completion was asked to
 // answer was written by another bot or a webhook.
 func completionTargetIsBot(messages []Message, targetMessageID string) bool {
-	if targetMessageID == "" {
-		return false
-	}
-	for _, msg := range messages {
-		if msg.MessageID == targetMessageID {
-			return msg.AuthorBot
-		}
-	}
-	return false
+	target, ok := completionTargetMessage(messages, targetMessageID)
+	return ok && target.AuthorBot
 }
 
 // cleanCompletionReply drops what the bot should not post as text: a leading

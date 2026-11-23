@@ -58,7 +58,21 @@ func (r *RetryWrapper) visionCacheScope() (providerName, visionModel string) {
 	return r.provider.Name(), r.visionModel
 }
 
+// CompletionModeProvider is implemented by providers whose chat is a raw
+// completion that renders media tags itself instead of using image input.
+type CompletionModeProvider interface {
+	CompletionMode() bool
+}
+
+func providerUsesCompletion(provider Provider) bool {
+	completionProvider, ok := provider.(CompletionModeProvider)
+	return ok && completionProvider.CompletionMode()
+}
+
 func (r *RetryWrapper) prepareChatRequest(ctx context.Context, req *ChatRequest) *ChatRequest {
+	if providerUsesCompletion(r.provider) {
+		return req
+	}
 	if len(req.Images) == 0 || r.canInlineImages(req.Model) {
 		return req
 	}

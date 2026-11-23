@@ -15,10 +15,10 @@ import (
 
 func TestBuildCompletionPromptLucioleFormatAndTargetLast(t *testing.T) {
 	messages := []Message{
-		{Role: RoleUser, Content: "<@1>Alice: quelqu'un a vu le match hier ?", AuthorID: "1", AuthorNick: "Alice"},
-		{Role: RoleAssistant, Content: "ouais trop nul", AuthorNick: "bot"},
-		{Role: RoleUser, Content: "<@2>Bob: c’était chaud", AuthorID: "2", AuthorNick: "Bob"},
-		{Role: RoleUser, Content: "<@3>Léa: t'es d'accord ?", AuthorID: "3", AuthorNick: "Léa", MessageID: "target"},
+		{Role: RoleUser, Content: "<@1>Alice: quelqu'un a vu le match hier ?", Text: "quelqu'un a vu le match hier ?", AuthorID: "1", AuthorNick: "Alice"},
+		{Role: RoleAssistant, Content: "ouais trop nul", Text: "ouais trop nul", AuthorNick: "bot"},
+		{Role: RoleUser, Content: "<@2>Bob: c’était chaud", Text: "c’était chaud", AuthorID: "2", AuthorNick: "Bob"},
+		{Role: RoleUser, Content: "<@3>Léa: t'es d'accord ?", Text: "t'es d'accord ?", AuthorID: "3", AuthorNick: "Léa", MessageID: "target"},
 	}
 	got := buildCompletionPrompt(messages, "DisgoroQ", "target", "§bot", 2400, 4, "v0")
 	want := "Alice: quelqu'un a vu le match hier ?\n§bot: ouais trop nul\nBob: c'était chaud\nLéa: t'es d'accord ?\n§bot:"
@@ -27,8 +27,8 @@ func TestBuildCompletionPromptLucioleFormatAndTargetLast(t *testing.T) {
 
 func TestBuildCompletionPromptMovesTargetAfterNewerMessages(t *testing.T) {
 	messages := []Message{
-		{Role: RoleUser, Content: "<@1>Alice: cible", AuthorID: "1", AuthorNick: "Alice", MessageID: "target"},
-		{Role: RoleUser, Content: "<@2>Bob: plus récent", AuthorID: "2", AuthorNick: "Bob", MessageID: "newer"},
+		{Role: RoleUser, Content: "<@1>Alice: cible", Text: "cible", AuthorID: "1", AuthorNick: "Alice", MessageID: "target"},
+		{Role: RoleUser, Content: "<@2>Bob: plus récent", Text: "plus récent", AuthorID: "2", AuthorNick: "Bob", MessageID: "newer"},
 	}
 	assert.Equal(t, "Bob: plus récent\nAlice: cible\nbot:", buildCompletionPrompt(messages, "bot", "target", "", 2400, 4, "v0"))
 }
@@ -36,8 +36,8 @@ func TestBuildCompletionPromptMovesTargetAfterNewerMessages(t *testing.T) {
 func TestBuildCompletionPromptCapsBotLines(t *testing.T) {
 	var messages []Message
 	for i := 1; i <= 6; i++ {
-		messages = append(messages, Message{Role: RoleAssistant, Content: "bot line", AuthorNick: "bot"})
-		messages = append(messages, Message{Role: RoleUser, Content: "Alice: human line", AuthorNick: "Alice"})
+		messages = append(messages, Message{Role: RoleAssistant, Content: "bot line", Text: "bot line", AuthorNick: "bot"})
+		messages = append(messages, Message{Role: RoleUser, Content: "Alice: human line", Text: "human line", AuthorNick: "Alice"})
 	}
 	prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 4, "v0")
 	assert.Equal(t, 4, strings.Count(prompt, "§bot: bot line"))
@@ -49,10 +49,10 @@ func TestBuildCompletionPromptCapsBotLines(t *testing.T) {
 
 func TestBuildCompletionPromptLegacySpeakerAndCleaning(t *testing.T) {
 	messages := []Message{
-		{Role: RoleUser, Content: "<@1>Alice: regarde ça https://tenor.com/view/x <:kappa:42>\n\n", AuthorID: "1", AuthorNick: "Alice"},
-		{Role: RoleAssistant, Content: "mdrrr", AuthorID: "9", AuthorNick: "Bot"},
-		{Role: RoleUser, Content: "<@2>Bob: <@1> t'as\nvu\n\n", AuthorID: "2", AuthorNick: "Bob"},
-		{Role: RoleUser, Content: "<@2>Bob: [Document Summary]\nrésumé\n\n", AuthorID: "2", AuthorNick: "Bob"},
+		{Role: RoleUser, Content: "<@1>Alice: regarde ça https://tenor.com/view/x <:kappa:42>\n\n", Text: "regarde ça https://tenor.com/view/x <:kappa:42>", AuthorID: "1", AuthorNick: "Alice"},
+		{Role: RoleAssistant, Content: "mdrrr", Text: "mdrrr", AuthorID: "9", AuthorNick: "Bot"},
+		{Role: RoleUser, Content: "<@2>Bob: <@1> t'as\nvu\n\n", Text: "<@1> t'as\nvu", AuthorID: "2", AuthorNick: "Bob"},
+		{Role: RoleUser, Content: "<@2>Bob: [Document Summary]\nrésumé\n\n", Text: "", AuthorID: "2", AuthorNick: "Bob"},
 		{Role: "tool", Content: "ignored"},
 	}
 	assert.Equal(t, "Alice: regarde ça [gif] :kappa:\nBot: mdrrr\nBob: @Alice t'as vu\nBot:", buildCompletionPrompt(messages, "Bot", "", "", 2400, 4, "v0"))
@@ -61,9 +61,9 @@ func TestBuildCompletionPromptLegacySpeakerAndCleaning(t *testing.T) {
 func TestBuildCompletionPromptBudgetKeepsLatestAndTarget(t *testing.T) {
 	var messages []Message
 	for i := 0; i < 50; i++ {
-		messages = append(messages, Message{Role: RoleUser, Content: "<@1>Alice: " + strings.Repeat("a", 100), AuthorID: "1", AuthorNick: "Alice"})
+		messages = append(messages, Message{Role: RoleUser, Content: "<@1>Alice: " + strings.Repeat("a", 100), Text: strings.Repeat("a", 100), AuthorID: "1", AuthorNick: "Alice"})
 	}
-	messages = append(messages, Message{Role: RoleUser, Content: "<@2>Bob: target", AuthorID: "2", AuthorNick: "Bob", MessageID: "target"})
+	messages = append(messages, Message{Role: RoleUser, Content: "<@2>Bob: target", Text: "target", AuthorID: "2", AuthorNick: "Bob", MessageID: "target"})
 	prompt := buildCompletionPrompt(messages, "bot", "target", "", 2400, 4, "v0")
 	assert.LessOrEqual(t, len(prompt), 2400+len("\nbot:"))
 	assert.True(t, strings.HasSuffix(prompt, "Bob: target\nbot:"))
@@ -75,10 +75,10 @@ func TestBuildCompletionPromptBudgetKeepsLatestAndTarget(t *testing.T) {
 
 func TestBuildCompletionPromptExcludesBotsCommandsAndErrorReplies(t *testing.T) {
 	messages := []Message{
-		{Role: RoleUser, Content: "<@1>Alice: human", AuthorID: "1", AuthorNick: "Alice"},
-		{Role: RoleUser, Content: "<@2>OtherBot: bot chatter", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true},
-		{Role: RoleAssistant, Content: "mémoire désactivée", AuthorNick: "Bot", CommandOutput: true},
-		{Role: RoleAssistant, Content: "Désolé, tous mes systèmes sont en rade... 🤖💀", AuthorNick: "Bot"},
+		{Role: RoleUser, Content: "<@1>Alice: human", Text: "human", AuthorID: "1", AuthorNick: "Alice"},
+		{Role: RoleUser, Content: "<@2>OtherBot: bot chatter", Text: "bot chatter", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true},
+		{Role: RoleAssistant, Content: "mémoire désactivée", Text: "mémoire désactivée", AuthorNick: "Bot", CommandOutput: true},
+		{Role: RoleAssistant, Content: "Désolé, tous mes systèmes sont en rade... 🤖💀", Text: "Désolé, tous mes systèmes sont en rade... 🤖💀", AuthorNick: "Bot"},
 	}
 	prompt := buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v0")
 	assert.Equal(t, "Alice: human\n§bot:", prompt)
@@ -104,11 +104,44 @@ func TestBuildCompletionPromptKeepsMediaOnlyTarget(t *testing.T) {
 
 func TestBuildCompletionPromptIncludesMediaWithText(t *testing.T) {
 	messages := []Message{{
-		Role: RoleUser, Content: "<@1>Alice: regarde ", AuthorID: "1", AuthorNick: "Alice",
+		Role: RoleUser, Content: "<@1>Alice: regarde ", Text: "regarde", AuthorID: "1", AuthorNick: "Alice",
 		Attachments: []MessageAttachment{{Filename: "deepfry.gif", ContentType: "image/gif"}},
 	}}
 	assert.Equal(t, "Alice: regarde\n§bot:", buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v0"))
 	assert.Equal(t, "Alice: regarde [gif: deepfry]\n§bot:", buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v1"))
+}
+
+func TestBuildCompletionPromptUsesMessageText(t *testing.T) {
+	messages := []Message{
+		{
+			Role: RoleUser, Content: "<IMAGE_DESC>un chat</IMAGE_DESC>\n\n<@1>Alice: regarde ",
+			Text: "regarde ", AuthorID: "1", AuthorNick: "Alice",
+			Attachments: []MessageAttachment{{Filename: "image.png", ContentType: "image/png"}},
+		},
+		{
+			Role: RoleUser, Content: "<@2>Bob: [Document Summary]\nrésumé\n\n",
+			Text: "", AuthorID: "2", AuthorNick: "Bob",
+			Attachments: []MessageAttachment{{Filename: "notes.txt", ContentType: "text/plain"}},
+			MediaOnly:   true,
+		},
+	}
+	assert.Equal(t, "Alice: regarde [image]\nBob: [fichier]\n§bot:",
+		buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v1"))
+	assert.Equal(t, "Alice: regarde\nBob: [image]\n§bot:",
+		buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v0"))
+}
+
+func TestLimitCompletionLine(t *testing.T) {
+	// 299 multibyte runes then a tag starting at the cap: the tag is dropped.
+	assert.Equal(t, strings.Repeat("é", 299), limitCompletionLine(strings.Repeat("é", 299)+"[gif]", 300))
+	// A complete tag inside the cap is kept.
+	assert.Equal(t, "[gif: chat]", limitCompletionLine("[gif: chat]", 300))
+	// Past the cap, cut at the last space.
+	long := strings.Repeat("é", 290) + " " + strings.Repeat("a", 20)
+	assert.Equal(t, strings.Repeat("é", 290), limitCompletionLine(long, 300))
+	// A tag crossing the space cut is dropped entirely.
+	crossing := strings.Repeat("é", 290) + " [gif: chat]" + strings.Repeat("a", 20)
+	assert.Equal(t, strings.Repeat("é", 290), limitCompletionLine(crossing, 300))
 }
 
 func TestCompletionTargetIsBot(t *testing.T) {
@@ -136,14 +169,46 @@ func TestCompletionModeStaysSilentForBotTarget(t *testing.T) {
 	response, err := provider.Chat(context.Background(), &ChatRequest{
 		Model: "luciole-1b-discord1", BotName: "Bot", TargetMessageID: "target",
 		Messages: []Message{
-			{Role: RoleUser, Content: "<@1>Alice: yo", AuthorID: "1", AuthorNick: "Alice"},
-			{Role: RoleUser, Content: "<@2>OtherBot: hi", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true, MessageID: "target"},
+			{Role: RoleUser, Content: "<@1>Alice: yo", Text: "yo", AuthorID: "1", AuthorNick: "Alice"},
+			{Role: RoleUser, Content: "<@2>OtherBot: hi", Text: "hi", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true, MessageID: "target"},
 		},
 	})
 	require.NoError(t, err)
 	assert.True(t, response.EmptyCompletion)
 	assert.Empty(t, response.Content)
 	assert.Equal(t, "ollama", response.Provider)
+	assert.Equal(t, 0, calls)
+}
+
+func TestCompletionModeStaysSilentWithoutRenderableTarget(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = io.WriteString(w, `{"response":"hi"}`)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+	provider.SetCompletionMode(true)
+
+	base := []Message{
+		{Role: RoleUser, Content: "<@1>Alice: yo", Text: "yo", AuthorID: "1", AuthorNick: "Alice"},
+	}
+	for _, request := range []*ChatRequest{
+		{Model: "luciole", BotName: "Bot", TargetMessageID: "missing", Messages: base},
+		{Model: "luciole", BotName: "Bot", TargetMessageID: "target", Messages: append(base, Message{
+			Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", AuthorID: "2", AuthorNick: "Bob", MessageID: "target",
+		})},
+		{Model: "luciole", BotName: "Bot", TargetFromBot: true, TargetMessageID: "target", Messages: append(base, Message{
+			Role: RoleUser, Content: "<@2>Bob: hi", Text: "hi", AuthorID: "2", AuthorNick: "Bob", MessageID: "target",
+		})},
+	} {
+		response, err := provider.Chat(context.Background(), request)
+		require.NoError(t, err)
+		assert.True(t, response.EmptyCompletion)
+		assert.Empty(t, response.Content)
+	}
 	assert.Equal(t, 0, calls)
 }
 
@@ -188,7 +253,7 @@ func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {
 	require.NoError(t, err)
 	provider.SetCompletionMode(true)
 	resp, err := provider.Chat(context.Background(), &ChatRequest{
-		Model: "luciole-1b-discord1", Messages: []Message{{Role: RoleUser, Content: "<@1>Alice: yo", AuthorID: "1", AuthorNick: "Alice"}},
+		Model: "luciole-1b-discord1", Messages: []Message{{Role: RoleUser, Content: "<@1>Alice: yo", Text: "yo", AuthorID: "1", AuthorNick: "Alice"}},
 		BotName: "Groq", MaxTokens: 200,
 	})
 	require.NoError(t, err)

@@ -19,6 +19,7 @@ import (
 type MockProvider struct {
 	mock.Mock
 	supportsInlineImages func(chatModel, visionModel string) bool
+	completion           bool
 }
 
 func (m *MockProvider) Name() string {
@@ -52,6 +53,30 @@ func (m *MockProvider) SupportsInlineImages(chatModel, visionModel string) bool 
 		return false
 	}
 	return m.supportsInlineImages(chatModel, visionModel)
+}
+
+func (m *MockProvider) CompletionMode() bool {
+	return m.completion
+}
+
+func TestPrepareChatRequestSkipsVisionForCompletionProvider(t *testing.T) {
+	provider := &MockProvider{completion: true}
+	wrapper := NewRetryWrapper(provider, DefaultRetryConfig(), 1, "luciole", "llava", nil)
+	visionCalls := 0
+	wrapper.SetVisionFallback(func(context.Context, *VisionRequest) (*VisionResponse, error) {
+		visionCalls++
+		return &VisionResponse{Description: "description"}, nil
+	})
+
+	req := &ChatRequest{
+		Messages: []Message{{Role: RoleUser, Content: "<@1>Alice: regarde", Text: "regarde", ImageRefs: []int{0}}},
+		Images:   []ImageContext{{URL: "https://example.com/a.png", Type: "image/png"}},
+	}
+	prepared := wrapper.prepareChatRequest(context.Background(), req)
+
+	assert.Same(t, req, prepared)
+	assert.Equal(t, 0, visionCalls)
+	assert.Equal(t, []int{0}, prepared.Messages[0].ImageRefs)
 }
 
 func TestNewRetryWrapper(t *testing.T) {

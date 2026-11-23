@@ -605,6 +605,12 @@ func (s *Service) Name() string {
 	return s.provider.Name()
 }
 
+// CompletionModeEnabled reports whether the active chat provider is Ollama in
+// raw completion mode, so callers can skip messages completion must not answer.
+func (s *Service) CompletionModeEnabled() bool {
+	return s != nil && s.config.OllamaCompletion && s.provider != nil && s.provider.Name() == ProviderOllama
+}
+
 // IsCompletionMode reports whether the response came from Ollama raw completion.
 func (s *Service) IsCompletionMode(response *ChatResponse) bool {
 	if !s.config.OllamaCompletion || response == nil {

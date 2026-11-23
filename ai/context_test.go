@@ -461,6 +461,7 @@ func TestBuildContext_KeepsMediaOnlyMessagesAndMarksThem(t *testing.T) {
 
 	withText := processed.Messages[0]
 	assert.False(t, withText.MediaOnly)
+	assert.Equal(t, "salut", withText.Text)
 	require.Len(t, withText.Attachments, 1)
 	assert.Equal(t, "clip.mp4", withText.Attachments[0].Filename)
 	assert.Equal(t, "video/mp4", withText.Attachments[0].ContentType)
@@ -470,6 +471,7 @@ func TestBuildContext_KeepsMediaOnlyMessagesAndMarksThem(t *testing.T) {
 
 	stickerOnly := processed.Messages[1]
 	assert.True(t, stickerOnly.MediaOnly)
+	assert.Empty(t, stickerOnly.Text)
 	assert.Equal(t, []string{"Wave"}, stickerOnly.Stickers)
 	assert.Empty(t, stickerOnly.ImageRefs)
 }
