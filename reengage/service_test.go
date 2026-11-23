@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,4 +229,71 @@ func databaseTestRepository(t *testing.T) *database.Repository {
 	})
 
 	return repo
+}
+
+// unknownGuildTransport answers every Discord REST call with 404 Unknown Guild.
+type unknownGuildTransport struct {
+	countingTransport
+}
+
+func (t *unknownGuildTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.mu.Lock()
+	t.count++
+	t.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusNotFound,
+		Status:     "404 Not Found",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"message":"Unknown Guild","code":10004}`)),
+		Request:    req,
+	}, nil
+}
+
+// A guild the bot left while disconnected stays in the gateway cache (no
+// GUILD_DELETE). The first run learns it is gone from REST; later runs must not
+// call REST for it again.
+func TestCheckAllChannels_EvictsStaleCachedGuildOnUnknownGuild(t *testing.T) {
+	silenceLogs(t)
+	ctx := context.Background()
+	repo := databaseTestRepository(t)
+	const staleGuildID = "400000000000000002"
+	const channelID = "500000000000000002"
+
+	if err := repo.SetReengageEnabled(ctx, staleGuildID, channelID, true); err != nil {
+		t.Fatalf("failed to enable reengage: %v", err)
+	}
+	if err := repo.SetChannelLastMessage(ctx, staleGuildID, channelID, time.Now().Add(-time.Hour).Unix()); err != nil {
+		t.Fatalf("failed to set last message: %v", err)
+	}
+
+	transport := &unknownGuildTransport{}
+	client, err := disgo.New("MTIzNDU2Nzg5MDEyMzQ1Njc4.fake.fake",
+		bot.WithCacheConfigOpts(cache.WithCaches(cache.FlagGuilds)),
+		bot.WithRestClientConfigOpts(rest.WithHTTPClient(&http.Client{Transport: transport})),
+	)
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	staleID := snowflake.MustParse(staleGuildID)
+	client.Caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: staleID}})
+	client.Caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: snowflake.MustParse("600000000000000001")}})
+
+	service := &Service{
+		client:        client,
+		repo:          repo,
+		config:        config.ReengageConfig{DefaultInactivityMinutes: 30, DefaultChance: 1},
+		skippedGuilds: make(map[string]struct{}),
+	}
+
+	for run := 1; run <= 3; run++ {
+		if err := service.CheckAllChannels(ctx); err != nil {
+			t.Fatalf("run %d: unexpected error: %v", run, err)
+		}
+	}
+	if calls := transport.calls(); calls != 1 {
+		t.Fatalf("expected a single REST call across runs, got %d", calls)
+	}
+	if _, ok := client.Caches.Guild(staleID); ok {
+		t.Fatal("expected the stale guild to be evicted from the gateway cache")
+	}
 }

@@ -93,8 +93,10 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 		}
 
 		// The gateway guild cache is authoritative for membership once populated, so
-		// guilds the bot left are skipped without any REST call.
-		if s.client.Caches.GuildsLen() > 0 {
+		// guilds the bot left are skipped without any REST call. During an outage
+		// disgo moves guilds to the unavailable set, which can empty Guilds; keep
+		// trusting the cache then rather than calling REST for every guild.
+		if s.client.Caches.GuildsLen() > 0 || len(s.client.Caches.UnavailableGuildIDs()) > 0 {
 			if !s.guildInCache(guildIDSnowflake) {
 				continue
 			}
@@ -190,13 +192,27 @@ func (s *Service) skipUnknownGuild(err error, guildID string) bool {
 	if !rest.IsJSONErrorCode(err, rest.JSONErrorCodeUnknownGuild) {
 		return false
 	}
-	logger.Info("Skipping guild the bot is no longer in", zap.String("guild_id", guildID))
+
+	// A guild the bot was removed from while disconnected never gets a
+	// GUILD_DELETE, so it can linger in the gateway cache. Evict it, or the
+	// cache check would keep sending us back to REST every run.
+	if s.client != nil {
+		if id, parseErr := snowflake.Parse(guildID); parseErr == nil {
+			s.client.Caches.RemoveGuild(id)
+		}
+	}
+
 	s.skippedMu.Lock()
-	defer s.skippedMu.Unlock()
 	if s.skippedGuilds == nil {
 		s.skippedGuilds = make(map[string]struct{})
 	}
+	_, already := s.skippedGuilds[guildID]
 	s.skippedGuilds[guildID] = struct{}{}
+	s.skippedMu.Unlock()
+
+	if !already {
+		logger.Info("Skipping guild the bot is no longer in", zap.String("guild_id", guildID))
+	}
 	return true
 }
 
