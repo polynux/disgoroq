@@ -97,6 +97,7 @@ func rebuildLogger(cfg *Config) {
 	var zapConfig zap.Config
 	if strings.ToLower(cfg.Encoding) == "console" {
 		zapConfig = zap.NewDevelopmentConfig()
+		zapConfig.Development = false
 		zapConfig.Encoding = "console"
 	} else {
 		zapConfig = zap.NewProductionConfig()
