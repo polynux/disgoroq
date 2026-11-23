@@ -43,6 +43,24 @@ var mediaGifStopWords = map[string]bool{
 	"video": true, "caption": true, "download": true, "media": true, "view": true,
 }
 
+// mediaURLTrailingPunctuation is stripped repeatedly from v1 URL matches and
+// kept in the text right after the tag.
+const mediaURLTrailingPunctuation = `.,;:!?'")]}>»…`
+
+// stripMediaURLTrailingPunctuation returns the URL without trailing punctuation
+// and that punctuation as the suffix to append after the tag.
+func stripMediaURLTrailingPunctuation(match string) (string, string) {
+	end := len(match)
+	for end > 0 {
+		r, size := utf8.DecodeLastRuneInString(match[:end])
+		if !strings.ContainsRune(mediaURLTrailingPunctuation, r) {
+			break
+		}
+		end -= size
+	}
+	return match[:end], match[end:]
+}
+
 var mediaFileExtensions = []string{".gif", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".webm"}
 
 // RenderMediaMessage renders one message exactly as docs/06-media-tags.md
@@ -90,15 +108,17 @@ func renderMediaMessageV0(msg Message) string {
 func renderMediaMessageV1(msg Message) string {
 	urls := mediaURLPattern.FindAllString(msg.Content, -1)
 	nonGifURLs := 0
-	for _, raw := range urls {
+	for _, match := range urls {
+		raw, _ := stripMediaURLTrailingPunctuation(match)
 		if mediaURLKind(raw, true) != "gif" {
 			nonGifURLs++
 		}
 	}
 
 	parts := make([]string, 0, 1+len(msg.Attachments)+len(msg.Stickers))
-	text := mediaURLPattern.ReplaceAllStringFunc(msg.Content, func(raw string) string {
-		return mediaURLTagV1(raw, msg.Embeds, nonGifURLs)
+	text := mediaURLPattern.ReplaceAllStringFunc(msg.Content, func(match string) string {
+		raw, suffix := stripMediaURLTrailingPunctuation(match)
+		return mediaURLTagV1(raw, msg.Embeds, nonGifURLs) + suffix
 	})
 	if text != "" {
 		parts = append(parts, text)
@@ -420,7 +440,7 @@ func attachmentMediaClass(attachment MessageAttachment) string {
 	}
 	extension := strings.ToLower(attachment.Filename)
 	idx := strings.LastIndexByte(extension, '.')
-	if idx < 0 {
+	if idx <= 0 {
 		return ""
 	}
 	switch extension[idx+1:] {

@@ -297,7 +297,50 @@
    ],
    "v1": "[sticker: Mdr]",
    "v0": "[image]"
+  },
+  {
+   "name": "trailing parenthesis stays after the tag",
+   "content": "(https://tenor.com/view/cat-smile-gif-123)",
+   "v1": "([gif: cat smile])",
+   "v0": "([gif]"
+  },
+  {
+   "name": "trailing comma after a gif url",
+   "content": "https://example.com/a.gif, mdr",
+   "v1": "[gif: a], mdr",
+   "v0": "[gif] mdr"
+  },
+  {
+   "name": "trailing punctuation does not break embed matching",
+   "content": "regarde https://youtu.be/xyz!",
+   "embeds": [
+    {
+     "url": "https://youtu.be/xyz",
+     "title": "Titre",
+     "description": ""
+    }
+   ],
+   "v1": "regarde [youtube: Titre]!",
+   "v0": "regarde [youtube]"
+  },
+  {
+   "name": "french guillemet and ellipsis",
+   "content": "«https://klipy.com/gifs/chat-qui-danse»…",
+   "v1": "«[gif: chat qui danse]»…",
+   "v0": "«[gif]"
+  },
+  {
+   "name": "dotfile has no extension",
+   "content": "",
+   "attachments": [
+    {
+     "filename": ".png",
+     "content_type": ""
+    }
+   ],
+   "v1": "[fichier]",
+   "v0": "[image]"
   }
  ],
- "revision": 2
+ "revision": 3
 }
