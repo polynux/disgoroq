@@ -444,7 +444,7 @@ func TestOllamaBuildChatMessagesSkipsMediaOnlyMessages(t *testing.T) {
 		SystemPrompt: "system",
 		Messages: []Message{
 			{Role: RoleUser, Content: "visible"},
-			{Role: RoleUser, Content: "", MediaOnly: true, Stickers: []string{"Wave"}},
+			{Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", MediaOnly: true, Stickers: []string{"Wave"}},
 		},
 	})
 
@@ -452,4 +452,24 @@ func TestOllamaBuildChatMessagesSkipsMediaOnlyMessages(t *testing.T) {
 	require.Len(t, messages, 2)
 	assert.Equal(t, RoleSystem, messages[0].Role)
 	assert.Equal(t, "visible", messages[1].Content)
+}
+
+func TestLatestUserMessageSkipsMediaOnlyMessages(t *testing.T) {
+	messages := []Message{
+		{Role: RoleUser, Content: "<@1>Alice: regarde https://example.com", Text: "regarde https://example.com", AuthorNick: "Alice"},
+		{Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", AuthorNick: "Bob", MediaOnly: true},
+	}
+
+	assert.Equal(t, 0, latestUserMessageIndex(messages))
+	latest := latestUserMessage(messages)
+	require.NotNil(t, latest)
+	assert.Equal(t, "regarde https://example.com", latest.Text)
+	previous := previousUserMessageBefore(messages, 1)
+	require.NotNil(t, previous)
+	assert.Equal(t, "regarde https://example.com", previous.Text)
+
+	// With only a media-only message, tool inference sees no user message.
+	mediaOnly := []Message{{Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", MediaOnly: true, AuthorNick: "Bob"}}
+	assert.Equal(t, -1, latestUserMessageIndex(mediaOnly))
+	assert.Nil(t, latestUserMessage(mediaOnly))
 }

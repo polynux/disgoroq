@@ -290,13 +290,13 @@ func TestGroqVisionHTTPErrorIsTypedAndFinal(t *testing.T) {
 
 func TestGroqBuildMessagesSkipsMediaOnlyMessages(t *testing.T) {
 	req := &ChatRequest{Messages: []Message{
-		{Role: RoleUser, Content: "visible"},
-		{Role: RoleUser, Content: "", MediaOnly: true, Stickers: []string{"Wave"}},
+		{Role: RoleUser, Content: "<@1>Alice: visible", Text: "visible"},
+		{Role: RoleUser, Content: "<@2>Bob: \n\n", Text: "", MediaOnly: true, Stickers: []string{"Wave"}},
 	}}
 
 	messages := buildGroqMessages(req)
 
 	require.Len(t, messages, 1)
 	assert.Equal(t, RoleUser, messages[0].Role)
-	assert.Equal(t, "visible", messages[0].Content)
+	assert.Equal(t, "<@1>Alice: visible", messages[0].Content)
 }

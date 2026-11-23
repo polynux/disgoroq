@@ -223,6 +223,9 @@ func latestUserMessage(messages []Message) *Message {
 
 func latestUserMessageIndex(messages []Message) int {
 	for idx := len(messages) - 1; idx >= 0; idx-- {
+		if messages[idx].MediaOnly {
+			continue
+		}
 		if messages[idx].Role == RoleUser && strings.TrimSpace(messages[idx].Content) != "" {
 			return idx
 		}
@@ -232,6 +235,9 @@ func latestUserMessageIndex(messages []Message) int {
 
 func previousUserMessageBefore(messages []Message, before int) *Message {
 	for idx := before - 1; idx >= 0; idx-- {
+		if messages[idx].MediaOnly {
+			continue
+		}
 		if messages[idx].Role == RoleUser && strings.TrimSpace(messages[idx].Content) != "" {
 			return &messages[idx]
 		}
