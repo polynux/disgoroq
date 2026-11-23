@@ -38,6 +38,8 @@ type ServiceConfig struct {
 	OllamaCompletion            bool
 	OllamaCompletionSpeaker     string
 	OllamaCompletionPromptChars int
+	OllamaCompletionBotLines    int
+	OllamaCompletionMediaTags   string
 
 	OpencodeEnabled         bool
 	OpencodeBaseURL         string
@@ -334,7 +336,7 @@ func NewService(config ServiceConfig) *Service {
 				return nil
 			}
 			ollamaProvider.SetCompletionMode(config.OllamaCompletion)
-			ollamaProvider.SetCompletionConfig(config.OllamaCompletionSpeaker, config.OllamaCompletionPromptChars)
+			ollamaProvider.SetCompletionConfig(config.OllamaCompletionSpeaker, config.OllamaCompletionPromptChars, config.OllamaCompletionBotLines, config.OllamaCompletionMediaTags)
 			wrapper = NewRetryWrapper(
 				ollamaProvider,
 				config.RetryConfig,

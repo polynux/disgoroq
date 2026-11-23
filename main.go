@@ -136,6 +136,8 @@ func main() {
 		OllamaCompletion:            cfg.AI.Ollama.Completion,
 		OllamaCompletionSpeaker:     cfg.AI.Ollama.CompletionSpeaker,
 		OllamaCompletionPromptChars: cfg.AI.Ollama.CompletionPromptChars,
+		OllamaCompletionBotLines:    cfg.AI.Ollama.CompletionBotLines,
+		OllamaCompletionMediaTags:   cfg.AI.Ollama.CompletionMediaTags,
 		OpencodeEnabled:             cfg.AI.Opencode.Enabled,
 		OpencodeBaseURL:             cfg.AI.Opencode.BaseURL,
 		OpencodeAPIKey:              cfg.AI.Opencode.APIKey,

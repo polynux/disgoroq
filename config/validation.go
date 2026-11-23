@@ -231,6 +231,14 @@ func (c *OllamaConfig) validate(requireVisionModel bool) error {
 	if requireVisionModel && strings.TrimSpace(c.VisionModel) == "" {
 		return fmt.Errorf("ai.ollama.vision_model cannot be empty when ollama is enabled")
 	}
+	switch strings.ToLower(strings.TrimSpace(c.CompletionMediaTags)) {
+	case "", "v0", "v1":
+	default:
+		return fmt.Errorf("ai.ollama.completion_media_tags must be %q or %q", "v0", "v1")
+	}
+	if c.CompletionBotLines < 0 {
+		return fmt.Errorf("ai.ollama.completion_bot_lines cannot be negative")
+	}
 	return nil
 }
 

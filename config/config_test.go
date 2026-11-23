@@ -56,6 +56,58 @@ ai:
 	if config.AI.Ollama.CompletionPromptChars != 2400 {
 		t.Errorf("AI.Ollama.CompletionPromptChars = %d, want 2400", config.AI.Ollama.CompletionPromptChars)
 	}
+	if config.AI.Ollama.CompletionBotLines != 4 {
+		t.Errorf("AI.Ollama.CompletionBotLines = %d, want 4", config.AI.Ollama.CompletionBotLines)
+	}
+	if config.AI.Ollama.CompletionMediaTags != "v0" {
+		t.Errorf("AI.Ollama.CompletionMediaTags = %q, want v0", config.AI.Ollama.CompletionMediaTags)
+	}
+}
+
+func TestLoadOllamaCompletionMediaConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("DB_URL", "http://localhost:8080")
+	t.Setenv("DB_TOKEN", "test-db-token")
+	content := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  url: "${DB_URL}"
+  token: "${DB_TOKEN}"
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+  ollama:
+    enabled: true
+    url: "http://localhost:11434"
+    model: "dolphin3"
+    vision_model: "llava"
+    completion_bot_lines: 6
+    completion_media_tags: "v1"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if config.AI.Ollama.CompletionBotLines != 6 {
+		t.Errorf("AI.Ollama.CompletionBotLines = %d, want 6", config.AI.Ollama.CompletionBotLines)
+	}
+	if config.AI.Ollama.CompletionMediaTags != "v1" {
+		t.Errorf("AI.Ollama.CompletionMediaTags = %q, want v1", config.AI.Ollama.CompletionMediaTags)
+	}
+
+	if err := os.WriteFile(configPath, []byte(strings.Replace(content, `completion_media_tags: "v1"`, `completion_media_tags: "v2"`, 1)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(configPath); err == nil {
+		t.Error("Load() accepted completion_media_tags v2")
+	}
 }
 
 func TestLoadOllamaCompletionSpeakerCanBeEmpty(t *testing.T) {

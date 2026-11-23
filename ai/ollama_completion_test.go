@@ -20,7 +20,7 @@ func TestBuildCompletionPromptLucioleFormatAndTargetLast(t *testing.T) {
 		{Role: RoleUser, Content: "<@2>Bob: c’était chaud", AuthorID: "2", AuthorNick: "Bob"},
 		{Role: RoleUser, Content: "<@3>Léa: t'es d'accord ?", AuthorID: "3", AuthorNick: "Léa", MessageID: "target"},
 	}
-	got := buildCompletionPrompt(messages, "DisgoroQ", "target", "§bot", 2400)
+	got := buildCompletionPrompt(messages, "DisgoroQ", "target", "§bot", 2400, 4, "v0")
 	want := "Alice: quelqu'un a vu le match hier ?\n§bot: ouais trop nul\nBob: c'était chaud\nLéa: t'es d'accord ?\n§bot:"
 	assert.Equal(t, want, got)
 }
@@ -30,18 +30,21 @@ func TestBuildCompletionPromptMovesTargetAfterNewerMessages(t *testing.T) {
 		{Role: RoleUser, Content: "<@1>Alice: cible", AuthorID: "1", AuthorNick: "Alice", MessageID: "target"},
 		{Role: RoleUser, Content: "<@2>Bob: plus récent", AuthorID: "2", AuthorNick: "Bob", MessageID: "newer"},
 	}
-	assert.Equal(t, "Bob: plus récent\nAlice: cible\nbot:", buildCompletionPrompt(messages, "bot", "target", "", 2400))
+	assert.Equal(t, "Bob: plus récent\nAlice: cible\nbot:", buildCompletionPrompt(messages, "bot", "target", "", 2400, 4, "v0"))
 }
 
-func TestBuildCompletionPromptKeepsTwoMostRecentBotLines(t *testing.T) {
+func TestBuildCompletionPromptCapsBotLines(t *testing.T) {
 	var messages []Message
-	for i := 1; i <= 3; i++ {
-		messages = append(messages, Message{Role: RoleAssistant, Content: "bot line", AuthorNick: "bot", MessageID: string(rune('0' + i))})
+	for i := 1; i <= 6; i++ {
+		messages = append(messages, Message{Role: RoleAssistant, Content: "bot line", AuthorNick: "bot"})
 		messages = append(messages, Message{Role: RoleUser, Content: "Alice: human line", AuthorNick: "Alice"})
 	}
-	prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400)
-	assert.Equal(t, 2, strings.Count(prompt, "§bot: bot line"))
-	assert.Equal(t, 3, strings.Count(prompt, "Alice: human line"))
+	prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 4, "v0")
+	assert.Equal(t, 4, strings.Count(prompt, "§bot: bot line"))
+	assert.Equal(t, 6, strings.Count(prompt, "Alice: human line"))
+
+	capped := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 1, "v0")
+	assert.Equal(t, 1, strings.Count(capped, "§bot: bot line"))
 }
 
 func TestBuildCompletionPromptLegacySpeakerAndCleaning(t *testing.T) {
@@ -52,7 +55,7 @@ func TestBuildCompletionPromptLegacySpeakerAndCleaning(t *testing.T) {
 		{Role: RoleUser, Content: "<@2>Bob: [Document Summary]\nrésumé\n\n", AuthorID: "2", AuthorNick: "Bob"},
 		{Role: "tool", Content: "ignored"},
 	}
-	assert.Equal(t, "Alice: regarde ça [gif] :kappa:\nBot: mdrrr\nBob: @Alice t'as vu\nBot:", buildCompletionPrompt(messages, "Bot", "", "", 2400))
+	assert.Equal(t, "Alice: regarde ça [gif] :kappa:\nBot: mdrrr\nBob: @Alice t'as vu\nBot:", buildCompletionPrompt(messages, "Bot", "", "", 2400, 4, "v0"))
 }
 
 func TestBuildCompletionPromptBudgetKeepsLatestAndTarget(t *testing.T) {
@@ -61,12 +64,12 @@ func TestBuildCompletionPromptBudgetKeepsLatestAndTarget(t *testing.T) {
 		messages = append(messages, Message{Role: RoleUser, Content: "<@1>Alice: " + strings.Repeat("a", 100), AuthorID: "1", AuthorNick: "Alice"})
 	}
 	messages = append(messages, Message{Role: RoleUser, Content: "<@2>Bob: target", AuthorID: "2", AuthorNick: "Bob", MessageID: "target"})
-	prompt := buildCompletionPrompt(messages, "bot", "target", "", 2400)
+	prompt := buildCompletionPrompt(messages, "bot", "target", "", 2400, 4, "v0")
 	assert.LessOrEqual(t, len(prompt), 2400+len("\nbot:"))
 	assert.True(t, strings.HasSuffix(prompt, "Bob: target\nbot:"))
 	assert.Contains(t, prompt, strings.Repeat("a", 100))
 
-	targetOnly := buildCompletionPrompt(messages, "bot", "target", "", 10)
+	targetOnly := buildCompletionPrompt(messages, "bot", "target", "", 10, 4, "v0")
 	assert.True(t, strings.Contains(targetOnly, "Bob: target\nbot:"))
 }
 
@@ -77,8 +80,71 @@ func TestBuildCompletionPromptExcludesBotsCommandsAndErrorReplies(t *testing.T) 
 		{Role: RoleAssistant, Content: "mémoire désactivée", AuthorNick: "Bot", CommandOutput: true},
 		{Role: RoleAssistant, Content: "Désolé, tous mes systèmes sont en rade... 🤖💀", AuthorNick: "Bot"},
 	}
-	prompt := buildCompletionPrompt(messages, "Bot", "", "§bot", 2400)
+	prompt := buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v0")
 	assert.Equal(t, "Alice: human\n§bot:", prompt)
+}
+
+func TestBuildCompletionPromptKeepsMediaOnlyTarget(t *testing.T) {
+	imageOnly := []Message{{
+		Role: RoleUser, Content: "<@1>Alice: ", AuthorID: "1", AuthorNick: "Alice", MessageID: "target",
+		Attachments: []MessageAttachment{{Filename: "IMG_8158.png", ContentType: "image/png"}},
+		MediaOnly:   true,
+	}}
+	assert.Equal(t, "Alice: [image]\n§bot:", buildCompletionPrompt(imageOnly, "Bot", "target", "§bot", 2400, 4, "v0"))
+	assert.Equal(t, "Alice: [image]\n§bot:", buildCompletionPrompt(imageOnly, "Bot", "target", "§bot", 2400, 4, "v1"))
+
+	stickerOnly := []Message{{
+		Role: RoleUser, Content: "<@1>Alice: ", AuthorID: "1", AuthorNick: "Alice", MessageID: "target",
+		Stickers:  []string{"Wave"},
+		MediaOnly: true,
+	}}
+	assert.Equal(t, "Alice: [image]\n§bot:", buildCompletionPrompt(stickerOnly, "Bot", "target", "§bot", 2400, 4, "v0"))
+	assert.Equal(t, "Alice: [sticker: Wave]\n§bot:", buildCompletionPrompt(stickerOnly, "Bot", "target", "§bot", 2400, 4, "v1"))
+}
+
+func TestBuildCompletionPromptIncludesMediaWithText(t *testing.T) {
+	messages := []Message{{
+		Role: RoleUser, Content: "<@1>Alice: regarde ", AuthorID: "1", AuthorNick: "Alice",
+		Attachments: []MessageAttachment{{Filename: "deepfry.gif", ContentType: "image/gif"}},
+	}}
+	assert.Equal(t, "Alice: regarde\n§bot:", buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v0"))
+	assert.Equal(t, "Alice: regarde [gif: deepfry]\n§bot:", buildCompletionPrompt(messages, "Bot", "", "§bot", 2400, 4, "v1"))
+}
+
+func TestCompletionTargetIsBot(t *testing.T) {
+	messages := []Message{
+		{MessageID: "human", Role: RoleUser, AuthorNick: "Alice"},
+		{MessageID: "bot", Role: RoleUser, AuthorNick: "OtherBot", AuthorBot: true},
+	}
+	assert.False(t, completionTargetIsBot(messages, "human"))
+	assert.True(t, completionTargetIsBot(messages, "bot"))
+	assert.False(t, completionTargetIsBot(messages, ""))
+	assert.False(t, completionTargetIsBot(messages, "missing"))
+}
+
+func TestCompletionModeStaysSilentForBotTarget(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		_, _ = io.WriteString(w, `{"response":"hi"}`)
+	}))
+	defer server.Close()
+
+	provider, err := NewOllamaProvider(server.URL, false)
+	require.NoError(t, err)
+	provider.SetCompletionMode(true)
+	response, err := provider.Chat(context.Background(), &ChatRequest{
+		Model: "luciole-1b-discord1", BotName: "Bot", TargetMessageID: "target",
+		Messages: []Message{
+			{Role: RoleUser, Content: "<@1>Alice: yo", AuthorID: "1", AuthorNick: "Alice"},
+			{Role: RoleUser, Content: "<@2>OtherBot: hi", AuthorID: "2", AuthorNick: "OtherBot", AuthorBot: true, MessageID: "target"},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, response.EmptyCompletion)
+	assert.Empty(t, response.Content)
+	assert.Equal(t, "ollama", response.Provider)
+	assert.Equal(t, 0, calls)
 }
 
 func TestCleanCompletionReply(t *testing.T) {
@@ -89,6 +155,11 @@ func TestCleanCompletionReply(t *testing.T) {
 	assert.Equal(t, "ouais grave", cleanCompletionReply(" Bob: ouais grave", "Bot"))
 	assert.Equal(t, "ok Bot", cleanCompletionReply(" §bot: ok §bot", "Bot"))
 	assert.Equal(t, "", cleanCompletionReply(" §bot:", "Bot"))
+	assert.Equal(t, "regarde", cleanCompletionReply(" regarde [gif: cat smile]", "Bot"))
+	assert.Equal(t, "mdr", cleanCompletionReply(" mdr [youtube: some title]", "Bot"))
+	assert.Equal(t, "x", cleanCompletionReply(" x [sticker: Wave]", "Bot"))
+	assert.Equal(t, "y", cleanCompletionReply(" y [video] [fichier]", "Bot"))
+	assert.Equal(t, "z", cleanCompletionReply(" z [gif] [lien] [image] [son] [steam] [tweet] [tiktok] [insta]", "Bot"))
 }
 
 func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {

@@ -20,32 +20,18 @@ import (
 
 const (
 	// Luciole has a 1,024-token context; French chat averages about 2.8 chars/token.
-	completionPromptChars = 2400
-	completionLineChars   = 300
-	completionMaxTokens   = 64
+	completionPromptChars     = 2400
+	completionLineChars       = 300
+	completionMaxTokens       = 64
+	completionDefaultBotLines = 4
 )
 
 var (
 	completionUserMention    = regexp.MustCompile(`<@!?(\d+)>`)
 	completionDiscordEmoji   = regexp.MustCompile(`<a?:(\w+):\d+>`)
-	completionURL            = regexp.MustCompile(`(?i)(?:https?://|www\.)\S+`)
-	completionPlaceholder    = regexp.MustCompile(`\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam)\]`)
+	completionPlaceholder    = regexp.MustCompile(`(?i)\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam|video|fichier|sticker)(?::[^\]]*)?\]`)
 	completionReplyMention   = regexp.MustCompile(`@\S+`)
 	completionLeadingSpeaker = regexp.MustCompile(`^[^:\s]{1,32}:(?:\s|$)`)
-	// Same URL placeholders as the training data (discord-ia-waldo prep/discord.py).
-	completionURLKinds = []struct {
-		pattern     *regexp.Regexp
-		placeholder string
-	}{
-		{regexp.MustCompile(`(?i)tenor\.com|giphy\.com|klipy\.com|\.gif\b`), "[gif]"},
-		{regexp.MustCompile(`(?i)youtube\.com|youtu\.be`), "[youtube]"},
-		{regexp.MustCompile(`(?i)twitter\.com|//x\.com|twimg\.com|fxtwitter|vxtwitter|fixupx`), "[tweet]"},
-		{regexp.MustCompile(`(?i)tiktok\.com|tnktok\.com`), "[tiktok]"},
-		{regexp.MustCompile(`(?i)instagram\.com`), "[insta]"},
-		{regexp.MustCompile(`(?i)soundcloud\.com|spotify\.com|deezer\.com`), "[son]"},
-		{regexp.MustCompile(`(?i)steampowered\.com|steamcommunity\.com`), "[steam]"},
-		{regexp.MustCompile(`(?i)cdn\.discordapp\.com|media\.discordapp\.net`), "[image]"},
-	}
 )
 
 type ollamaGenerateResponse struct {
@@ -62,19 +48,33 @@ func (o *OllamaProvider) SetCompletionMode(enabled bool) {
 	o.completion = enabled
 }
 
-func (o *OllamaProvider) SetCompletionConfig(speaker string, promptChars int) {
+func (o *OllamaProvider) SetCompletionConfig(speaker string, promptChars, botLines int, mediaTags string) {
 	o.completionSpeaker = speaker
 	if promptChars > 0 {
 		o.completionPromptChars = promptChars
 	}
+	if botLines > 0 {
+		o.completionBotLines = botLines
+	}
+	o.completionMediaTags = mediaTagsVersion(mediaTags)
 }
 
 func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	// Completion mode decides on its own whether to speak; answering another
+	// bot or a webhook is never wanted. Chat mode keeps its current behaviour.
+	if completionTargetIsBot(req.Messages, req.TargetMessageID) {
+		return &ChatResponse{
+			Provider:        o.Name(),
+			Model:           req.Model,
+			FinishReason:    FinishReasonStop,
+			EmptyCompletion: true,
+		}, nil
+	}
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 || maxTokens > completionMaxTokens {
 		maxTokens = completionMaxTokens
 	}
-	prompt := buildCompletionPrompt(req.Messages, req.BotName, req.TargetMessageID, o.completionSpeaker, o.completionPromptChars)
+	prompt := buildCompletionPrompt(req.Messages, req.BotName, req.TargetMessageID, o.completionSpeaker, o.completionPromptChars, o.completionBotLines, o.completionMediaTags)
 	for attempt := 0; attempt < 2; attempt++ {
 		generated, err := o.generateCompletion(ctx, req, prompt, maxTokens)
 		if err != nil {
@@ -144,7 +144,7 @@ func (o *OllamaProvider) generateCompletion(ctx context.Context, req *ChatReques
 // buildCompletionPrompt renders the most recent messages as training-format
 // chat lines that fit the model's context, then the bot's speaker name. There
 // is no space after the colon: the tokenizer attaches it to the next word.
-func buildCompletionPrompt(messages []Message, botName, targetMessageID, completionSpeaker string, promptChars int) string {
+func buildCompletionPrompt(messages []Message, botName, targetMessageID, completionSpeaker string, promptChars, botLines int, mediaTags string) string {
 	names := make(map[string]string)
 	for _, msg := range messages {
 		if msg.AuthorID != "" && msg.AuthorNick != "" {
@@ -159,6 +159,9 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 	}
 	if promptChars <= 0 {
 		promptChars = completionPromptChars
+	}
+	if botLines <= 0 {
+		botLines = completionDefaultBotLines
 	}
 	ordered := messages
 	if targetMessageID != "" {
@@ -178,7 +181,7 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 
 	var lines []string
 	size := 0
-	botLines := 0
+	botLineCount := 0
 	for idx := len(ordered) - 1; idx >= 0; idx-- {
 		msg := ordered[idx]
 		if msg.AuthorBot || msg.CommandOutput {
@@ -189,7 +192,7 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 		}
 		speaker := msg.AuthorNick
 		if msg.Role == RoleAssistant {
-			if botLines >= 2 || IsErrorReply(msg.Content) {
+			if botLineCount >= botLines || IsErrorReply(msg.Content) {
 				continue
 			}
 			speaker = completionSpeaker
@@ -197,20 +200,20 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 		if speaker == "" {
 			continue
 		}
-		text := completionText(msg, names)
-		if text == "" {
+		isTarget := targetMessageID != "" && msg.MessageID == targetMessageID
+		text := completionText(msg, names, mediaTags)
+		if text == "" && !isTarget {
 			continue
 		}
 		line := speaker + ": " + text
 		line = normalizeCompletionQuotes(line)
-		isTarget := targetMessageID != "" && msg.MessageID == targetMessageID
 		if size+len(line) > promptChars && len(lines) > 0 && !isTarget {
 			break
 		}
 		lines = append(lines, line)
 		size += len(line) + 1
 		if msg.Role == RoleAssistant {
-			botLines++
+			botLineCount++
 		}
 	}
 
@@ -240,8 +243,9 @@ func IsErrorReply(text string) bool {
 
 // completionText returns a message's text as one training-format line: user
 // messages lose the context builder's "<@id>nick: " prefix, mentions become
-// @name, custom emojis :name:, URLs placeholders.
-func completionText(msg Message, names map[string]string) string {
+// @name, custom emojis :name:, and media is rendered with the media-tag
+// renderer for the configured contract version.
+func completionText(msg Message, names map[string]string, mediaTags string) string {
 	text := msg.Content
 	if msg.Role == RoleUser {
 		text = strings.TrimPrefix(text, "<@"+msg.AuthorID+">"+msg.AuthorNick+": ")
@@ -256,19 +260,28 @@ func completionText(msg Message, names map[string]string) string {
 		return ""
 	})
 	text = completionDiscordEmoji.ReplaceAllString(text, ":$1:")
-	text = completionURL.ReplaceAllStringFunc(text, func(url string) string {
-		for _, kind := range completionURLKinds {
-			if kind.pattern.MatchString(url) {
-				return kind.placeholder
-			}
-		}
-		return "[lien]"
-	})
-	text = strings.Join(strings.Fields(text), " ")
+
+	rendered := msg
+	rendered.Content = strings.Join(strings.Fields(text), " ")
+	text = RenderMediaMessage(rendered, mediaTags)
 	if len(text) > completionLineChars {
 		text = strings.ToValidUTF8(text[:completionLineChars], "")
 	}
 	return text
+}
+
+// completionTargetIsBot reports whether the message completion was asked to
+// answer was written by another bot or a webhook.
+func completionTargetIsBot(messages []Message, targetMessageID string) bool {
+	if targetMessageID == "" {
+		return false
+	}
+	for _, msg := range messages {
+		if msg.MessageID == targetMessageID {
+			return msg.AuthorBot
+		}
+	}
+	return false
 }
 
 // cleanCompletionReply drops what the bot should not post as text: a leading

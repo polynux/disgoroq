@@ -78,6 +78,8 @@ type OllamaConfig struct {
 	Completion            bool   `yaml:"completion"`
 	CompletionSpeaker     string `yaml:"completion_speaker"`
 	CompletionPromptChars int    `yaml:"completion_prompt_chars"`
+	CompletionBotLines    int    `yaml:"completion_bot_lines"`
+	CompletionMediaTags   string `yaml:"completion_media_tags"`
 }
 
 // OpencodeConfig contains configuration for the OpenCode Go AI provider.
@@ -238,6 +240,8 @@ func DefaultConfig() *Config {
 				ThinkingEnabled:       false,
 				CompletionSpeaker:     "§bot",
 				CompletionPromptChars: 2400,
+				CompletionBotLines:    4,
+				CompletionMediaTags:   "v0",
 			},
 			Opencode: OpencodeConfig{
 				Enabled:         false,
