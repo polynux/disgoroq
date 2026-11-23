@@ -822,7 +822,7 @@ func TestImportJSONLIdempotencyAndResumability(t *testing.T) {
 
 	embedder := newFakeEmbedder()
 	embedder.set("search_document: cat smile", unitVec2D(1, 0))
-	embedder.set("search_document: salut\nhey\nextra fourth", unitVec2D(0, 1))
+	embedder.set("search_document: extra fourth\nhey\nsalut", unitVec2D(0, 1))
 	// Simulate a transient embedding error on one trigger during the first run.
 	embedder.setErr("search_document: retry me", errors.New("temporary ollama timeout"))
 
@@ -846,7 +846,7 @@ func TestImportJSONLIdempotencyAndResumability(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, e1)
 	assert.Equal(t, int64(5), e1.Uses)
-	assert.Equal(t, "salut\nhey\nextra fourth", e1.TriggerText)
+	assert.Equal(t, "extra fourth\nhey\nsalut", e1.TriggerText)
 	assert.Len(t, e1.DescriptionEmbedding, EmbeddingDim*4)
 	assert.Len(t, e1.TriggerEmbedding, EmbeddingDim*4)
 
@@ -1538,4 +1538,3 @@ func TestImportMissingDatesAndConsecutiveEmbedFailureAbort(t *testing.T) {
 	// 19 failed rows + 1 ok row + 19 failed rows before the 20th aborted = 39 rows written.
 	assert.Equal(t, 39, abortSum.Rows)
 }
-

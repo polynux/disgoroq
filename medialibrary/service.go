@@ -196,7 +196,8 @@ func (s *Service) EnqueueMessage(msg discord.Message) bool {
 // EnqueueMessageUpdate queues a human guild MessageUpdate with embeds for
 // serialized live indexing of unfurled link descriptions.
 func (s *Service) EnqueueMessageUpdate(msg discord.Message) bool {
-	if msg.GuildID == nil || msg.Author.Bot || msg.WebhookID != nil || len(msg.Embeds) == 0 {
+	// Update payloads can be partial: without a known author we cannot tell a human from a bot.
+	if msg.GuildID == nil || msg.Author.ID == 0 || msg.Author.Bot || msg.WebhookID != nil || len(msg.Embeds) == 0 {
 		return false
 	}
 	return s.enqueue(liveJob{msg: msg, updateOnly: true})

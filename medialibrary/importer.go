@@ -219,7 +219,8 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 }
 
 // joinTriggerTexts keeps the most recent maxItems non-empty unique trigger texts
-// from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]).
+// from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]) and
+// stores them newest first, the order prependTriggerText keeps for live updates.
 func joinTriggerTexts(triggers []string, maxItems int) string {
 	if len(triggers) == 0 || maxItems <= 0 {
 		return ""
@@ -236,9 +237,6 @@ func joinTriggerTexts(triggers []string, maxItems int) string {
 		if len(reversed) >= maxItems {
 			break
 		}
-	}
-	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
-		reversed[i], reversed[j] = reversed[j], reversed[i]
 	}
 	return strings.Join(reversed, "\n")
 }
