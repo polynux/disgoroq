@@ -981,6 +981,9 @@ func TestDefaultConfig(t *testing.T) {
 	if config.AI.VisionProvider != "" {
 		t.Errorf("Default AI.VisionProvider = %q, want empty", config.AI.VisionProvider)
 	}
+	if len(config.AI.FallbackOrder) != 0 {
+		t.Errorf("Default AI.FallbackOrder = %v, want empty", config.AI.FallbackOrder)
+	}
 	if !config.AI.Groq.ThinkingEnabled {
 		t.Error("Default AI.Groq.ThinkingEnabled should be true")
 	}
@@ -1364,4 +1367,205 @@ ai:
 	if cfg.AI.Ollama.VisionModel != "" {
 		t.Errorf("AI.Ollama.VisionModel = %q, want empty", cfg.AI.Ollama.VisionModel)
 	}
+}
+
+func TestFallbackOrderValidation(t *testing.T) {
+	baseConfig := func() *Config {
+		cfg := DefaultConfig()
+		cfg.Discord.Token = "test-token"
+		cfg.Database.Local = true
+		cfg.Memory.Enabled = false
+		cfg.AI.PrimaryProvider = AIProviderOllama
+		cfg.AI.Ollama.Enabled = true
+		return cfg
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "nil fallback_order is valid",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = nil
+			},
+			wantErr: false,
+		},
+		{
+			name: "empty fallback_order is valid",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{}
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid custom fallback_order",
+			mutate: func(cfg *Config) {
+				cfg.AI.Opencode.Enabled = true
+				cfg.AI.Opencode.APIKey = "opencode-key"
+				cfg.AI.Groq.APIKey = "groq-key"
+				cfg.AI.FallbackOrder = []string{AIProviderOpencode, AIProviderGroq}
+			},
+			wantErr: false,
+		},
+		{
+			name: "primary provider listed in fallback_order is allowed",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{AIProviderOllama, AIProviderOpencode}
+			},
+			wantErr: false,
+		},
+		{
+			name: "disabled provider listed in fallback_order is allowed without requiring its credentials",
+			mutate: func(cfg *Config) {
+				cfg.AI.Groq.APIKey = ""
+				cfg.AI.Opencode.Enabled = false
+				cfg.AI.Opencode.APIKey = ""
+				cfg.AI.Openrouter.Enabled = false
+				cfg.AI.Openrouter.APIKey = ""
+				cfg.AI.FallbackOrder = []string{AIProviderOpencode, AIProviderOpenrouter, AIProviderGroq}
+			},
+			wantErr: false,
+		},
+		{
+			name: "unknown provider name fails validation",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{AIProviderOpencode, "anthropic"}
+			},
+			wantErr: true,
+			errMsg:  `ai.fallback_order contains unknown provider "anthropic"`,
+		},
+		{
+			name: "empty provider name fails validation",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{""}
+			},
+			wantErr: true,
+			errMsg:  `ai.fallback_order contains unknown provider ""`,
+		},
+		{
+			name: "duplicate provider name fails validation",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{AIProviderOpencode, AIProviderGroq, AIProviderOpencode}
+			},
+			wantErr: true,
+			errMsg:  `ai.fallback_order contains duplicate provider "opencode"`,
+		},
+		{
+			name: "duplicate primary provider fails validation",
+			mutate: func(cfg *Config) {
+				cfg.AI.FallbackOrder = []string{AIProviderOllama, AIProviderOllama}
+			},
+			wantErr: true,
+			errMsg:  `ai.fallback_order contains duplicate provider "ollama"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig()
+			tt.mutate(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("Validate() error = %q, want substring %q", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestLoadFallbackOrderFromYAML(t *testing.T) {
+	t.Run("loads configured fallback_order list", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+
+		t.Setenv("DISCORD_TOKEN", "test-token")
+		t.Setenv("OPENCODE_API_KEY", "test-opencode-key")
+		t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+		configContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  local: true
+
+memory:
+  enabled: false
+
+ai:
+  primary_provider: "ollama"
+  fallback_enabled: true
+  fallback_order: ["opencode", "groq"]
+  ollama:
+    enabled: true
+    url: "http://localhost:11434"
+    model: "luciole"
+    vision_model: "llava"
+  opencode:
+    enabled: true
+    base_url: "https://opencode.ai/inference/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model: "deepseek-v4.1-flash"
+    vision_model: "deepseek-v4.1-flash"
+  groq:
+    api_key: "${GROQ_API_KEY}"
+`
+		if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+			t.Fatalf("Failed to write config file: %v", err)
+		}
+
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if len(cfg.AI.FallbackOrder) != 2 || cfg.AI.FallbackOrder[0] != AIProviderOpencode || cfg.AI.FallbackOrder[1] != AIProviderGroq {
+			t.Errorf("AI.FallbackOrder = %v, want [opencode groq]", cfg.AI.FallbackOrder)
+		}
+	})
+
+	t.Run("rejects unknown or duplicate fallback_order entries from YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("DISCORD_TOKEN", "test-token")
+		t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+		for _, tc := range []struct {
+			name    string
+			order   string
+			wantErr string
+		}{
+			{name: "unknown", order: `["bogus"]`, wantErr: `ai.fallback_order contains unknown provider "bogus"`},
+			{name: "duplicate", order: `["opencode", "opencode"]`, wantErr: `ai.fallback_order contains duplicate provider "opencode"`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				configPath := filepath.Join(tmpDir, tc.name+".yaml")
+				content := `
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  local: true
+
+memory:
+  enabled: false
+
+ai:
+  fallback_order: ` + tc.order + `
+  groq:
+    api_key: "${GROQ_API_KEY}"
+`
+				if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+					t.Fatalf("Failed to write config file: %v", err)
+				}
+				_, err := Load(configPath)
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want substring %q", err, tc.wantErr)
+				}
+			})
+		}
+	})
 }

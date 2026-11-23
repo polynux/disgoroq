@@ -158,6 +158,7 @@ func main() {
 		},
 		MinResponseLength: cfg.AI.MinResponseLength,
 		FallbackEnabled:   cfg.AI.FallbackEnabled,
+		FallbackOrder:     append([]string(nil), cfg.AI.FallbackOrder...),
 		AttachmentCache:   repo,
 		ToolConfig: ai.ToolRuntimeConfig{
 			Enabled:          cfg.AI.Tools.Enabled,
@@ -203,6 +204,7 @@ func main() {
 		zap.String("primary_provider", aiServiceConfig.PrimaryProvider),
 		zap.String("vision_provider", aiServiceConfig.VisionProvider),
 		zap.Bool("fallback_enabled", aiService.IsFallbackAvailable()),
+		zap.Strings("fallback_order", aiServiceConfig.FallbackOrder),
 		zap.Int("max_retries", aiServiceConfig.RetryConfig.MaxRetries),
 		zap.Duration("retry_delay", aiServiceConfig.RetryConfig.InitialDelay))
 

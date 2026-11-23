@@ -12,6 +12,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+	"polynux/disgoroq/logger"
 )
 
 func TestServiceConfigValidate(t *testing.T) {
@@ -259,6 +262,62 @@ func TestServiceConfigValidate(t *testing.T) {
 			},
 			shouldError: true,
 			errorMsg:    "invalid retry config",
+		},
+		{
+			name: "valid custom fallback_order",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderOllama,
+				FallbackOrder:     []string{ProviderOpencode, ProviderGroq},
+				OllamaEnabled:     true,
+				OllamaURL:         "http://localhost:11434",
+				OllamaModel:       "luciole",
+				OllamaVisionModel: "llava",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: false,
+		},
+		{
+			name: "primary and disabled providers allowed in fallback_order",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderOllama,
+				FallbackOrder:     []string{ProviderOllama, ProviderOpenrouter, ProviderGroq},
+				OllamaEnabled:     true,
+				OllamaURL:         "http://localhost:11434",
+				OllamaModel:       "luciole",
+				OllamaVisionModel: "llava",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: false,
+		},
+		{
+			name: "unknown provider in fallback_order rejected",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
+				FallbackOrder:     []string{ProviderOpencode, "unknown"},
+				GroqAPIKey:        "test-key",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: true,
+			errorMsg:    `unsupported fallback provider "unknown"`,
+		},
+		{
+			name: "duplicate provider in fallback_order rejected",
+			config: ServiceConfig{
+				PrimaryProvider:   ProviderGroq,
+				FallbackOrder:     []string{ProviderOpencode, ProviderOllama, ProviderOpencode},
+				GroqAPIKey:        "test-key",
+				GroqModel:         "openai/gpt-oss-20b",
+				GroqVisionModel:   "meta-llama/llama-4-scout-17b-16e-instruct",
+				MinResponseLength: 1,
+				RetryConfig:       DefaultRetryConfig(),
+			},
+			shouldError: true,
+			errorMsg:    `duplicate fallback provider "opencode"`,
 		},
 	}
 
@@ -1135,5 +1194,394 @@ func TestServiceChatImageDescriptionsAndInlineBehavior(t *testing.T) {
 		require.Len(t, calls, 1)
 		assert.Equal(t, ProviderOpenrouter, calls[0].Provider)
 		assert.Contains(t, calls[0].Body, `"image_url"`)
+	})
+}
+
+func chainProviderNames(chain *ProviderChain) []string {
+	if chain == nil {
+		return nil
+	}
+	names := make([]string, 0, len(chain.providers))
+	for _, provider := range chain.providers {
+		names = append(names, provider.Name())
+	}
+	return names
+}
+
+func captureServiceLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zap.InfoLevel)
+	prev := logger.Log
+	logger.Log = zap.New(core)
+	t.Cleanup(func() {
+		logger.Log = prev
+	})
+	return logs
+}
+
+func TestServiceFallbackOrder(t *testing.T) {
+	image := ImageContext{URL: testInlinePNGDataURI, Type: "image/png"}
+
+	allFourConfig := func(primary, vision string, order []string, ollamaVisionModel string) ServiceConfig {
+		return ServiceConfig{
+			PrimaryProvider:       primary,
+			VisionProvider:        vision,
+			FallbackEnabled:       true,
+			FallbackOrder:         order,
+			GroqAPIKey:            "groq-key",
+			GroqModel:             "openai/gpt-oss-20b",
+			GroqVisionModel:       "meta-llama/llama-4-scout-17b-16e-instruct",
+			OllamaEnabled:         true,
+			OllamaURL:             "http://localhost:11434",
+			OllamaModel:           "luciole",
+			OllamaVisionModel:     ollamaVisionModel,
+			OpencodeEnabled:       true,
+			OpencodeBaseURL:       "https://opencode.ai/inference/go/v1",
+			OpencodeAPIKey:        "oc-key",
+			OpencodeModel:         "deepseek-v4.1-flash",
+			OpencodeVisionModel:   "deepseek-v4.1-flash",
+			OpenrouterEnabled:     true,
+			OpenrouterBaseURL:     "https://openrouter.ai/api/v1",
+			OpenrouterAPIKey:      "or-key",
+			OpenrouterModel:       "google/gemini-2.5-flash",
+			OpenrouterVisionModel: "google/gemini-2.5-flash",
+			RetryConfig:           noRetryTestConfig(),
+			MinResponseLength:     1,
+		}
+	}
+
+	t.Run("empty fallback_order keeps default order unchanged for chat and vision", func(t *testing.T) {
+		service := NewService(allFourConfig(ProviderOllama, ProviderOpencode, nil, "llava"))
+		require.NotNil(t, service)
+
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderGroq, ProviderOpencode, ProviderOpenrouter},
+			chainProviderNames(service.chain),
+		)
+		visionChain, ok := service.visionProvider.(*ProviderChain)
+		require.True(t, ok)
+		assert.Equal(t,
+			[]string{ProviderOpencode, ProviderOllama, ProviderGroq, ProviderOpenrouter},
+			chainProviderNames(visionChain),
+		)
+	})
+
+	t.Run("custom fallback_order puts opencode before groq and appends unlisted enabled providers in default order", func(t *testing.T) {
+		service := NewService(allFourConfig(ProviderOllama, ProviderOpencode, []string{ProviderOpencode, ProviderGroq}, ""))
+		require.NotNil(t, service)
+
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderOpencode, ProviderGroq, ProviderOpenrouter},
+			chainProviderNames(service.chain),
+		)
+		assert.Equal(t, []string{ProviderOpencode, ProviderGroq}, service.GetProviderInfo()["fallback_order"])
+
+		visionChain, ok := service.visionProvider.(*ProviderChain)
+		require.True(t, ok)
+		assert.Equal(t,
+			[]string{ProviderOpencode, ProviderGroq, ProviderOpenrouter},
+			chainProviderNames(visionChain),
+		)
+	})
+
+	t.Run("multiple unlisted enabled providers are appended in default order", func(t *testing.T) {
+		service := NewService(allFourConfig(ProviderOpenrouter, "", []string{ProviderOpencode}, "llava"))
+		require.NotNil(t, service)
+
+		assert.Equal(t,
+			[]string{ProviderOpenrouter, ProviderOpencode, ProviderGroq, ProviderOllama},
+			chainProviderNames(service.chain),
+		)
+	})
+
+	t.Run("chat tries providers in custom fallback_order then unlisted enabled providers without duplicates", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls []recordedProviderCall
+
+		ollamaSrv := newFakeOllamaServer(t, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "ollama down"
+		})
+		defer ollamaSrv.Close()
+
+		openrouterSrv := newFakeOpenAIServer(t, ProviderOpenrouter, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "openrouter down"
+		})
+		defer openrouterSrv.Close()
+
+		opencodeSrv := newFakeOpenAIServer(t, ProviderOpencode, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "opencode rescued chat"
+		})
+		defer opencodeSrv.Close()
+
+		service := NewService(ServiceConfig{
+			PrimaryProvider:       ProviderOllama,
+			FallbackEnabled:       true,
+			FallbackOrder:         []string{ProviderOpenrouter},
+			OllamaEnabled:         true,
+			OllamaURL:             ollamaSrv.URL,
+			OllamaModel:           "luciole",
+			OllamaVisionModel:     "llava",
+			OpencodeEnabled:       true,
+			OpencodeBaseURL:       opencodeSrv.URL,
+			OpencodeAPIKey:        "oc-key",
+			OpencodeModel:         "deepseek-v4.1-flash",
+			OpencodeVisionModel:   "deepseek-v4.1-flash",
+			OpenrouterEnabled:     true,
+			OpenrouterBaseURL:     openrouterSrv.URL,
+			OpenrouterAPIKey:      "or-key",
+			OpenrouterModel:       "google/gemini-2.5-flash",
+			OpenrouterVisionModel: "google/gemini-2.5-flash",
+			RetryConfig:           noRetryTestConfig(),
+			MinResponseLength:     1,
+		})
+		require.NotNil(t, service)
+
+		resp, err := service.Chat(context.Background(), &ChatRequest{
+			Messages: []Message{{Role: "user", Content: "hi"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "opencode rescued chat", resp.Content)
+		assert.Equal(t, ProviderOpencode, resp.Provider)
+
+		require.Len(t, calls, 3)
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderOpenrouter, ProviderOpencode},
+			[]string{calls[0].Provider, calls[1].Provider, calls[2].Provider},
+		)
+	})
+
+	t.Run("vision chain follows custom fallback_order after vision_provider without duplicate calls", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls []recordedProviderCall
+
+		ollamaSrv := newFakeOllamaServer(t, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "ollama vision down"
+		})
+		defer ollamaSrv.Close()
+
+		openrouterSrv := newFakeOpenAIServer(t, ProviderOpenrouter, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "openrouter vision down"
+		})
+		defer openrouterSrv.Close()
+
+		opencodeSrv := newFakeOpenAIServer(t, ProviderOpencode, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "opencode vision rescued"
+		})
+		defer opencodeSrv.Close()
+
+		service := NewService(ServiceConfig{
+			PrimaryProvider:       ProviderOllama,
+			VisionProvider:        ProviderOllama,
+			FallbackEnabled:       true,
+			FallbackOrder:         []string{ProviderOpenrouter, ProviderOpencode},
+			OllamaEnabled:         true,
+			OllamaURL:             ollamaSrv.URL,
+			OllamaModel:           "luciole",
+			OllamaVisionModel:     "llava",
+			OpencodeEnabled:       true,
+			OpencodeBaseURL:       opencodeSrv.URL,
+			OpencodeAPIKey:        "oc-key",
+			OpencodeModel:         "deepseek-v4.1-flash",
+			OpencodeVisionModel:   "deepseek-v4.1-flash",
+			OpenrouterEnabled:     true,
+			OpenrouterBaseURL:     openrouterSrv.URL,
+			OpenrouterAPIKey:      "or-key",
+			OpenrouterModel:       "google/gemini-2.5-flash",
+			OpenrouterVisionModel: "google/gemini-2.5-flash",
+			RetryConfig:           noRetryTestConfig(),
+			MinResponseLength:     1,
+		})
+		require.NotNil(t, service)
+
+		resp, err := service.Vision(context.Background(), &VisionRequest{
+			Instruction: "Describe",
+			ImageURL:    testInlinePNGDataURI,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "opencode vision rescued", resp.Description)
+
+		require.Len(t, calls, 3)
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderOpenrouter, ProviderOpencode},
+			[]string{calls[0].Provider, calls[1].Provider, calls[2].Provider},
+		)
+	})
+
+	t.Run("vision_provider listed in fallback_order is not called twice", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls []recordedProviderCall
+
+		ollamaSrv := newFakeOllamaServer(t, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "should not be called because ollama vision_model is empty"
+		})
+		defer ollamaSrv.Close()
+
+		opencodeSrv := newFakeOpenAIServer(t, ProviderOpencode, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "opencode vision down"
+		})
+		defer opencodeSrv.Close()
+
+		openrouterSrv := newFakeOpenAIServer(t, ProviderOpenrouter, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "openrouter vision rescued"
+		})
+		defer openrouterSrv.Close()
+
+		service := NewService(ServiceConfig{
+			PrimaryProvider:       ProviderOllama,
+			VisionProvider:        ProviderOpencode,
+			FallbackEnabled:       true,
+			FallbackOrder:         []string{ProviderOpencode, ProviderOpenrouter},
+			OllamaEnabled:         true,
+			OllamaURL:             ollamaSrv.URL,
+			OllamaModel:           "luciole",
+			OllamaVisionModel:     "",
+			OpencodeEnabled:       true,
+			OpencodeBaseURL:       opencodeSrv.URL,
+			OpencodeAPIKey:        "oc-key",
+			OpencodeModel:         "deepseek-v4.1-flash",
+			OpencodeVisionModel:   "deepseek-v4.1-flash",
+			OpenrouterEnabled:     true,
+			OpenrouterBaseURL:     openrouterSrv.URL,
+			OpenrouterAPIKey:      "or-key",
+			OpenrouterModel:       "google/gemini-2.5-flash",
+			OpenrouterVisionModel: "google/gemini-2.5-flash",
+			RetryConfig:           noRetryTestConfig(),
+			MinResponseLength:     1,
+		})
+		require.NotNil(t, service)
+
+		resp, err := service.Vision(context.Background(), &VisionRequest{
+			Instruction: "Describe",
+			ImageURL:    testInlinePNGDataURI,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "openrouter vision rescued", resp.Description)
+
+		require.Len(t, calls, 2)
+		assert.Equal(t,
+			[]string{ProviderOpencode, ProviderOpenrouter},
+			[]string{calls[0].Provider, calls[1].Provider},
+		)
+	})
+
+	t.Run("per-wrapper vision fallback follows fallback_order when vision_provider is empty", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls []recordedProviderCall
+
+		ollamaSrv := newFakeOllamaServer(t, &mu, &calls, func(model, body string) (int, string) {
+			if model == "llava" {
+				return http.StatusServiceUnavailable, "ollama vision down"
+			}
+			return http.StatusOK, "ollama chat with fallback vision"
+		})
+		defer ollamaSrv.Close()
+
+		openrouterSrv := newFakeOpenAIServer(t, ProviderOpenrouter, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "openrouter vision down"
+		})
+		defer openrouterSrv.Close()
+
+		opencodeSrv := newFakeOpenAIServer(t, ProviderOpencode, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "opencode fallback image desc"
+		})
+		defer opencodeSrv.Close()
+
+		service := NewService(ServiceConfig{
+			PrimaryProvider:       ProviderOllama,
+			VisionProvider:        "",
+			FallbackEnabled:       true,
+			FallbackOrder:         []string{ProviderOpenrouter, ProviderOpencode},
+			OllamaEnabled:         true,
+			OllamaURL:             ollamaSrv.URL,
+			OllamaModel:           "luciole",
+			OllamaVisionModel:     "llava",
+			OpencodeEnabled:       true,
+			OpencodeBaseURL:       opencodeSrv.URL,
+			OpencodeAPIKey:        "oc-key",
+			OpencodeModel:         "deepseek-v4.1-flash",
+			OpencodeVisionModel:   "deepseek-v4.1-flash",
+			OpenrouterEnabled:     true,
+			OpenrouterBaseURL:     openrouterSrv.URL,
+			OpenrouterAPIKey:      "or-key",
+			OpenrouterModel:       "google/gemini-2.5-flash",
+			OpenrouterVisionModel: "google/gemini-2.5-flash",
+			RetryConfig:           noRetryTestConfig(),
+			MinResponseLength:     1,
+		})
+		require.NotNil(t, service)
+
+		resp, err := service.Chat(context.Background(), &ChatRequest{
+			Messages: []Message{{Role: "user", Content: "look", ImageRefs: []int{0}}},
+			Images:   []ImageContext{image},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "ollama chat with fallback vision", resp.Content)
+
+		// Vision tries ollama(llava) -> openrouter -> opencode (custom fallback_order, no duplicate ollama vision),
+		// then ollama answers chat with opencode's description.
+		require.Len(t, calls, 4)
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderOpenrouter, ProviderOpencode, ProviderOllama},
+			[]string{calls[0].Provider, calls[1].Provider, calls[2].Provider, calls[3].Provider},
+		)
+		assert.Equal(t, "llava", calls[0].Model)
+		assert.Equal(t, "google/gemini-2.5-flash", calls[1].Model)
+		assert.Equal(t, "deepseek-v4.1-flash", calls[2].Model)
+		assert.Equal(t, "luciole", calls[3].Model)
+		assert.Contains(t, calls[3].Body, "opencode fallback image desc")
+	})
+
+	t.Run("primary and disabled providers in fallback_order are ignored, logged at startup, and not called twice", func(t *testing.T) {
+		logs := captureServiceLogs(t)
+
+		var mu sync.Mutex
+		var calls []recordedProviderCall
+
+		ollamaSrv := newFakeOllamaServer(t, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusServiceUnavailable, "ollama down"
+		})
+		defer ollamaSrv.Close()
+
+		opencodeSrv := newFakeOpenAIServer(t, ProviderOpencode, &mu, &calls, func(model, body string) (int, string) {
+			return http.StatusOK, "opencode handled it"
+		})
+		defer opencodeSrv.Close()
+
+		service := NewService(ServiceConfig{
+			PrimaryProvider:     ProviderOllama,
+			FallbackEnabled:     true,
+			FallbackOrder:       []string{ProviderOllama, ProviderOpenrouter, ProviderOpencode},
+			OllamaEnabled:       true,
+			OllamaURL:           ollamaSrv.URL,
+			OllamaModel:         "luciole",
+			OllamaVisionModel:   "llava",
+			OpenrouterEnabled:   false,
+			OpencodeEnabled:     true,
+			OpencodeBaseURL:     opencodeSrv.URL,
+			OpencodeAPIKey:      "oc-key",
+			OpencodeModel:       "deepseek-v4.1-flash",
+			OpencodeVisionModel: "deepseek-v4.1-flash",
+			RetryConfig:         noRetryTestConfig(),
+			MinResponseLength:   1,
+		})
+		require.NotNil(t, service)
+
+		primaryIgnored := logs.FilterMessage("Ignoring primary provider in ai.fallback_order").FilterField(zap.String("provider", ProviderOllama))
+		assert.Equal(t, 1, primaryIgnored.Len())
+
+		disabledIgnored := logs.FilterMessage("Ignoring disabled provider in ai.fallback_order").FilterField(zap.String("provider", ProviderOpenrouter))
+		assert.Equal(t, 1, disabledIgnored.Len())
+
+		resp, err := service.Chat(context.Background(), &ChatRequest{
+			Messages: []Message{{Role: "user", Content: "hi"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "opencode handled it", resp.Content)
+
+		require.Len(t, calls, 2)
+		assert.Equal(t,
+			[]string{ProviderOllama, ProviderOpencode},
+			[]string{calls[0].Provider, calls[1].Provider},
+		)
 	})
 }

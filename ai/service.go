@@ -61,6 +61,7 @@ type ServiceConfig struct {
 
 	// Fallback configuration
 	FallbackEnabled bool
+	FallbackOrder   []string
 
 	// Optional persistent cache for detached attachment-to-text conversions.
 	AttachmentCache database.AttachmentCache
@@ -181,6 +182,17 @@ func (c *ServiceConfig) Validate() error {
 		return fmt.Errorf("unsupported vision provider %q", c.VisionProvider)
 	}
 
+	seenFallback := make(map[string]bool, len(c.FallbackOrder))
+	for _, provider := range c.FallbackOrder {
+		if !isKnownProvider(provider) {
+			return fmt.Errorf("unsupported fallback provider %q", provider)
+		}
+		if seenFallback[provider] {
+			return fmt.Errorf("duplicate fallback provider %q", provider)
+		}
+		seenFallback[provider] = true
+	}
+
 	if err := c.RetryConfig.Validate(); err != nil {
 		return fmt.Errorf("invalid retry config: %w", err)
 	}
@@ -194,6 +206,78 @@ func (c *ServiceConfig) Validate() error {
 	}
 
 	return nil
+}
+
+var defaultFallbackOrder = []string{
+	ProviderGroq,
+	ProviderOllama,
+	ProviderOpencode,
+	ProviderOpenrouter,
+}
+
+func isKnownProvider(providerName string) bool {
+	switch providerName {
+	case ProviderGroq, ProviderOllama, ProviderOpencode, ProviderOpenrouter:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c ServiceConfig) isProviderEnabled(providerName string) bool {
+	switch providerName {
+	case ProviderGroq:
+		return c.GroqAPIKey != ""
+	case ProviderOllama:
+		return c.OllamaEnabled
+	case ProviderOpencode:
+		return c.OpencodeEnabled && c.OpencodeAPIKey != ""
+	case ProviderOpenrouter:
+		return c.OpenrouterEnabled && c.OpenrouterAPIKey != ""
+	default:
+		return false
+	}
+}
+
+func (c ServiceConfig) orderedProviderNames(primaryProvider string) []string {
+	ordered := make([]string, 0, len(defaultFallbackOrder))
+	seen := make(map[string]bool, len(defaultFallbackOrder))
+
+	ordered = append(ordered, primaryProvider)
+	seen[primaryProvider] = true
+
+	for _, providerName := range c.FallbackOrder {
+		if providerName == primaryProvider {
+			logger.Info("Ignoring primary provider in ai.fallback_order",
+				zap.String("provider", providerName))
+			continue
+		}
+		if !isKnownProvider(providerName) {
+			logger.Warn("Ignoring unknown provider in ai.fallback_order",
+				zap.String("provider", providerName))
+			continue
+		}
+		if seen[providerName] {
+			continue
+		}
+		seen[providerName] = true
+		if !c.isProviderEnabled(providerName) {
+			logger.Info("Ignoring disabled provider in ai.fallback_order",
+				zap.String("provider", providerName))
+			continue
+		}
+		ordered = append(ordered, providerName)
+	}
+
+	for _, providerName := range defaultFallbackOrder {
+		if seen[providerName] {
+			continue
+		}
+		seen[providerName] = true
+		ordered = append(ordered, providerName)
+	}
+
+	return ordered
 }
 
 func (c ServiceConfig) primaryProvider() string {
@@ -312,13 +396,12 @@ func NewService(config ServiceConfig) *Service {
 		})
 	}
 
+	orderedProviders := config.orderedProviderNames(primaryProvider)
+
 	addProvider(primaryProvider)
 
 	if config.FallbackEnabled {
-		for _, providerName := range []string{ProviderGroq, ProviderOllama, ProviderOpencode, ProviderOpenrouter} {
-			if providerName == primaryProvider {
-				continue
-			}
+		for _, providerName := range orderedProviders[1:] {
 			addProvider(providerName)
 		}
 	}
@@ -347,10 +430,8 @@ func NewService(config ServiceConfig) *Service {
 		}
 		addVisionProvider(configuredVision)
 		if config.FallbackEnabled {
-			for _, provider := range wrappedProviders {
-				if wrapper, ok := provider.(*RetryWrapper); ok {
-					addVisionProvider(wrapper)
-				}
+			for _, providerName := range orderedProviders {
+				addVisionProvider(builtProviders[providerName])
 			}
 		}
 
@@ -538,6 +619,7 @@ func (s *Service) GetProviderInfo() map[string]interface{} {
 		"primary_provider":   s.config.primaryProvider(),
 		"vision_provider":    s.config.VisionProvider,
 		"fallback_enabled":   s.config.FallbackEnabled,
+		"fallback_order":     append([]string(nil), s.config.FallbackOrder...),
 		"groq_enabled":       s.config.GroqAPIKey != "",
 		"ollama_enabled":     s.config.OllamaEnabled,
 		"opencode_enabled":   s.config.OpencodeEnabled,

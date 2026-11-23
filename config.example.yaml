@@ -147,6 +147,13 @@ ai:
   # Enable fallback to the other configured providers when the primary provider fails
   fallback_enabled: true
 
+  # Optional provider fallback order when fallback_enabled is true:
+  # list of provider names ("groq", "ollama", "opencode", "openrouter").
+  # Primary provider is always tried first; unlisted enabled providers are appended
+  # in the default order (groq, ollama, opencode, openrouter).
+  # Leave empty to use the default order.
+  fallback_order: []
+
   # Minimum response length to accept
   min_response_length: 1
 

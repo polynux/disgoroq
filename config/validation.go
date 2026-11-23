@@ -107,6 +107,19 @@ func (c *AIConfig) validate() error {
 		}
 	}
 
+	seenFallback := make(map[string]bool, len(c.FallbackOrder))
+	for _, provider := range c.FallbackOrder {
+		switch provider {
+		case AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter:
+		default:
+			return fmt.Errorf("ai.fallback_order contains unknown provider %q; must be one of %q, %q, %q, or %q", provider, AIProviderGroq, AIProviderOllama, AIProviderOpencode, AIProviderOpenrouter)
+		}
+		if seenFallback[provider] {
+			return fmt.Errorf("ai.fallback_order contains duplicate provider %q", provider)
+		}
+		seenFallback[provider] = true
+	}
+
 	if c.PrimaryProvider == AIProviderGroq {
 		if c.Groq.APIKey == "" {
 			return fmt.Errorf("ai.groq.api_key is required when ai.primary_provider is %q", AIProviderGroq)

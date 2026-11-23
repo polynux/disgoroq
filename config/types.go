@@ -49,6 +49,7 @@ type AIConfig struct {
 	Tools             ToolsConfig      `yaml:"tools"`
 	Retry             RetryConfig      `yaml:"retry"`
 	FallbackEnabled   bool             `yaml:"fallback_enabled"`
+	FallbackOrder     []string         `yaml:"fallback_order"`
 	MinResponseLength int              `yaml:"min_response_length"`
 }
 
@@ -289,6 +290,7 @@ func DefaultConfig() *Config {
 				MaxDelayMs:     5000,
 			},
 			FallbackEnabled:   true,
+			FallbackOrder:     nil,
 			MinResponseLength: 1,
 		},
 		Logging: LoggingConfig{
