@@ -260,6 +260,7 @@ func TestOpenrouterErrorInsideOKResponse(t *testing.T) {
 		{"string code is parsed", `{"error":{"code":"429","message":"Rate limit exceeded: free-models-per-min."}}`, http.StatusTooManyRequests, 3},
 		{"missing code is treated as a transient upstream error", `{"error":{"message":"Provider returned error"}}`, http.StatusBadGateway, 3},
 		{"missing code with quota wording is final", `{"error":{"message":"insufficient_quota: add credits"}}`, http.StatusPaymentRequired, 1},
+		{"whitespace-only error choice does not hide the error", `{"error":{"code":402,"message":"Insufficient credits"},"choices":[{"message":{"content":"\n  "},"finish_reason":"error"}]}`, http.StatusPaymentRequired, 1},
 		{"empty error choice does not hide the error", `{"error":{"code":402,"message":"Insufficient credits"},"choices":[{"message":{"content":""},"finish_reason":"error"}]}`, http.StatusPaymentRequired, 1},
 	}
 	for _, tt := range tests {

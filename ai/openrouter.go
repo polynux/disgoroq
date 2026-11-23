@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 type OpenrouterProvider struct {
@@ -244,7 +245,7 @@ func (r *openrouterChatResponse) envelopeError(body []byte) error {
 	if r.Error == nil {
 		return nil
 	}
-	if len(r.Choices) > 0 && (r.Choices[0].Message.Content != "" || len(r.Choices[0].Message.ToolCalls) > 0) {
+	if len(r.Choices) > 0 && (strings.TrimSpace(r.Choices[0].Message.Content) != "" || len(r.Choices[0].Message.ToolCalls) > 0) {
 		return nil
 	}
 	status := http.StatusBadGateway // unknown upstream failure: treat as transient
