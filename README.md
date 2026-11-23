@@ -36,7 +36,7 @@ Each AI provider section also exposes `thinking_enabled`:
 
 - `ai.ollama.thinking_enabled` maps directly to Ollama's `think` request flag.
 - `ai.groq.thinking_enabled` keeps Groq's default reasoning behavior when true and sends a lower/no reasoning effort hint when false for supported models.
-- `ai.opencode.thinking_enabled` keeps the provider default when true and sends `reasoning_effort: none` when false on OpenCode chat-completions requests.
+- `ai.opencode.thinking_enabled` keeps the provider default when true. When false it sends the lowest reasoning effort each model accepts: `none` for DeepSeek, Kimi K3, GLM-5.3 and MiniMax M3, `minimal` for Muse Spark (it rejects `none`), and no hint for other models.
 - `ai.openrouter.thinking_enabled` keeps the provider default when true and sends OpenRouter's normalized `reasoning: { effort: "none", exclude: true }` when false.
 
 ### OpenCode Go (Fallback, Vision, And Summaries)

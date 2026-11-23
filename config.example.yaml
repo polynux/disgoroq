@@ -95,7 +95,8 @@ ai:
     vision_model: "deepseek-v4.1-flash"
 
     # Use the model's default reasoning/thinking behavior
-    # Set to false to send reasoning_effort: none on OpenCode chat requests
+    # Set to false to ask for the lowest reasoning effort each model accepts
+    # (none for DeepSeek, Kimi K3, GLM-5.3, MiniMax M3; minimal for Muse Spark)
     thinking_enabled: true
 
   openrouter:
