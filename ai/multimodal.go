@@ -163,7 +163,7 @@ func (r *RetryWrapper) describeImagesForChat(ctx context.Context, images []Image
 			continue
 		}
 
-		r.storeCachedImageDescription(ctx, image, response, description)
+		r.storeCachedImageDescription(ctx, image, description)
 		descriptions[idx] = description
 	}
 
@@ -206,7 +206,7 @@ func (r *RetryWrapper) getCachedImageDescription(ctx context.Context, image Imag
 	return description, true
 }
 
-func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image ImageContext, response *VisionResponse, description string) {
+func (r *RetryWrapper) storeCachedImageDescription(ctx context.Context, image ImageContext, description string) {
 	if r.cache == nil {
 		return
 	}
