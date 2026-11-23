@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -539,31 +538,37 @@ type MediaTag struct {
 }
 
 // IsDiscordCDNURL reports whether raw points to cdn.discordapp.com or media.discordapp.net.
+// Host extraction avoids url.Parse so URLs containing a bare '%' are still recognized.
 func IsDiscordCDNURL(raw string) bool {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return false
 	}
-	if u, err := url.Parse(trimmed); err == nil && u.Host != "" {
-		host := strings.ToLower(u.Hostname())
-		return host == "cdn.discordapp.com" || host == "media.discordapp.net"
+	loc := mediaSchemePattern.FindStringIndex(trimmed)
+	if loc == nil {
+		return false
 	}
-	if !strings.Contains(trimmed, "://") {
-		if u, err := url.Parse("https://" + trimmed); err == nil && u.Host != "" {
-			host := strings.ToLower(u.Hostname())
-			return host == "cdn.discordapp.com" || host == "media.discordapp.net"
-		}
+	host := trimmed[loc[1]:]
+	if idx := strings.IndexAny(host, "/?#"); idx >= 0 {
+		host = host[:idx]
 	}
-	return false
+	if at := strings.LastIndexByte(host, '@'); at >= 0 {
+		host = host[at+1:]
+	}
+	if colon := strings.IndexByte(host, ':'); colon >= 0 {
+		host = host[:colon]
+	}
+	host = strings.ToLower(host)
+	return host == "cdn.discordapp.com" || host == "media.discordapp.net"
 }
 
-// CanonicalizeMediaURL removes the query string from Discord CDN URLs and leaves
-// all other URLs unchanged.
+// CanonicalizeMediaURL removes the query string and fragment (from the first '?'
+// or '#') from Discord CDN URLs and leaves all other URLs unchanged.
 func CanonicalizeMediaURL(raw string) string {
 	if !IsDiscordCDNURL(raw) {
 		return raw
 	}
-	if idx := strings.IndexByte(raw, '?'); idx >= 0 {
+	if idx := strings.IndexAny(raw, "?#"); idx >= 0 {
 		return raw[:idx]
 	}
 	return raw

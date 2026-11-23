@@ -175,16 +175,29 @@ func TestParseMediaTags(t *testing.T) {
 func TestDiscordCDNAndCanonicalize(t *testing.T) {
 	require.True(t, IsDiscordCDNURL("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&is=2"))
 	require.True(t, IsDiscordCDNURL("https://MEDIA.DISCORDAPP.NET/attachments/1/2/cat.gif?width=100"))
+	require.True(t, IsDiscordCDNURL("https://cdn.discordapp.com/attachments/1/2/100%_cat.gif?ex=1#frag"))
+	require.True(t, IsDiscordCDNURL("https://cdn.discordapp.com:443/attachments/1/2/cat.gif"))
 	require.False(t, IsDiscordCDNURL("https://tenor.com/view/cat-gif-123"))
 	require.False(t, IsDiscordCDNURL("https://example.com/?ref=cdn.discordapp.com"))
+	require.False(t, IsDiscordCDNURL("https://evil-cdn.discordapp.com/attachments/1/2/cat.gif"))
+	require.False(t, IsDiscordCDNURL("https://cdn.discordapp.com.evil.com/attachments/1/2/cat.gif"))
+	require.False(t, IsDiscordCDNURL("cdn.discordapp.com/attachments/1/2/cat.gif"))
 
 	require.Equal(t,
 		"https://cdn.discordapp.com/attachments/1/2/cat.gif",
 		CanonicalizeMediaURL("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&is=2"),
 	)
 	require.Equal(t,
-		"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-		CanonicalizeMediaURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+		"https://cdn.discordapp.com/attachments/1/2/100%_cat.gif",
+		CanonicalizeMediaURL("https://cdn.discordapp.com/attachments/1/2/100%_cat.gif?ex=1#frag"),
+	)
+	require.Equal(t,
+		"https://media.discordapp.net/attachments/1/2/cat.gif",
+		CanonicalizeMediaURL("https://media.discordapp.net/attachments/1/2/cat.gif#top"),
+	)
+	require.Equal(t,
+		"https://www.youtube.com/watch?v=dQw4w9WgXcQ#t=10",
+		CanonicalizeMediaURL("https://www.youtube.com/watch?v=dQw4w9WgXcQ#t=10"),
 	)
 }
 
