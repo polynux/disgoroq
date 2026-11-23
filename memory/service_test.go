@@ -1234,6 +1234,10 @@ func TestService_SummarizationBacksOffAfterFailure(t *testing.T) {
 	if got := aiSvc.callCount(); got != 1 {
 		t.Fatalf("expected backoff to skip the AI call, got %d calls", got)
 	}
+	// The skipped trigger must not be mistaken for a success and clear the cooldown.
+	if _, cooling := service.summaryBackoffWait(key); !cooling {
+		t.Fatal("expected the cooldown to survive a skipped trigger")
+	}
 
 	// Once the cooldown has elapsed, a trigger reaches the AI service again.
 	if wait, cooling := service.summaryBackoffWait(key); cooling {

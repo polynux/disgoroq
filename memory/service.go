@@ -168,6 +168,20 @@ func (s *MemoryService) BufferMessage(ctx context.Context, input BufferMessageIn
 func (s *MemoryService) checkAndSummarizeAsync(userID, guildID string) {
 	key := fmt.Sprintf("%s:%s", userID, guildID)
 
+	// Back off after a failed summarization so a failing provider is not
+	// retried on every new message while the buffer stays above the threshold.
+	// Return here rather than from runSummarization: its nil result would be
+	// read as a success below and clear the backoff.
+	if wait, cooling := s.summaryBackoffWait(key); cooling {
+		if logger.IsDebugMode() {
+			logger.Debug("Skipping memory summarization during failure backoff",
+				zap.String("user_id", userID),
+				zap.String("guild_id", guildID),
+				zap.Duration("retry_in", wait))
+		}
+		return
+	}
+
 	// Check if summarization is already running for this user/guild
 	if _, loaded := s.activeSummaries.LoadOrStore(key, context.CancelFunc(nil)); loaded {
 		if logger.IsDebugMode() {
@@ -292,19 +306,6 @@ func (s *MemoryService) runSummarization(ctx context.Context, userID, guildID st
 		logger.Debug("Running memory summarization check",
 			zap.String("user_id", userID),
 			zap.String("guild_id", guildID))
-	}
-
-	// Back off after a failed summarization so a failing provider is not
-	// retried on every new message while the buffer stays above the threshold.
-	key := fmt.Sprintf("%s:%s", userID, guildID)
-	if wait, cooling := s.summaryBackoffWait(key); cooling {
-		if logger.IsDebugMode() {
-			logger.Debug("Skipping memory summarization during failure backoff",
-				zap.String("user_id", userID),
-				zap.String("guild_id", guildID),
-				zap.Duration("retry_in", wait))
-		}
-		return nil
 	}
 
 	// Check if enough time has passed since last summary
