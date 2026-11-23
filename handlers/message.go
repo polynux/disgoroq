@@ -88,18 +88,7 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 
 	// Update media library asynchronously from human guild messages without blocking replies.
 	if h.mediaLibrary != nil && m.GuildID != nil && !m.Author.Bot && m.WebhookID == nil {
-		message := m
-		go func() {
-			defer recoverListenerPanic("media library update")
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := h.mediaLibrary.RecordDiscordMessage(ctx, message); err != nil {
-				logger.Warn("Media library live update failed",
-					zap.String("guild_id", message.GuildID.String()),
-					zap.String("message_id", message.ID.String()),
-					zap.Error(err))
-			}
-		}()
+		h.mediaLibrary.EnqueueMessage(m)
 	}
 
 	// Buffer ALL messages for memory processing (non-blocking) - do this first!
@@ -486,9 +475,13 @@ func (h *MessageHandler) lockFor(locks *sync.Map, key string) *sync.Mutex {
 }
 
 func (h *MessageHandler) HandleMessageUpdate(e *events.MessageUpdate) {
+	msg := normalizeEventMessage(e.GenericMessage)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	h.cacheMessage(ctx, normalizeEventMessage(e.GenericMessage))
+	h.cacheMessage(ctx, msg)
+	if h.mediaLibrary != nil && msg.GuildID != nil && !msg.Author.Bot && msg.WebhookID == nil && len(msg.Embeds) > 0 {
+		h.mediaLibrary.EnqueueMessageUpdate(msg)
+	}
 }
 
 func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
@@ -622,7 +615,7 @@ func (h *MessageHandler) fetchMessagesFromDiscord(ctx context.Context, channelID
 }
 
 func (h *MessageHandler) cacheMessage(ctx context.Context, message discord.Message) {
-	if message.ID == 0 || message.ChannelID == 0 {
+	if h.repo == nil || message.ID == 0 || message.ChannelID == 0 {
 		return
 	}
 

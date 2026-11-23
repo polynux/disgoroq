@@ -194,6 +194,9 @@ func main() {
 	} else {
 		logger.Info("Media library disabled by configuration")
 	}
+	if mediaLibraryService != nil {
+		defer mediaLibraryService.Close()
+	}
 
 	// Create AI service configuration from central config
 	aiServiceConfig := ai.ServiceConfig{

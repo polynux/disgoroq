@@ -1,12 +1,22 @@
 package handlers
 
 import (
+	"context"
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/snowflake/v2"
+	_ "github.com/tursodatabase/go-libsql"
 
 	"polynux/disgoroq/ai"
+	"polynux/disgoroq/config"
+	"polynux/disgoroq/medialibrary"
 )
 
 func TestTryAcquireReplySlotIsBounded(t *testing.T) {
@@ -157,4 +167,89 @@ func TestPostProcessReplyPreservesMediaURL(t *testing.T) {
 		t.Fatalf("postProcessReply(no media) = %q, want %q", gotNoMedia, "quoi fleur")
 	}
 }
+
+func TestHandleMessageUpdateIndexesUnfurledEmbeds(t *testing.T) {
+	conn, err := sql.Open("libsql", "file:"+filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer conn.Close()
+
+	schemaBytes, err := os.ReadFile(filepath.Join("..", "schema.sql"))
+	if err != nil {
+		t.Fatalf("read schema.sql: %v", err)
+	}
+	for _, stmt := range strings.Split(string(schemaBytes), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || strings.Contains(stmt, "libsql_vector_idx") {
+			continue
+		}
+		if _, err := conn.Exec(stmt); err != nil {
+			t.Fatalf("exec schema stmt: %v", err)
+		}
+	}
+
+	repo := medialibrary.NewRepository(conn)
+	svc := medialibrary.NewService(repo, nil, config.MediaLibraryConfig{Enabled: true})
+	h := &MessageHandler{mediaLibrary: svc}
+
+	gID := snowflake.ID(1000)
+	chID := snowflake.ID(2000)
+	humanMsg := discord.Message{
+		ID:        snowflake.ID(3001),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: snowflake.ID(4001), Username: "alice"},
+		Content:   "https://www.youtube.com/watch?v=handler1",
+		Embeds: []discord.Embed{
+			{URL: "https://www.youtube.com/watch?v=handler1", Title: "Handler Video"},
+		},
+		CreatedAt: time.Unix(1700000000, 0),
+	}
+	botMsg := discord.Message{
+		ID:        snowflake.ID(3002),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: snowflake.ID(4002), Username: "bot", Bot: true},
+		Content:   "https://www.youtube.com/watch?v=botvid",
+		Embeds: []discord.Embed{
+			{URL: "https://www.youtube.com/watch?v=botvid", Title: "Bot Video"},
+		},
+		CreatedAt: time.Unix(1700000001, 0),
+	}
+
+	// Send update twice for the same human message + once for a bot message.
+	h.HandleMessageUpdate(&events.MessageUpdate{
+		GenericMessage: &events.GenericMessage{MessageID: humanMsg.ID, ChannelID: chID, GuildID: &gID, Message: humanMsg},
+	})
+	h.HandleMessageUpdate(&events.MessageUpdate{
+		GenericMessage: &events.GenericMessage{MessageID: humanMsg.ID, ChannelID: chID, GuildID: &gID, Message: humanMsg},
+	})
+	h.HandleMessageUpdate(&events.MessageUpdate{
+		GenericMessage: &events.GenericMessage{MessageID: botMsg.ID, ChannelID: chID, GuildID: &gID, Message: botMsg},
+	})
+
+	// Close drains the bounded worker before checking the DB.
+	svc.Close()
+
+	entry, err := repo.GetEntry(context.Background(), "https://www.youtube.com/watch?v=handler1", gID.String())
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("expected unfurled YouTube embed to be indexed")
+	}
+	if entry.Description != "Handler Video" || entry.Uses != 1 {
+		t.Fatalf("got description=%q uses=%d, want %q and 1", entry.Description, entry.Uses, "Handler Video")
+	}
+
+	botEntry, err := repo.GetEntry(context.Background(), "https://www.youtube.com/watch?v=botvid", gID.String())
+	if err != nil {
+		t.Fatalf("GetEntry(bot): %v", err)
+	}
+	if botEntry != nil {
+		t.Fatalf("expected bot embed not to be indexed, got %+v", botEntry)
+	}
+}
+
 
