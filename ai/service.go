@@ -396,7 +396,12 @@ func NewService(config ServiceConfig) *Service {
 		})
 	}
 
-	orderedProviders := config.orderedProviderNames(primaryProvider)
+	// Resolve the fallback order only when fallback is on, so a list left in the
+	// config while fallback is off does not log misleading "ignoring" lines.
+	orderedProviders := []string{primaryProvider}
+	if config.FallbackEnabled {
+		orderedProviders = config.orderedProviderNames(primaryProvider)
+	}
 
 	addProvider(primaryProvider)
 
@@ -412,6 +417,7 @@ func NewService(config ServiceConfig) *Service {
 	}
 
 	var visionProvider Provider
+	var visionOrder []string
 	if config.VisionProvider != "" {
 		visionProviders := make([]Provider, 0, len(wrappedProviders)+1)
 		seen := make(map[string]bool, len(wrappedProviders)+1)
@@ -421,6 +427,7 @@ func NewService(config ServiceConfig) *Service {
 			}
 			seen[wrapper.Name()] = true
 			visionProviders = append(visionProviders, wrapper)
+			visionOrder = append(visionOrder, wrapper.Name())
 		}
 
 		configuredVision := buildProvider(config.VisionProvider)
@@ -462,6 +469,18 @@ func NewService(config ServiceConfig) *Service {
 				wrapper.SetVisionFallback(NewProviderChain(others...).Vision)
 			}
 		}
+	}
+
+	// Log the effective order once, so operators don't have to infer it from
+	// per-request "Trying AI provider" lines.
+	chatOrder := make([]string, 0, len(wrappedProviders))
+	for _, provider := range wrappedProviders {
+		chatOrder = append(chatOrder, provider.Name())
+	}
+	if config.VisionProvider != "" {
+		logger.Info("AI provider order", zap.Strings("chat", chatOrder), zap.Strings("vision", visionOrder))
+	} else {
+		logger.Info("AI provider order", zap.Strings("chat", chatOrder), zap.String("vision", "each chat provider, then the others"))
 	}
 
 	// Create provider chain if multiple providers
