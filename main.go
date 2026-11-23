@@ -224,21 +224,7 @@ func main() {
 			// Build a dedicated summarization provider honoring
 			// memory.summary_provider / memory.summary_model instead of the
 			// chat provider chain (which overrides the requested model).
-			summaryProviderCfg := ai.SummaryProviderConfig{
-				Provider:  cfg.Memory.SummaryProvider,
-				Model:     cfg.Memory.SummaryModel,
-				OllamaURL: cfg.Memory.OllamaURL,
-				APIKey:    cfg.Memory.SummaryAPIKey,
-			}
-			if summaryProviderCfg.APIKey == "" {
-				// Fall back to the provider keys from the main AI config.
-				switch cfg.Memory.SummaryProvider {
-				case "groq":
-					summaryProviderCfg.APIKey = cfg.AI.Groq.APIKey
-				case "openrouter":
-					summaryProviderCfg.APIKey = cfg.AI.Openrouter.APIKey
-				}
-			}
+			summaryProviderCfg := buildSummaryProviderConfig(cfg)
 
 			summaryProvider, err := ai.NewSummaryProvider(summaryProviderCfg)
 			if err != nil {
@@ -412,6 +398,33 @@ func main() {
 			logger.Error("Error closing voice orchestrator", zap.Error(err))
 		}
 	}
+}
+
+// buildSummaryProviderConfig resolves provider-specific API key fallbacks and
+// base URLs for the dedicated memory summarization provider.
+func buildSummaryProviderConfig(cfg *config.Config) ai.SummaryProviderConfig {
+	summaryCfg := ai.SummaryProviderConfig{
+		Provider:  cfg.Memory.SummaryProvider,
+		Model:     cfg.Memory.SummaryModel,
+		OllamaURL: cfg.Memory.OllamaURL,
+		APIKey:    cfg.Memory.SummaryAPIKey,
+	}
+	switch cfg.Memory.SummaryProvider {
+	case config.SummaryProviderGroq:
+		if summaryCfg.APIKey == "" {
+			summaryCfg.APIKey = cfg.AI.Groq.APIKey
+		}
+	case config.SummaryProviderOpenrouter:
+		if summaryCfg.APIKey == "" {
+			summaryCfg.APIKey = cfg.AI.Openrouter.APIKey
+		}
+	case config.SummaryProviderOpencode:
+		if summaryCfg.APIKey == "" {
+			summaryCfg.APIKey = cfg.AI.Opencode.APIKey
+		}
+		summaryCfg.OpencodeBaseURL = cfg.AI.Opencode.BaseURL
+	}
+	return summaryCfg
 }
 
 // aiServiceAdapter adapts an ai.Provider to the memory.AIService interface.

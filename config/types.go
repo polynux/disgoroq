@@ -239,9 +239,9 @@ func DefaultConfig() *Config {
 			},
 			Opencode: OpencodeConfig{
 				Enabled:         false,
-				BaseURL:         "https://opencode.ai/zen/go/v1",
-				Model:           "deepseek-v4-flash",
-				VisionModel:     "deepseek-v4-flash",
+				BaseURL:         "https://opencode.ai/inference/go/v1",
+				Model:           "deepseek-v4.1-flash",
+				VisionModel:     "deepseek-v4.1-flash",
 				ThinkingEnabled: true,
 			},
 			Openrouter: OpenrouterConfig{

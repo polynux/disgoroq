@@ -39,6 +39,27 @@ Each AI provider section also exposes `thinking_enabled`:
 - `ai.opencode.thinking_enabled` keeps the provider default when true and sends `reasoning_effort: none` when false on OpenCode chat-completions requests.
 - `ai.openrouter.thinking_enabled` keeps the provider default when true and sends OpenRouter's normalized `reasoning: { effort: "none", exclude: true }` when false.
 
+### OpenCode Go (Fallback, Vision, And Summaries)
+
+OpenCode Go defaults to `https://opencode.ai/inference/go/v1` with `deepseek-v4.1-flash` (current models: `deepseek-v4.1-flash` and `muse-spark-1.3-contributor`). You can enable it for chat fallback and vision alongside another primary provider, and reuse `ai.opencode.api_key` and `ai.opencode.base_url` for memory summaries:
+
+```yaml
+ai:
+  primary_provider: "groq"
+  fallback_enabled: true
+  opencode:
+    enabled: true
+    base_url: "https://opencode.ai/inference/go/v1"
+    api_key: "${OPENCODE_API_KEY}"
+    model: "deepseek-v4.1-flash"
+    vision_model: "deepseek-v4.1-flash"
+
+memory:
+  enabled: true
+  summary_provider: "opencode"
+  summary_model: "deepseek-v4.1-flash"
+```
+
 ### Tool Calling And Zero-Cost Web Search
 
 DisgoroQ now supports provider-agnostic tool calling for chat models. The built-in tools are:
