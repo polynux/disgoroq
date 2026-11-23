@@ -50,6 +50,10 @@ func (c *Config) Validate() error {
 		errors = append(errors, err.Error())
 	}
 
+	if err := c.MediaLibrary.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
 	if err := c.Bot.validate(); err != nil {
 		errors = append(errors, err.Error())
 	}
@@ -518,6 +522,19 @@ func (c *VotesConfig) validate() error {
 	badEmoji := strings.ReplaceAll(strings.TrimSpace(c.BadEmoji), "\uFE0F", "")
 	if goodEmoji == badEmoji {
 		return fmt.Errorf("votes.good_emoji and votes.bad_emoji must be different")
+	}
+	return nil
+}
+
+func (c *MediaLibraryConfig) validate() error {
+	if math.IsNaN(c.MinSimilarity) || math.IsInf(c.MinSimilarity, 0) || c.MinSimilarity < 0 || c.MinSimilarity > 1 {
+		return fmt.Errorf("media_library.min_similarity must be between 0 and 1")
+	}
+	if math.IsNaN(c.MinTriggerSimilarity) || math.IsInf(c.MinTriggerSimilarity, 0) || c.MinTriggerSimilarity < 0 || c.MinTriggerSimilarity > 1 {
+		return fmt.Errorf("media_library.min_trigger_similarity must be between 0 and 1")
+	}
+	if c.RepeatWindow < 0 {
+		return fmt.Errorf("media_library.repeat_window cannot be negative")
 	}
 	return nil
 }

@@ -30,6 +30,16 @@ votes:
   good_emoji: "😂"
   bad_emoji: "🗑️"
 
+# Media library for resolving completion-mode media tags ([gif], [gif: ...], [youtube: ...], etc.)
+# into real URLs previously posted on the server.
+media_library:
+  enabled: false
+  min_similarity: 0.80
+  min_trigger_similarity: 0.80
+  cross_guild: false
+  allow_discord_cdn: false
+  repeat_window: 20
+
 ai:
   # Primary AI provider to use by default: "groq", "ollama", "opencode", or "openrouter"
   primary_provider: "${AI_PRIMARY_PROVIDER:-groq}"

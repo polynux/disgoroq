@@ -1111,6 +1111,114 @@ func TestVotesConfigDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.MediaLibrary.Enabled ||
+		cfg.MediaLibrary.MinSimilarity != 0.80 ||
+		cfg.MediaLibrary.MinTriggerSimilarity != 0.80 ||
+		cfg.MediaLibrary.CrossGuild ||
+		cfg.MediaLibrary.AllowDiscordCDN ||
+		cfg.MediaLibrary.RepeatWindow != 20 {
+		t.Fatalf("unexpected media_library defaults: %+v", cfg.MediaLibrary)
+	}
+
+	// Valid edge values (0 and 1 for similarity, 0 for repeat_window).
+	valid := DefaultConfig()
+	valid.Discord.Token = "test-token"
+	valid.Database.Local = true
+	valid.AI.Groq.APIKey = "test-key"
+	valid.MediaLibrary = MediaLibraryConfig{
+		Enabled:              true,
+		MinSimilarity:        0,
+		MinTriggerSimilarity: 1,
+		CrossGuild:           true,
+		AllowDiscordCDN:      true,
+		RepeatWindow:         0,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() unexpected error for valid boundary config: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*MediaLibraryConfig)
+		wantErr string
+	}{
+		{
+			name:    "min_similarity below 0",
+			mutate:  func(c *MediaLibraryConfig) { c.MinSimilarity = -0.01 },
+			wantErr: "media_library.min_similarity",
+		},
+		{
+			name:    "min_similarity above 1",
+			mutate:  func(c *MediaLibraryConfig) { c.MinSimilarity = 1.01 },
+			wantErr: "media_library.min_similarity",
+		},
+		{
+			name:    "min_trigger_similarity below 0",
+			mutate:  func(c *MediaLibraryConfig) { c.MinTriggerSimilarity = -0.1 },
+			wantErr: "media_library.min_trigger_similarity",
+		},
+		{
+			name:    "min_trigger_similarity above 1",
+			mutate:  func(c *MediaLibraryConfig) { c.MinTriggerSimilarity = 1.5 },
+			wantErr: "media_library.min_trigger_similarity",
+		},
+		{
+			name:    "negative repeat_window",
+			mutate:  func(c *MediaLibraryConfig) { c.RepeatWindow = -1 },
+			wantErr: "media_library.repeat_window",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := DefaultConfig()
+			c.Discord.Token = "test-token"
+			c.Database.Local = true
+			c.AI.Groq.APIKey = "test-key"
+			tc.mutate(&c.MediaLibrary)
+			err := c.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Validate() error = %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	// Verify YAML loading preserves defaults for unspecified fields and overrides specified ones.
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	t.Setenv("DISCORD_TOKEN", "test-token")
+	t.Setenv("GROQ_API_KEY", "test-key")
+	yamlContent := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+media_library:
+  enabled: true
+  min_similarity: 0.75
+  cross_guild: true
+  repeat_window: 10
+`
+	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !loaded.MediaLibrary.Enabled ||
+		loaded.MediaLibrary.MinSimilarity != 0.75 ||
+		loaded.MediaLibrary.MinTriggerSimilarity != 0.80 ||
+		!loaded.MediaLibrary.CrossGuild ||
+		loaded.MediaLibrary.AllowDiscordCDN ||
+		loaded.MediaLibrary.RepeatWindow != 10 {
+		t.Fatalf("unexpected loaded media_library config: %+v", loaded.MediaLibrary)
+	}
+}
+
 func TestLocalDatabase(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
