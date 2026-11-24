@@ -272,27 +272,29 @@ func (s *Server) handleGuildGeneralSave(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	threshold, err := parseNonNegativeFloat(thresholdRaw)
+	threshold, err := parseFiniteFloat(thresholdRaw)
 	if err != nil {
-		renderErr("Threshold must be a non-negative number (0.0-1.0 is the useful range).")
+		renderErr("Threshold must be a number (0.0-1.0 is the useful range).")
 		return
 	}
 
-	thresholdSexe, err := parseNonNegativeFloat(thresholdSexeRaw)
+	thresholdSexe, err := parseFiniteFloat(thresholdSexeRaw)
 	if err != nil {
-		renderErr("Threshold (sexe) must be a non-negative number (0.0-1.0 is the useful range).")
+		renderErr("Threshold (sexe) must be a number (0.0-1.0 is the useful range).")
 		return
 	}
 
-	temperature, err := parseNonNegativeFloat(temperatureRaw)
-	if err != nil {
-		renderErr("Temperature must be a non-negative number.")
+	temperature, err := parseFiniteFloat(temperatureRaw)
+	// Temperature is stored and read as float32; anything that overflows it
+	// would be saved as "+Inf" and break every AI request's JSON encoding.
+	if err != nil || math.IsInf(float64(float32(temperature)), 0) {
+		renderErr("Temperature must be a number.")
 		return
 	}
 
 	messagesCount, err := strconv.Atoi(messagesCountRaw)
-	if err != nil || messagesCount < 1 {
-		renderErr("Messages count must be an integer of at least 1.")
+	if err != nil {
+		renderErr("Messages count must be an integer.")
 		return
 	}
 
@@ -730,9 +732,9 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 		thresholdVal int
 	)
 	if chanceRaw != "" {
-		parsed, err := parseNonNegativeFloat(chanceRaw)
+		parsed, err := parseFiniteFloat(chanceRaw)
 		if err != nil {
-			renderErr("Reengage chance must be a non-negative number (0.01 = 1%).")
+			renderErr("Reengage chance must be a number (0.01 = 1%).")
 			return
 		}
 		hasChance = true
@@ -740,8 +742,8 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 	}
 	if thresholdRaw != "" {
 		parsed, err := strconv.Atoi(thresholdRaw)
-		if err != nil || parsed < 0 {
-			renderErr("Reengage threshold must be a non-negative number of minutes.")
+		if err != nil {
+			renderErr("Reengage threshold must be an integer number of minutes.")
 			return
 		}
 		hasThreshold = true
@@ -1010,7 +1012,7 @@ func (s *Server) guildChannels(guildID string) (textChannels []channelOption, vo
 		switch ch.Type() {
 		case discord.ChannelTypeGuildText, discord.ChannelTypeGuildNews:
 			textChannels = append(textChannels, channelOption{ID: id, Name: name})
-		case discord.ChannelTypeGuildVoice, discord.ChannelTypeGuildStageVoice:
+		case discord.ChannelTypeGuildVoice: // same as /voice autojoin: no stage channels
 			voiceChannels = append(voiceChannels, channelOption{ID: id, Name: name})
 		}
 	}
@@ -1324,12 +1326,12 @@ func (s *Server) reengageConfig() config.ReengageConfig {
 	return config.DefaultConfig().Reengage
 }
 
-// parseNonNegativeFloat mirrors the slash commands, which accept any float:
-// it only rejects non-numbers, NaN/Inf and negatives, so values stored through
-// Discord never block a web save.
-func parseNonNegativeFloat(raw string) (float64, error) {
+// parseFiniteFloat mirrors the slash commands, which accept any float (no
+// min/max): it only rejects non-numbers and NaN/Inf, so a value stored through
+// Discord never blocks a web save.
+func parseFiniteFloat(raw string) (float64, error) {
 	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0, fmt.Errorf("invalid number")
 	}
 	return v, nil

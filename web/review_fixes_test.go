@@ -2,17 +2,23 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
+	"polynux/disgoroq/utils"
 )
 
 const knownGuildID = "777777777777777777"
@@ -148,4 +154,98 @@ func TestCSRFGuardRejectsNullAndNonHTTPOrigins(t *testing.T) {
 		srv.Handler().ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusForbidden, rec.Code, "origin %q", origin)
 	}
+}
+
+func TestGeneralSaveAcceptsNegativeAndZeroValuesFromSlashCommands(t *testing.T) {
+	srv, repo := newKnownGuildServer(t, nil)
+	ctx := context.Background()
+	// /threshold -0.5 and /messagescount 0 are accepted by Discord (no MinValue).
+	require.NoError(t, repo.SetGuildSetting(ctx, knownGuildID, "threshold", "-0.5"))
+	require.NoError(t, repo.SetGuildSetting(ctx, knownGuildID, "messagescount", "0"))
+
+	rec := sameOriginPost(srv, "/guilds/"+knownGuildID+"/general", url.Values{
+		"state":          {"off"},
+		"threshold":      {"-0.5"},
+		"thresholdSexe":  {"0.05"},
+		"temperature":    {"0.5"},
+		"messagescount":  {"0"},
+		"memory_enabled": {"on"},
+		"trigger_words":  {"feun\nfeunboy"},
+	})
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "General settings saved")
+	assert.Equal(t, "off", repo.GetState(ctx, knownGuildID))
+
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+knownGuildID, nil))
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.NotContains(t, page.Body.String(), `min="0"`, "a min attribute would make the browser refuse to submit stored negatives")
+}
+
+func newCachedGuildServer(t *testing.T, guildID string) (*Server, *database.Repository, *cache.Caches, string, string, string) {
+	t.Helper()
+	textID, voiceID, stageID := "333333333333333301", "444444444444444401", "555555555555555501"
+	caches := cache.New(cache.WithCaches(cache.FlagGuilds | cache.FlagChannels))
+	caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: snowflake.MustParse(guildID), Name: "Cached"}})
+
+	var textCh discord.GuildTextChannel
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"`+textID+`","guild_id":"`+guildID+`","name":"general","type":0}`), &textCh))
+	caches.AddChannel(textCh)
+	var voiceCh discord.GuildVoiceChannel
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"`+voiceID+`","guild_id":"`+guildID+`","name":"lounge","type":2}`), &voiceCh))
+	caches.AddChannel(voiceCh)
+	var stageCh discord.GuildStageVoiceChannel
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"`+stageID+`","guild_id":"`+guildID+`","name":"stage","type":13}`), &stageCh))
+	caches.AddChannel(stageCh)
+
+	srv, repo := newTestServer(t, &bot.Client{Caches: caches}, config.WebConfig{Enabled: true, Listen: "127.0.0.1:8090"})
+	return srv, repo, &caches, textID, voiceID, stageID
+}
+
+func TestVoiceAutoJoinRequiresCachedVoiceChannel(t *testing.T) {
+	guildID := "999999999999999901"
+	srv, repo, _, textID, voiceID, stageID := newCachedGuildServer(t, guildID)
+	ctx := context.Background()
+
+	for _, bad := range []string{textID, stageID} {
+		rec := sameOriginPost(srv, "/guilds/"+guildID+"/voice", url.Values{"voice_enabled": {"on"}, "voice_auto_join_channel": {bad}})
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "must be a voice channel", "channel %s", bad)
+		_, ok := repo.GetVoiceAutoJoinChannel(ctx, guildID)
+		assert.False(t, ok, "rejected channel %s must not be stored", bad)
+	}
+
+	rec := sameOriginPost(srv, "/guilds/"+guildID+"/voice", url.Values{"voice_enabled": {"on"}, "voice_auto_join_channel": {voiceID}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Voice settings saved")
+	got, ok := repo.GetVoiceAutoJoinChannel(ctx, guildID)
+	require.True(t, ok)
+	assert.Equal(t, voiceID, got)
+
+	// An ID the cache doesn't know is accepted (cache may be incomplete).
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/voice", url.Values{"voice_enabled": {"on"}, "voice_auto_join_channel": {"123456789012345678"}})
+	assert.Contains(t, rec.Body.String(), "Voice settings saved")
+}
+
+func TestGuildRouteAcceptsUnavailableGuild(t *testing.T) {
+	cachedID := "999999999999999902"
+	srv, _, caches, _, _, _ := newCachedGuildServer(t, cachedID)
+	unavailableID := "999999999999999903"
+	(*caches).SetGuildUnavailable(snowflake.MustParse(unavailableID), true)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+unavailableID, nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestGuildRouteDBErrorIs500NotFound(t *testing.T) {
+	sqlDB, err := utils.OpenLocalDB(t.TempDir() + "/closed.db")
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+	cfg := config.WebConfig{Enabled: true, Listen: "127.0.0.1:8090"}
+	srv := New(Deps{Repo: database.NewRepositoryWithDB(sqlDB), Config: config.DefaultConfig()}, cfg)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+knownGuildID, nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }

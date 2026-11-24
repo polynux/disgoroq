@@ -443,9 +443,10 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 		}{
 			{name: "bad state", mutate: func(v url.Values) { v.Set("state", "maybe") }, wantErr: "State must be"},
 			{name: "threshold not a number", mutate: func(v url.Values) { v.Set("threshold", "abc") }, wantErr: "Threshold must be"},
-			{name: "thresholdSexe < 0", mutate: func(v url.Values) { v.Set("thresholdSexe", "-0.1") }, wantErr: "Threshold (sexe)"},
+			{name: "thresholdSexe infinite", mutate: func(v url.Values) { v.Set("thresholdSexe", "Infinity") }, wantErr: "Threshold (sexe)"},
 			{name: "temperature NaN", mutate: func(v url.Values) { v.Set("temperature", "NaN") }, wantErr: "Temperature must be"},
-			{name: "messagescount 0", mutate: func(v url.Values) { v.Set("messagescount", "0") }, wantErr: "Messages count"},
+			{name: "temperature overflows float32", mutate: func(v url.Values) { v.Set("temperature", "1e39") }, wantErr: "Temperature must be"},
+			{name: "messagescount not a number", mutate: func(v url.Values) { v.Set("messagescount", "abc") }, wantErr: "Messages count"},
 			{name: "messagescount not int", mutate: func(v url.Values) { v.Set("messagescount", "1.5") }, wantErr: "Messages count"},
 			{name: "invalid trigger word", mutate: func(v url.Values) { v.Set("trigger_words", "bad word!") }, wantErr: "Invalid trigger words"},
 		}
@@ -493,7 +494,7 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 		rec = post("/guilds/"+guildID+"/reengage/channel", url.Values{
 			"channel_id": {"333333333333333333"},
 			"enabled":    {"on"},
-			"chance":     {"-0.5"},
+			"chance":     {"abc"},
 		}, true)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "Reengage chance must be")
@@ -501,7 +502,7 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 		rec = post("/guilds/"+guildID+"/reengage/channel", url.Values{
 			"channel_id": {"333333333333333333"},
 			"enabled":    {"on"},
-			"threshold":  {"-1"},
+			"threshold":  {"1.5"},
 		}, true)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "Reengage threshold must be")

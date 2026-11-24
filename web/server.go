@@ -66,7 +66,7 @@ func (s *Server) Addr() string {
 	if s.listener != nil {
 		return s.listener.Addr().String()
 	}
-	return s.cfg.Listen
+	return strings.TrimSpace(s.cfg.Listen)
 }
 
 // Start binds the configured listen address and serves requests in a background goroutine.

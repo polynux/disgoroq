@@ -85,7 +85,12 @@ func (s *Server) guildRoute(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		if !s.isKnownGuild(r.Context(), guildID) {
+		known, err := s.isKnownGuild(r.Context(), guildID)
+		if err != nil {
+			http.Error(w, "Failed to check guild", http.StatusInternalServerError)
+			return
+		}
+		if !known {
 			http.NotFound(w, r)
 			return
 		}
@@ -93,14 +98,22 @@ func (s *Server) guildRoute(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) isKnownGuild(ctx context.Context, guildID string) bool {
+// isKnownGuild reports whether the bot knows the guild: in the cache, marked
+// unavailable during a gateway outage (still a member, like reengage treats it),
+// or with stored settings. A DB error is returned, not reported as "unknown".
+func (s *Server) isKnownGuild(ctx context.Context, guildID string) (bool, error) {
 	if s.lookupGuildSummary(guildID).InCache {
-		return true
+		return true, nil
+	}
+	if s.deps.Client != nil && s.deps.Client.Caches != nil {
+		if sf, err := snowflake.Parse(guildID); err == nil && s.deps.Client.Caches.IsGuildUnavailable(sf) {
+			return true, nil
+		}
 	}
 	settings, err := s.deps.Repo.GetGuildSettingsMap(ctx, guildID)
 	if err != nil {
 		logger.Error("Failed to check guild existence", zap.String("guild_id", guildID), zap.Error(err))
-		return false
+		return false, err
 	}
-	return len(settings) > 0
+	return len(settings) > 0, nil
 }
