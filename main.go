@@ -189,7 +189,8 @@ func main() {
 					zap.Bool("allow_discord_cdn", cfg.MediaLibrary.AllowDiscordCDN),
 					zap.Int("repeat_window", cfg.MediaLibrary.RepeatWindow),
 					zap.Bool("random_gif_fallback", cfg.MediaLibrary.RandomGifFallback),
-					zap.Bool("gif_on_request", cfg.MediaLibrary.GifOnRequest))
+					zap.Bool("gif_on_request", cfg.MediaLibrary.GifOnRequest),
+					zap.Bool("validate_links", cfg.MediaLibrary.ValidateLinks))
 			}
 			hcCancel()
 		}
@@ -197,6 +198,7 @@ func main() {
 		logger.Info("Media library disabled by configuration")
 	}
 	if mediaLibraryService != nil {
+		mediaLibraryService.SetDiscordRestClient(client.Rest)
 		defer mediaLibraryService.Close()
 	}
 
