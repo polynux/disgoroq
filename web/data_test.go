@@ -279,6 +279,8 @@ func TestDataSummaryNamesFiltersAndUnknownGuild(t *testing.T) {
 	now := time.Now().Unix()
 	env.insertSummary(t, cachedGuildID.String(), "888", "cached guild summary", now-10, now)
 	env.insertBufferMessage(t, cachedGuildID.String(), "channel", "m1", "888", "NickFromBuffer", "hello", false)
+	env.insertSummary(t, cachedGuildID.String(), "999", "fallback summary", now-11, now-1)
+	env.insertDiscordMessage(t, cachedGuildID.String(), "channel", "m2", "999", "FallbackUser", "hi", `{}`, false)
 	env.insertSummary(t, dataTestGuild, "999", "other guild summary", now-10, now)
 
 	rec := env.get(t, "/data?tab=summaries&guild_id="+cachedGuildID.String())
@@ -296,6 +298,12 @@ func TestDataSummaryNamesFiltersAndUnknownGuild(t *testing.T) {
 	rec = env.get(t, "/data?tab=summaries&guild_id="+cachedGuildID.String()+"&user_id=000")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "No summaries match these filters.")
+
+	// No buffer row: fall back to discord_messages.author_username.
+	rec = env.get(t, "/data?tab=summaries&guild_id="+cachedGuildID.String()+"&user_id=999")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "FallbackUser")
+	assert.Contains(t, rec.Body.String(), "fallback summary")
 
 	unknown := "123123123123123123"
 	rec = env.get(t, "/data?tab=summaries&guild_id="+unknown)
@@ -717,4 +725,116 @@ func TestDataMediaEditRefusesWithoutEmbedder(t *testing.T) {
 	require.NoError(t, env.db.QueryRow(
 		`SELECT description FROM media_library WHERE guild_id = ? AND url = ?`, dataTestGuild, rawURL).Scan(&description))
 	assert.Equal(t, "old description", description)
+}
+
+func TestDataDeleteRoutesRejectInvalidIDs(t *testing.T) {
+	env := newDataTestEnv(t, nil, false, nil)
+	now := time.Now().Unix()
+	env.insertSummary(t, dataTestGuild, "100", "keep me", now, now)
+	env.insertAttachment(t, "vision", "keep-key", "groq", "model", "keep", now)
+
+	targets := []string{
+		"/data/summaries/abc/delete?tab=summaries",
+		"/data/summaries/-3/delete?tab=summaries",
+		"/data/attachments/abc/delete?tab=attachments",
+		"/data/attachments/-3/delete?tab=attachments",
+	}
+	for _, target := range targets {
+		rec := env.post(t, target, url.Values{}, true)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, target)
+	}
+
+	var summaries int
+	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM conversation_summaries`).Scan(&summaries))
+	assert.Equal(t, 1, summaries)
+
+	var attachments int
+	require.NoError(t, env.db.QueryRow(`SELECT COUNT(*) FROM attachment_cache`).Scan(&attachments))
+	assert.Equal(t, 1, attachments)
+}
+
+func TestDataMediaUnsafeURLNeverBecomesAttribute(t *testing.T) {
+	env := newDataTestEnv(t, nil, false, nil)
+	env.seedMedia(t, dataTestGuild, "javascript:alert(1)", "image", "unsafe preview", "unsafe")
+
+	rec := env.get(t, "/data?tab=media")
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.NotContains(t, body, `src="javascript:`)
+	assert.NotContains(t, body, `href="javascript:`)
+	assert.Contains(t, body, "unsafe URL")
+	assert.Contains(t, body, "javascript:alert(1)")
+}
+
+func TestDataFormActionsKeepFilters(t *testing.T) {
+	env := newDataTestEnv(t, nil, true, &fakeDataEmbedder{})
+	now := time.Now().Unix()
+	summaryID := env.insertSummary(t, dataTestGuild, "100", "keep", now, now)
+	env.seedMedia(t, dataTestGuild, "https://example.com/cat.png", "image", "cat", "cat")
+
+	rec := env.get(t, "/data?tab=media&guild_id="+dataTestGuild)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `action="/data/media/edit?tab=media&amp;guild_id=`+dataTestGuild+`"`)
+	assert.Contains(t, body, `action="/data/media/delete?tab=media&amp;guild_id=`+dataTestGuild+`"`)
+
+	rec = env.get(t, "/data?tab=attachments&guild_id="+dataTestGuild)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `action="/data/attachments/purge?tab=attachments&amp;guild_id=`+dataTestGuild+`"`)
+
+	rec = env.get(t, "/data?tab=summaries&guild_id="+dataTestGuild)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(),
+		fmt.Sprintf(`action="/data/summaries/%d/delete?tab=summaries&amp;guild_id=%s"`, summaryID, dataTestGuild))
+	assert.Contains(t, rec.Body.String(),
+		`action="/data/summaries/forget?tab=summaries&amp;guild_id=`+dataTestGuild+`"`)
+}
+
+func TestDataEventsEchoesEffectiveToAndLabelsUTC(t *testing.T) {
+	env := newDataTestEnv(t, nil, false, nil)
+
+	for _, target := range []string{
+		"/data?tab=events",
+		"/data?tab=events&to=not-a-date",
+	} {
+		rec := env.get(t, target)
+		require.Equal(t, http.StatusOK, rec.Code, target)
+		body := rec.Body.String()
+		assert.Contains(t, body, "From (UTC)", target)
+		assert.Contains(t, body, "To (UTC)", target)
+		assert.Regexp(t, `name="to" type="datetime-local" value="[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"`, body, target)
+	}
+
+	// Explicit UTC bounds keep the events inside the range.
+	eventTime := time.Date(2020, 1, 1, 0, 0, 30, 0, time.UTC)
+	env.insertEvent(t, "message_received", dataTestGuild, "", eventTime.Unix())
+	rec := env.get(t, "/data?tab=events&from=2020-01-01T00:00&to=2020-01-01T00:01")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "message_received")
+}
+
+func TestDataPageCeilingHasNoNextLink(t *testing.T) {
+	env := newDataTestEnv(t, nil, false, nil)
+	rec := env.get(t, fmt.Sprintf("/data?tab=summaries&page=%d", dataMaxPage))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.NotContains(t, body, fmt.Sprintf("page=%d", dataMaxPage+1))
+	assert.Contains(t, body, "Next page")
+}
+
+func TestDataWithoutRepoReturns503(t *testing.T) {
+	srv := New(Deps{Config: config.DefaultConfig()}, config.WebConfig{Enabled: true, Listen: "127.0.0.1:8090"})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/data", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	form := url.Values{"guild_id": {dataTestGuild}, "user_id": {"100"}}
+	req = httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8090/data/summaries/forget", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }

@@ -86,6 +86,15 @@ type dataPagination struct {
 	NextURL string
 }
 
+// dataActionURLs holds fully built action URLs (path + current filters) so
+// forms submit without JavaScript and stay on the current tab and filters.
+type dataActionURLs struct {
+	Forget      string
+	Purge       string
+	MediaDelete string
+	MediaEdit   string
+}
+
 type dataPageData struct {
 	Title     string
 	ActiveNav string
@@ -93,7 +102,7 @@ type dataPageData struct {
 	Tabs      []dataTab
 	Guilds    []guildSummary
 	Filters   dataFilters
-	Query     string
+	Actions   dataActionURLs
 	Notice    string
 	Error     string
 
@@ -123,6 +132,7 @@ type summaryRowView struct {
 	MessageCount int64
 	CreatedAt    string
 	UpdatedAt    string
+	DeleteURL    string
 }
 
 type bufferRowView struct {
@@ -171,6 +181,7 @@ type attachmentRowView struct {
 	Preview       string
 	Content       string
 	Truncated     bool
+	DeleteURL     string
 }
 
 type voteRowView struct {
@@ -365,7 +376,7 @@ func parseFlexibleTime(raw string) (time.Time, bool) {
 		"2006-01-02",
 	}
 	for _, layout := range layouts {
-		if parsed, err := time.ParseInLocation(layout, raw, time.Local); err == nil {
+		if parsed, err := time.ParseInLocation(layout, raw, time.UTC); err == nil {
 			return parsed, true
 		}
 	}
@@ -376,6 +387,15 @@ func dataURL(r *http.Request, page int) string {
 	values := r.URL.Query()
 	values.Set("page", strconv.Itoa(page))
 	return "/data?" + values.Encode()
+}
+
+// dataActionURL returns path with the current filters as its query string.
+// Building the whole URL here keeps html/template from re-encoding the query.
+func dataActionURL(r *http.Request, path string) string {
+	if r.URL.RawQuery == "" {
+		return path
+	}
+	return path + "?" + r.URL.RawQuery
 }
 
 func (s *Server) guildDisplayName(guildID string) string {
@@ -389,7 +409,19 @@ func (s *Server) guildDisplayName(guildID string) string {
 	return ""
 }
 
+// requireDataRepo rejects data pages and actions when the database is not wired.
+func (s *Server) requireDataRepo(w http.ResponseWriter) bool {
+	if s.deps.Repo == nil {
+		http.Error(w, "Database unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
+}
+
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	data, err := s.buildDataPage(r, "", "")
 	if err != nil {
 		logger.Error("Failed to load data page",
@@ -453,13 +485,18 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 	}
 
 	data := dataPageData{
-		Title:         "Data",
-		ActiveNav:     "data",
-		Tab:           tab,
-		Tabs:          dataTabs,
-		Guilds:        guilds,
-		Filters:       filters,
-		Query:         r.URL.RawQuery,
+		Title:     "Data",
+		ActiveNav: "data",
+		Tab:       tab,
+		Tabs:      dataTabs,
+		Guilds:    guilds,
+		Filters:   filters,
+		Actions: dataActionURLs{
+			Forget:      dataActionURL(r, "/data/summaries/forget"),
+			Purge:       dataActionURL(r, "/data/attachments/purge"),
+			MediaDelete: dataActionURL(r, "/data/media/delete"),
+			MediaEdit:   dataActionURL(r, "/data/media/edit"),
+		},
 		Notice:        notice,
 		Error:         errMsg,
 		MediaDisabled: s.deps.Media == nil,
@@ -499,6 +536,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				MessageCount: row.MessageCount,
 				CreatedAt:    formatUnixUTC(row.CreatedAt),
 				UpdatedAt:    formatUnixUTC(row.UpdatedAt),
+				DeleteURL:    dataActionURL(r, fmt.Sprintf("/data/summaries/%d/delete", row.ID)),
 			})
 		}
 
@@ -589,6 +627,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				Preview:       preview,
 				Content:       row.Content,
 				Truncated:     truncated,
+				DeleteURL:     dataActionURL(r, fmt.Sprintf("/data/attachments/%d/delete", row.ID)),
 			})
 		}
 
@@ -623,17 +662,17 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		}
 		data.EventTypes = eventTypes
 
+		now := time.Now().UTC()
 		from, fromOK := parseFlexibleTime(filters.From)
 		if !fromOK {
-			from = time.Now().Add(-24 * time.Hour)
-			filters.From = from.Local().Format("2006-01-02T15:04")
+			from = now.Add(-24 * time.Hour)
 		}
 		to, toOK := parseFlexibleTime(filters.To)
 		if !toOK {
-			to = time.Now()
+			to = now
 		}
-		data.Filters.From = filters.From
-		data.Filters.To = filters.To
+		data.Filters.From = from.UTC().Format("2006-01-02T15:04")
+		data.Filters.To = to.UTC().Format("2006-01-02T15:04")
 
 		rows, hasNext, listErr := s.deps.Repo.ListBotEvents(r.Context(), database.EventListFilter{
 			From:      from.Unix(),
@@ -706,7 +745,11 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 	}
 
 	if data.Pagination.HasNext {
-		data.Pagination.NextURL = dataURL(r, page+1)
+		if page < dataMaxPage {
+			data.Pagination.NextURL = dataURL(r, page+1)
+		} else {
+			data.Pagination.HasNext = false
+		}
 	}
 
 	return data, nil
@@ -763,9 +806,12 @@ func (s *Server) respondData(w http.ResponseWriter, r *http.Request, notice, err
 }
 
 func (s *Server) handleDataSummaryDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	id, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
 	if err != nil || id <= 0 {
-		s.respondData(w, r, "", "Invalid summary ID.")
+		http.Error(w, "Invalid summary ID", http.StatusBadRequest)
 		return
 	}
 
@@ -783,6 +829,9 @@ func (s *Server) handleDataSummaryDelete(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleDataSummariesForget(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	guildID := strings.TrimSpace(r.FormValue("guild_id"))
 	userID := strings.TrimSpace(r.FormValue("user_id"))
 	if guildID == "" || userID == "" {
@@ -812,9 +861,12 @@ func pluralSummary(count int64) string {
 }
 
 func (s *Server) handleDataAttachmentDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	id, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("id")), 10, 64)
 	if err != nil || id <= 0 {
-		s.respondData(w, r, "", "Invalid attachment cache ID.")
+		http.Error(w, "Invalid attachment cache ID", http.StatusBadRequest)
 		return
 	}
 
@@ -832,6 +884,9 @@ func (s *Server) handleDataAttachmentDelete(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleDataAttachmentPurge(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	raw := strings.TrimSpace(r.FormValue("days"))
 	days, err := strconv.Atoi(raw)
 	if err != nil || days < 1 || days > dataMaxPurgeDays {

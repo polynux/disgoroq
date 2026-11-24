@@ -67,7 +67,7 @@
 
   <h3>Forget user</h3>
   <p class="muted">Deletes every summary for one user in one guild. This cannot be undone.</p>
-  <form method="post" action="/data/summaries/forget?{{.Query}}" hx-post="/data/summaries/forget?{{.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete ALL summaries for this user in this guild?" class="filter-grid">
+  <form method="post" action="{{.Actions.Forget}}" hx-post="{{.Actions.Forget}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete ALL summaries for this user in this guild?" class="filter-grid">
     <div class="field">
       <label class="field-label" for="forget-guild">Guild</label>
       <input id="forget-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID" required>
@@ -112,7 +112,7 @@
             </details>
           </td>
           <td>
-            <form method="post" action="/data/summaries/{{.ID}}/delete?{{$.Query}}" hx-post="/data/summaries/{{.ID}}/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete summary #{{.ID}} for good?" class="inline-form">
+            <form method="post" action="{{.DeleteURL}}" hx-post="{{.DeleteURL}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete summary #{{.ID}} for good?" class="inline-form">
               <button type="submit" class="btn btn-sm btn-danger">Delete</button>
             </form>
           </td>
@@ -309,7 +309,7 @@
   </form>
 
   <h3>Purge older than</h3>
-  <form method="post" action="/data/attachments/purge?{{.Query}}" hx-post="/data/attachments/purge?{{.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache rows older than this many days?" class="filter-grid">
+  <form method="post" action="{{.Actions.Purge}}" hx-post="{{.Actions.Purge}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache rows older than this many days?" class="filter-grid">
     <div class="field">
       <label class="field-label" for="attachments-days">Days</label>
       <input id="attachments-days" name="days" type="number" min="1" max="36500" value="30" required>
@@ -361,7 +361,7 @@
             {{end}}
           </td>
           <td>
-            <form method="post" action="/data/attachments/{{.ID}}/delete?{{$.Query}}" hx-post="/data/attachments/{{.ID}}/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache row #{{.ID}}?" class="inline-form">
+            <form method="post" action="{{.DeleteURL}}" hx-post="{{.DeleteURL}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache row #{{.ID}}?" class="inline-form">
               <button type="submit" class="btn btn-sm btn-danger">Delete</button>
             </form>
           </td>
@@ -470,11 +470,11 @@
       <input id="events-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
     </div>
     <div class="field">
-      <label class="field-label" for="events-from">From</label>
+      <label class="field-label" for="events-from">From (UTC)</label>
       <input id="events-from" name="from" type="datetime-local" value="{{.Filters.From}}">
     </div>
     <div class="field">
-      <label class="field-label" for="events-to">To</label>
+      <label class="field-label" for="events-to">To (UTC)</label>
       <input id="events-to" name="to" type="datetime-local" value="{{.Filters.To}}">
     </div>
     <div class="field">
@@ -669,7 +669,7 @@
               {{if $.MediaDisabled}}
               <p class="muted">Media library is disabled; editing is unavailable.</p>
               {{else}}
-              <form method="post" action="/data/media/edit?{{$.Query}}" hx-post="/data/media/edit?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML">
+              <form method="post" action="{{$.Actions.MediaEdit}}" hx-post="{{$.Actions.MediaEdit}}" hx-target="#data-panel" hx-swap="outerHTML">
                 <input type="hidden" name="guild_id" value="{{.GuildID}}">
                 <input type="hidden" name="url" value="{{.URL}}">
                 <div class="field">
@@ -686,7 +686,7 @@
               </form>
               {{end}}
             </details>
-            <form method="post" action="/data/media/delete?{{$.Query}}" hx-post="/data/media/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete this media library entry?" class="inline-form">
+            <form method="post" action="{{$.Actions.MediaDelete}}" hx-post="{{$.Actions.MediaDelete}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete this media library entry?" class="inline-form">
               <input type="hidden" name="guild_id" value="{{.GuildID}}">
               <input type="hidden" name="url" value="{{.URL}}">
               <button type="submit" class="btn btn-sm btn-danger">Delete</button>
