@@ -33,7 +33,7 @@ func TestDirectImageURL(t *testing.T) {
 	}
 }
 
-func TestMediaThumbnailYouTube(t *testing.T) {
+func TestMediaPreviewSrcYouTube(t *testing.T) {
 	cases := []struct {
 		raw  string
 		want string
@@ -45,9 +45,27 @@ func TestMediaThumbnailYouTube(t *testing.T) {
 		{"https://www.youtube.com/watch?v=bad id", ""},
 	}
 	for _, tc := range cases {
-		assert.Equal(t, tc.want, mediaThumbnail(tc.raw, "youtube"), tc.raw)
+		assert.Equal(t, tc.want, mediaPreviewSrc(tc.raw, "youtube"), tc.raw)
 	}
-	assert.Equal(t, "", mediaThumbnail("https://www.youtube.com/watch?v=W_0pGPZvPw8", "tweet"))
+	assert.Equal(t, "", mediaPreviewSrc("https://www.youtube.com/watch?v=W_0pGPZvPw8", "tweet"))
+}
+
+func TestMediaPreviewSrcRoutesThroughProxy(t *testing.T) {
+	assert.Equal(t,
+		mediaThumbSrc("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1"),
+		mediaPreviewSrc("https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1", "gif"))
+	assert.Equal(t,
+		mediaThumbSrc("https://tenor.com/view/cat-gif-123"),
+		mediaPreviewSrc("https://tenor.com/view/cat-gif-123", "gif"))
+	assert.Equal(t,
+		mediaThumbSrc("https://giphy.com/gifs/abc"),
+		mediaPreviewSrc("https://giphy.com/gifs/abc", "gif"))
+	assert.Equal(t,
+		mediaThumbSrc("https://klipy.com/gifs/abc-3"),
+		mediaPreviewSrc("https://klipy.com/gifs/abc-3", "gif"))
+	// Unsupported pages keep the "open" link instead of a broken tile.
+	assert.Equal(t, "", mediaPreviewSrc("https://x.com/user/status/123", "tweet"))
+	assert.Equal(t, "", mediaPreviewSrc("javascript:alert(1)", "gif"))
 }
 
 func TestShortDisplayURL(t *testing.T) {
@@ -71,8 +89,9 @@ func TestMessageMediaPicksRenderableImage(t *testing.T) {
 		{"url":"https://cdn.discordapp.com/attachments/1/2/pic.png?ex=1","proxy_url":"https://media.discordapp.net/attachments/1/2/pic.png?ex=1","content_type":"image/webp","filename":"pic.png"}
 	]}`
 	thumb, href, label := messageMedia(raw)
-	assert.Equal(t, "https://media.discordapp.net/attachments/1/2/pic.png?ex=1", thumb)
-	assert.Equal(t, "https://cdn.discordapp.com/attachments/1/2/pic.png?ex=1", href)
+	want := mediaThumbSrc("https://media.discordapp.net/attachments/1/2/pic.png?ex=1")
+	assert.Equal(t, want, thumb)
+	assert.Equal(t, want, href)
 	assert.Equal(t, "pic.png", label)
 
 	thumb, href, label = messageMedia(`{"attachments":[{"url":"javascript:alert(1)","filename":"x"}]}`)
@@ -94,8 +113,9 @@ func TestDataMediaRendersThumbnailsAndCompactURLs(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `src="https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&amp;is=2&amp;hm=3"`)
+	assert.Contains(t, body, `src="`+mediaThumbSrc(signed)+`"`)
 	assert.Contains(t, body, `src="https://i.ytimg.com/vi/W_0pGPZvPw8/mqdefault.jpg"`)
+	assert.Contains(t, body, `href="`+mediaThumbSrc(signed)+`"`)
 	assert.Contains(t, body, `title="https://cdn.discordapp.com/attachments/1/2/cat.gif?ex=1&amp;is=2&amp;hm=3"`)
 	assert.Contains(t, body, `>cdn.discordapp.com/attachments/1/2/cat.gif</a>`)
 	assert.Contains(t, body, `>youtube.com/watch</a>`)
@@ -115,7 +135,7 @@ func TestDataAttachmentsRenderPreviewAndCompactSource(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `src="https://cdn.discordapp.com/attachments/1/2/image.png?ex=1&amp;is=2&amp;hm=3"`)
+	assert.Contains(t, body, `src="`+mediaThumbSrc(source)+`"`)
 	assert.Contains(t, body, `>cdn.discordapp.com/attachments/1/2/image.png</a>`)
 	assert.Contains(t, body, "image.png")
 }
@@ -129,7 +149,7 @@ func TestDataMessagesRenderAttachmentPreview(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `src="https://media.discordapp.net/attachments/1/2/pic.png?ex=1"`)
+	assert.Contains(t, body, `src="`+mediaThumbSrc("https://media.discordapp.net/attachments/1/2/pic.png?ex=1")+`"`)
 	assert.Contains(t, body, `class="thumb thumb-sm"`)
 	assert.Contains(t, body, `title="pic.png"`)
 }
@@ -154,5 +174,5 @@ func TestDataMediaSearchRendersThumbnail(t *testing.T) {
 	target := "/data?tab=media&search_guild=" + dataTestGuild + "&search_query=" + url.QueryEscape("cat")
 	rec := env.get(t, target)
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), `src="https://example.com/cat.png"`)
+	assert.Contains(t, rec.Body.String(), `src="`+mediaThumbSrc("https://example.com/cat.png")+`"`)
 }

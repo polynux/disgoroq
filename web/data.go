@@ -187,6 +187,7 @@ type attachmentRowView struct {
 	Truncated     bool
 	DeleteURL     string
 	ThumbURL      string
+	ThumbHref     string
 	ShortURL      string
 	Linkable      bool
 }
@@ -233,6 +234,7 @@ type mediaRowView struct {
 	FirstSeen   string
 	LastSeen    string
 	ThumbURL    string
+	ThumbHref   string
 	ShortURL    string
 	Linkable    bool
 }
@@ -247,6 +249,7 @@ type mediaSearchRowView struct {
 	Similarity  string
 	Uses        int64
 	ThumbURL    string
+	ThumbHref   string
 	ShortURL    string
 	Linkable    bool
 }
@@ -427,19 +430,37 @@ func youtubeThumbnail(parsed *url.URL) string {
 	return "https://i.ytimg.com/vi/" + url.PathEscape(id) + "/mqdefault.jpg"
 }
 
-// mediaThumbnail returns the image to show for a media library entry, or "".
-func mediaThumbnail(raw, kind string) string {
-	if thumb := directImageURL(raw); thumb != "" {
-		return thumb
-	}
-	if !strings.EqualFold(kind, "youtube") {
-		return ""
-	}
+// mediaPreviewSrc returns the admin preview URL for a media library entry.
+// Direct images and GIF landing pages go through the refresh proxy so expired
+// Discord signatures and page links still render; YouTube gets its own poster.
+func mediaPreviewSrc(raw, kind string) string {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
+	if err != nil || !isSafeHTTPURL(raw) {
 		return ""
 	}
-	return youtubeThumbnail(parsed)
+	if strings.EqualFold(kind, "youtube") {
+		return youtubeThumbnail(parsed)
+	}
+	if directImageURL(raw) != "" || isResolvableMediaPage(raw) {
+		return mediaThumbSrc(raw)
+	}
+	if strings.EqualFold(kind, "image") && isDiscordAttachmentURL(parsed) {
+		return mediaThumbSrc(raw)
+	}
+	return ""
+}
+
+// attachmentPreviewSrc returns the admin preview URL for a cached attachment.
+func attachmentPreviewSrc(raw, contentType string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !isSafeHTTPURL(raw) {
+		return ""
+	}
+	if directImageURL(raw) != "" || isDiscordAttachmentURL(parsed) ||
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "image/") {
+		return mediaThumbSrc(raw)
+	}
+	return ""
 }
 
 const dataShortURLRunes = 52
@@ -500,7 +521,14 @@ func messageMedia(raw string) (thumb, href, label string) {
 		if !isSafeHTTPURL(source) {
 			source = link
 		}
-		image := directImageURL(source)
+		image := attachmentPreviewSrc(source, attachment.ContentType)
+		if image == "" {
+			// Signed Discord URLs can lose their file extension; the proxy
+			// still refreshes anything under /attachments/.
+			if parsed, err := url.Parse(source); err == nil && isDiscordAttachmentURL(parsed) {
+				image = mediaThumbSrc(source)
+			}
+		}
 		if image == "" {
 			continue
 		}
@@ -508,9 +536,18 @@ func messageMedia(raw string) (thumb, href, label string) {
 		if name == "" {
 			name = "attachment"
 		}
-		return image, link, name
+		return image, image, name
 	}
 	return "", "", ""
+}
+
+// previewHref picks where a click on a preview tile goes: the proxy for
+// refreshed images, the original page for YouTube-and-similar previews.
+func previewHref(raw, thumb string) string {
+	if strings.HasPrefix(thumb, "/data/media/thumb?") {
+		return thumb
+	}
+	return raw
 }
 
 func parseFlexibleTime(raw string) (time.Time, bool) {
@@ -765,6 +802,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		data.Pagination.HasNext = hasNext
 		for _, row := range rows {
 			preview, truncated := truncateRunes(row.Content, dataAttachmentPreviewRunes)
+			thumb := attachmentPreviewSrc(row.SourceURL, row.ContentType)
 			data.Attachments = append(data.Attachments, attachmentRowView{
 				ID:            row.ID,
 				CacheKind:     row.CacheKind,
@@ -780,7 +818,8 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				Content:       row.Content,
 				Truncated:     truncated,
 				DeleteURL:     dataActionURL(r, fmt.Sprintf("/data/attachments/%d/delete", row.ID)),
-				ThumbURL:      directImageURL(row.SourceURL),
+				ThumbURL:      thumb,
+				ThumbHref:     previewHref(row.SourceURL, thumb),
 				ShortURL:      shortDisplayURL(row.SourceURL),
 				Linkable:      isSafeHTTPURL(row.SourceURL),
 			})
@@ -877,6 +916,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		}
 		data.Pagination.HasNext = hasNext
 		for _, row := range rows {
+			thumb := mediaPreviewSrc(row.URL, row.Kind)
 			data.Media = append(data.Media, mediaRowView{
 				ID:          row.ID,
 				GuildID:     row.GuildID,
@@ -888,7 +928,8 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				Uses:        row.Uses,
 				FirstSeen:   formatUnixUTC(row.FirstSeen),
 				LastSeen:    formatUnixUTC(row.LastSeen),
-				ThumbURL:    mediaThumbnail(row.URL, row.Kind),
+				ThumbURL:    thumb,
+				ThumbHref:   previewHref(row.URL, thumb),
 				ShortURL:    shortDisplayURL(row.URL),
 				Linkable:    isSafeHTTPURL(row.URL),
 			})
@@ -934,6 +975,7 @@ func (s *Server) fillMediaSearch(ctx context.Context, data *dataPageData, filter
 		return
 	}
 	for _, hit := range hits {
+		thumb := mediaPreviewSrc(hit.Entry.URL, hit.Entry.Kind)
 		data.SearchHits = append(data.SearchHits, mediaSearchRowView{
 			GuildID:     hit.Entry.GuildID,
 			GuildName:   s.guildDisplayName(hit.Entry.GuildID),
@@ -943,7 +985,8 @@ func (s *Server) fillMediaSearch(ctx context.Context, data *dataPageData, filter
 			TriggerText: hit.Entry.TriggerText,
 			Similarity:  strconv.FormatFloat(hit.Similarity, 'f', 3, 64),
 			Uses:        hit.Entry.Uses,
-			ThumbURL:    mediaThumbnail(hit.Entry.URL, hit.Entry.Kind),
+			ThumbURL:    thumb,
+			ThumbHref:   previewHref(hit.Entry.URL, thumb),
 			ShortURL:    shortDisplayURL(hit.Entry.URL),
 			Linkable:    isSafeHTTPURL(hit.Entry.URL),
 		})

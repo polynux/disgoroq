@@ -41,6 +41,8 @@ type Server struct {
 	handler   http.Handler
 	templates *templateStore
 
+	mediaProxy *mediaProxy
+
 	configSaveMu sync.Mutex
 
 	mu         sync.Mutex
@@ -66,6 +68,16 @@ func New(deps Deps, cfg config.WebConfig) *Server {
 		mux:       http.NewServeMux(),
 		templates: mustLoadTemplates(),
 	}
+	// The admin preview proxy refreshes expired Discord CDN signatures, so it
+	// needs the same bot token the gateway uses.
+	mediaToken := ""
+	if deps.Client != nil {
+		mediaToken = deps.Client.Token
+	}
+	if mediaToken == "" {
+		mediaToken = s.currentConfig().Discord.Token
+	}
+	s.mediaProxy = newMediaProxy(mediaToken)
 	s.registerRoutes()
 	s.handler = s.withHostAllowlist(s.withCSRFGuard(s.mux))
 	return s
