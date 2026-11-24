@@ -599,8 +599,8 @@ th {
 
 .attachments-table th:nth-child(1) { width: 105px; }
 .attachments-table th:nth-child(2) { width: 190px; }
-.attachments-table th:nth-child(3) { width: 300px; }
-.attachments-table th:nth-child(4) { width: 70px; }
+.attachments-table th:nth-child(3) { width: 290px; }
+.attachments-table th:nth-child(4) { width: 85px; }
 .attachments-table th:nth-child(5) { width: 110px; }
 .attachments-table th:nth-child(7) { width: 90px; }
 
@@ -624,9 +624,9 @@ th {
 .search-table th:nth-child(7) { width: 150px; }
 
 .media-table th:nth-child(1) { width: 150px; }
-.media-table th:nth-child(2) { width: 70px; }
+.media-table th:nth-child(2) { width: 80px; }
 .media-table th:nth-child(5) { width: 60px; }
-.media-table th:nth-child(6) { width: 220px; }
+.media-table th:nth-child(6) { width: 210px; }
 .media-table th:nth-child(7) { width: 90px; }
 
 .pagination {
