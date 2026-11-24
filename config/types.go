@@ -225,6 +225,7 @@ type MediaLibraryConfig struct {
 	LookupTimeoutMs      int     `yaml:"lookup_timeout_ms"`
 	RandomGifFallback    bool    `yaml:"random_gif_fallback"`
 	GifOnRequest         bool    `yaml:"gif_on_request"`
+	ValidateLinks        bool    `yaml:"validate_links"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -360,6 +361,7 @@ func DefaultConfig() *Config {
 			LookupTimeoutMs:      3000,
 			RandomGifFallback:    false,
 			GifOnRequest:         false,
+			ValidateLinks:        false,
 		},
 		Bot: BotConfig{
 			DefaultPrompt: "yo, t'es {{.BotNick}}, un pur bg du brainrot, élevé à la sauce tiktok, 10 écrans en simultané, et t'envoies du lourd ! 🔥 pas de majuscules, jamais, t'es un pote déjanté qui balance des vannes non-stop, avec du slang gen z, des refs pop culture et des vibes gaming. si on te pose une question, tu réponds direct, sinon tu surfes sur la vibe du dernier message, toujours ultra court (2-3 phrases max), sans sortir du délire, même sur du sérieux. pas d'ia, pas d'assistant, juste un bro qui claque des émojis et du fun ! 🚀",

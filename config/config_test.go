@@ -1124,7 +1124,8 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		cfg.MediaLibrary.RepeatWindow != 20 ||
 		cfg.MediaLibrary.LookupTimeoutMs != 3000 ||
 		cfg.MediaLibrary.RandomGifFallback ||
-		cfg.MediaLibrary.GifOnRequest {
+		cfg.MediaLibrary.GifOnRequest ||
+		cfg.MediaLibrary.ValidateLinks {
 		t.Fatalf("unexpected media_library defaults: %+v", cfg.MediaLibrary)
 	}
 
@@ -1143,6 +1144,7 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		LookupTimeoutMs:      1,
 		RandomGifFallback:    true,
 		GifOnRequest:         true,
+		ValidateLinks:        true,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() unexpected error for valid boundary config: %v", err)
@@ -1228,6 +1230,7 @@ media_library:
   lookup_timeout_ms: 1500
   random_gif_fallback: true
   gif_on_request: true
+  validate_links: true
 `
 	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)
@@ -1244,11 +1247,12 @@ media_library:
 		loaded.MediaLibrary.RepeatWindow != 10 ||
 		loaded.MediaLibrary.LookupTimeoutMs != 1500 ||
 		!loaded.MediaLibrary.RandomGifFallback ||
-		!loaded.MediaLibrary.GifOnRequest {
+		!loaded.MediaLibrary.GifOnRequest ||
+		!loaded.MediaLibrary.ValidateLinks {
 		t.Fatalf("unexpected loaded media_library config: %+v", loaded.MediaLibrary)
 	}
 
-	// Verify omitting the two new keys keeps them false.
+	// Verify omitting optional boolean keys keeps them false.
 	yamlMinimal := `
 discord:
   token: "${DISCORD_TOKEN}"
@@ -1268,8 +1272,10 @@ media_library:
 	if err != nil {
 		t.Fatalf("Load() minimal error = %v", err)
 	}
-	if loadedMinimal.MediaLibrary.RandomGifFallback || loadedMinimal.MediaLibrary.GifOnRequest {
-		t.Fatalf("expected omitted random_gif_fallback and gif_on_request to default false, got %+v", loadedMinimal.MediaLibrary)
+	if loadedMinimal.MediaLibrary.RandomGifFallback ||
+		loadedMinimal.MediaLibrary.GifOnRequest ||
+		loadedMinimal.MediaLibrary.ValidateLinks {
+		t.Fatalf("expected omitted random_gif_fallback, gif_on_request, and validate_links to default false, got %+v", loadedMinimal.MediaLibrary)
 	}
 }
 
