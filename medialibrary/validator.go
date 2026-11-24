@@ -17,6 +17,7 @@ import (
 	"github.com/disgoorg/disgo/rest"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/config"
 	"polynux/disgoroq/logger"
 )
 
@@ -316,22 +317,22 @@ func (s *Service) perCheckTimeout(ctx context.Context, remainingCandidates int) 
 	return timeout, true
 }
 
-func (s *Service) validationExhausted(attempts int) bool {
-	return s.cfg.ValidateLinks && attempts >= maxValidationCandidates
+func validationExhausted(cfg config.MediaLibraryConfig, attempts int) bool {
+	return cfg.ValidateLinks && attempts >= maxValidationCandidates
 }
 
 // prepareCandidate refreshes real Discord attachment URLs (when a Discord REST
 // client is configured) and, when validate_links is enabled, checks liveness
 // via SSRF-guarded HEAD with GET Range confirmation. Confirmed dead rows are
 // queued for asynchronous deletion; blocked URLs are skipped without deleting.
-func (s *Service) prepareCandidate(ctx context.Context, entry Entry, remainingCandidates int) (string, candidateAction) {
+func (s *Service) prepareCandidate(ctx context.Context, entry Entry, remainingCandidates int, cfg config.MediaLibraryConfig) (string, candidateAction) {
 	isAttachment := IsDiscordAttachmentURL(entry.URL)
-	if !s.cfg.ValidateLinks && !isAttachment {
+	if !cfg.ValidateLinks && !isAttachment {
 		return entry.URL, candidatePost
 	}
 
 	restClient := s.discordRestClient()
-	if !s.cfg.ValidateLinks && isAttachment && restClient == nil {
+	if !cfg.ValidateLinks && isAttachment && restClient == nil {
 		return entry.URL, candidatePost
 	}
 
@@ -375,7 +376,7 @@ func (s *Service) prepareCandidate(ctx context.Context, entry Entry, remainingCa
 		}
 	}
 
-	if !s.cfg.ValidateLinks {
+	if !cfg.ValidateLinks {
 		return targetURL, candidatePost
 	}
 

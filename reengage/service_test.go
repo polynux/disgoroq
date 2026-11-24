@@ -407,9 +407,14 @@ func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
 		t.Fatalf("failed to create disgo client: %v", err)
 	}
 
-	svc := NewService(client, aiSvc, repo, nil, nil, config.ReengageConfig{
-		ReengageMessage: "\nRelance le chat.",
-	}, "tu es {{.BotNick}}")
+	svc := NewService(client, aiSvc, repo, nil, nil, config.NewRuntime(&config.Config{
+		Reengage: config.ReengageConfig{
+			ReengageMessage: "\nRelance le chat.",
+		},
+		Bot: config.BotConfig{
+			DefaultPrompt: "tu es {{.BotNick}}",
+		},
+	}))
 
 	// 1. No per-guild temperature configured -> falls back to database.DefaultTemperature.
 	if err := svc.GenerateAndSend(ctx, guildID, channelID); err != nil {

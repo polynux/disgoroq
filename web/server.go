@@ -22,10 +22,12 @@ import (
 // Add new optional services here as additional admin pages are implemented.
 // Repo is required for the guild pages; they answer 503 without it.
 type Deps struct {
-	Client *bot.Client
-	Repo   *database.Repository
-	Config *config.Config
-	Memory memory.Service // optional, may be nil
+	Client        *bot.Client
+	Repo          *database.Repository
+	Config        *config.Config
+	ConfigRuntime *config.Runtime
+	ConfigPath    string
+	Memory        memory.Service // optional, may be nil
 }
 
 // Server serves the embedded web admin UI.
@@ -36,9 +38,21 @@ type Server struct {
 	handler   http.Handler
 	templates *templateStore
 
+	configSaveMu sync.Mutex
+
 	mu         sync.Mutex
 	httpServer *http.Server
 	listener   net.Listener
+}
+
+func (s *Server) currentConfig() *config.Config {
+	if s.deps.ConfigRuntime != nil {
+		return s.deps.ConfigRuntime.Current()
+	}
+	if s.deps.Config != nil {
+		return s.deps.Config
+	}
+	return config.DefaultConfig()
 }
 
 // New constructs a configured web admin Server without starting it.

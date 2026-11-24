@@ -56,9 +56,10 @@ func newTestServer(t *testing.T, client *bot.Client, webCfg config.WebConfig) (*
 	cfg := config.DefaultConfig()
 	cfg.Web = webCfg
 	srv := New(Deps{
-		Client: client,
-		Repo:   repo,
-		Config: cfg,
+		Client:        client,
+		Repo:          repo,
+		Config:        cfg,
+		ConfigRuntime: config.NewRuntime(cfg),
 	}, webCfg)
 	return srv, repo
 }

@@ -36,6 +36,7 @@ type MessageHandler struct {
 	memoryService  memory.Service
 	mediaLibrary   *medialibrary.Service
 	emojiManager   *emoji.Manager
+	runtime        *config.Runtime
 	defaultPrompt  string
 	triggerWords   []string
 	votesConfig    config.VotesConfig
@@ -46,7 +47,7 @@ type MessageHandler struct {
 
 const maxConcurrentMessageReplies = 4
 
-func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, defaultPrompt string, triggerWords []string, votesConfig config.VotesConfig) *MessageHandler {
+func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfgRuntime *config.Runtime) *MessageHandler {
 	return &MessageHandler{
 		client:         client,
 		aiservice:      aiService,
@@ -54,11 +55,30 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 		contextBuilder: ai.NewContextBuilder(client, aiService),
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
-		defaultPrompt:  defaultPrompt,
-		triggerWords:   triggerwords.NormalizeAll(triggerWords),
-		votesConfig:    votesConfig,
+		runtime:        cfgRuntime,
 		replySlots:     make(chan struct{}, maxConcurrentMessageReplies),
 	}
+}
+
+func (h *MessageHandler) currentDefaultPrompt() string {
+	if h.runtime != nil {
+		return h.runtime.Current().Bot.DefaultPrompt
+	}
+	return h.defaultPrompt
+}
+
+func (h *MessageHandler) currentTriggerWords() []string {
+	if h.runtime != nil {
+		return triggerwords.NormalizeAll(h.runtime.Current().Bot.TriggerWords)
+	}
+	return h.triggerWords
+}
+
+func (h *MessageHandler) currentVotesConfig() config.VotesConfig {
+	if h.runtime != nil {
+		return h.runtime.Current().Votes
+	}
+	return h.votesConfig
 }
 
 // SetMediaLibrary attaches the media library service used for asynchronous live indexing.
@@ -420,7 +440,8 @@ func (h *MessageHandler) handleMessageReply(client *bot.Client, m discord.Messag
 			zap.Error(err))
 		return
 	}
-	if h.votesConfig.Enabled && rand.Float64() < h.votesConfig.Probability && m.GuildID != nil && createdMessage != nil {
+	votesCfg := h.currentVotesConfig()
+	if votesCfg.Enabled && rand.Float64() < votesCfg.Probability && m.GuildID != nil && createdMessage != nil {
 		go h.addReplyVoteReactions(*createdMessage, m, response, providerName)
 	}
 }
@@ -545,7 +566,7 @@ func (h *MessageHandler) isExplicitTrigger(ctx context.Context, m *discord.Messa
 		return false
 	}
 
-	triggerWords := h.triggerWords
+	triggerWords := h.currentTriggerWords()
 	if customTriggerWords, ok := h.repo.GetTriggerWords(ctx, m.GuildID.String()); ok {
 		triggerWords = customTriggerWords
 	}
@@ -690,7 +711,7 @@ func min(a, b int) int {
 }
 
 func (h *MessageHandler) GetDefaultPrompt(botNick string) string {
-	tmpl, err := template.New("prompt").Parse(h.defaultPrompt)
+	tmpl, err := template.New("prompt").Parse(h.currentDefaultPrompt())
 	if err != nil {
 		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
 	}

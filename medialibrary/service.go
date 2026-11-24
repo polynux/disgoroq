@@ -99,6 +99,7 @@ type Service struct {
 	cfg      config.MediaLibraryConfig
 
 	clientMu     sync.RWMutex
+	cfgFn        func() config.MediaLibraryConfig
 	restClient   DiscordRestClient
 	httpClient   *http.Client
 	checkTimeout time.Duration
@@ -124,9 +125,32 @@ func NewService(repo *Repository, embedder Embedder, cfg config.MediaLibraryConf
 	}
 }
 
-func (s *Service) lookupTimeout() time.Duration {
-	if s.cfg.LookupTimeoutMs > 0 {
-		return time.Duration(s.cfg.LookupTimeoutMs) * time.Millisecond
+// SetConfigSource registers a dynamic config getter for hot-applied settings.
+// The startup Enabled flag is always preserved (enabled requires a restart).
+func (s *Service) SetConfigSource(fn func() config.MediaLibraryConfig) {
+	if s == nil {
+		return
+	}
+	s.clientMu.Lock()
+	s.cfgFn = fn
+	s.clientMu.Unlock()
+}
+
+func (s *Service) configSnapshot() config.MediaLibraryConfig {
+	s.clientMu.RLock()
+	fn := s.cfgFn
+	s.clientMu.RUnlock()
+	if fn != nil {
+		cfg := fn()
+		cfg.Enabled = s.cfg.Enabled
+		return cfg
+	}
+	return s.cfg
+}
+
+func lookupTimeout(cfg config.MediaLibraryConfig) time.Duration {
+	if cfg.LookupTimeoutMs > 0 {
+		return time.Duration(cfg.LookupTimeoutMs) * time.Millisecond
 	}
 	return defaultLookupTimeout
 }
@@ -285,8 +309,10 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		return ai.MediaResolveResult{}, false
 	}
 
+	cfg := s.configSnapshot()
+
 	tags := ai.ParseMediaTags(req.RawReply)
-	gifRequested := s.cfg.GifOnRequest &&
+	gifRequested := cfg.GifOnRequest &&
 		strings.TrimSpace(req.TargetMessageID) != "" &&
 		isGifRequest(req.TargetText) &&
 		len(ai.ExtractAllURLs(req.RawReply)) == 0
@@ -298,11 +324,11 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 	if ctx != nil {
 		baseCtx = context.WithoutCancel(ctx)
 	}
-	lookupCtx, cancel := context.WithTimeout(baseCtx, s.lookupTimeout())
+	lookupCtx, cancel := context.WithTimeout(baseCtx, lookupTimeout(cfg))
 	defer cancel()
 
-	excludeList, recentURLs := s.recentBotURLs(lookupCtx, req.ChannelID, req.BotID)
-	state := newLookupState(s.cfg.AllowDiscordCDN, excludeList, recentURLs)
+	excludeList, recentURLs := s.recentBotURLs(lookupCtx, req.ChannelID, req.BotID, cfg.RepeatWindow)
+	state := newLookupState(cfg, excludeList, recentURLs)
 
 	hasGifTag := false
 	for _, tag := range tags {
@@ -311,7 +337,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 			break
 		}
 	}
-	reserveForFallback := s.cfg.RandomGifFallback && (hasGifTag || gifRequested)
+	reserveForFallback := cfg.RandomGifFallback && (hasGifTag || gifRequested)
 
 	var (
 		fallbackTag     string
@@ -340,7 +366,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		}
 		if tag.Description != "" {
 			searchTag := tag
-			if tag.Kind == "gif" && s.cfg.RandomGifFallback {
+			if tag.Kind == "gif" && cfg.RandomGifFallback {
 				cleaned := cleanGifDescription(tag.Description)
 				if cleaned == "" {
 					recordGifFailure(tag.Raw, reasonJunk)
@@ -382,7 +408,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		}
 	}
 
-	if hasUnmatchedGif && s.cfg.RandomGifFallback {
+	if hasUnmatchedGif && cfg.RandomGifFallback {
 		if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, fallbackTag, fallbackReason, state); ok {
 			return result, true
 		}
@@ -394,7 +420,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 // embedContext returns a context for embedding calls that optionally reserves a
 // small slice of lookupCtx's deadline so a local random-gif fallback query can
 // still run within the overall lookup timeout when the embedder hangs.
-func (s *Service) embedContext(lookupCtx context.Context, reserveForFallback bool) (context.Context, context.CancelFunc, bool) {
+func (s *Service) embedContext(lookupCtx context.Context, reserveForFallback bool, cfg config.MediaLibraryConfig) (context.Context, context.CancelFunc, bool) {
 	if !reserveForFallback {
 		return lookupCtx, func() {}, true
 	}
@@ -403,7 +429,7 @@ func (s *Service) embedContext(lookupCtx context.Context, reserveForFallback boo
 		return lookupCtx, func() {}, true
 	}
 	reserve := fallbackTimeoutReserve
-	if quarter := s.lookupTimeout() / 4; quarter < reserve {
+	if quarter := lookupTimeout(cfg) / 4; quarter < reserve {
 		reserve = quarter
 	}
 	remaining := time.Until(deadline)
@@ -568,8 +594,8 @@ func isJunkGifArtifactToken(tok string) bool {
 	return false
 }
 
-func (s *Service) eligible(rawURL string, recentURLs map[string]bool) bool {
-	if !s.cfg.AllowDiscordCDN && ai.IsDiscordCDNURL(rawURL) {
+func eligible(rawURL string, recentURLs map[string]bool, allowDiscordCDN bool) bool {
+	if !allowDiscordCDN && ai.IsDiscordCDNURL(rawURL) {
 		return false
 	}
 	if recentURLs[ai.CanonicalizeMediaURL(rawURL)] {
@@ -578,11 +604,11 @@ func (s *Service) eligible(rawURL string, recentURLs map[string]bool) bool {
 	return true
 }
 
-func (s *Service) recentBotURLs(ctx context.Context, channelID, botID string) ([]string, map[string]bool) {
-	if s.cfg.RepeatWindow <= 0 || channelID == "" || botID == "" {
+func (s *Service) recentBotURLs(ctx context.Context, channelID, botID string, repeatWindow int) ([]string, map[string]bool) {
+	if repeatWindow <= 0 || channelID == "" || botID == "" {
 		return nil, nil
 	}
-	messages, err := s.repo.GetRecentBotMessages(ctx, channelID, botID, s.cfg.RepeatWindow)
+	messages, err := s.repo.GetRecentBotMessages(ctx, channelID, botID, repeatWindow)
 	if err != nil {
 		logger.Warn("Media library failed to read recent bot messages for repeat window",
 			zap.String("channel_id", channelID),
@@ -631,8 +657,8 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	// 2. Semantic vector search in the same guild.
 	var queryBlob []byte
 	bestSim := 0.0
-	if !s.validationExhausted(attempts) && s.embedder != nil && ctx.Err() == nil {
-		embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback)
+	if !validationExhausted(state.cfg, attempts) && s.embedder != nil && ctx.Err() == nil {
+		embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback, state.cfg)
 		if !hasBudget {
 			hadErr = true
 			logger.Warn("Media library skipped embedding: lookup timeout budget reserved for fallback",
@@ -655,7 +681,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 						zap.String("tag", tag.Raw),
 						zap.String("guild_id", guildID),
 						zap.Error(err))
-				} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
+				} else if hit, postedURL, ok := s.pickHit(ctx, hits, state.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 					logger.Info("Media library matched tag",
 						zap.String("tag", tag.Raw),
 						zap.String("url", hit.Entry.URL),
@@ -670,7 +696,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	}
 
 	// 3. Optional cross-guild fallback (exact, then vector).
-	if !s.validationExhausted(attempts) && s.cfg.CrossGuild && ctx.Err() == nil {
+	if !validationExhausted(state.cfg, attempts) && state.cfg.CrossGuild && ctx.Err() == nil {
 		crossExact, err := s.repo.FindExactDescriptionCrossGuild(ctx, guildID, tag.Kind, tag.Description, state.filter, lookupCandidateLimit)
 		if err != nil {
 			hadErr = true
@@ -689,7 +715,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 			return ai.MediaResolveResult{Tag: tag.Raw, URL: postedURL, Similarity: 1.0}, true, false
 		}
 
-		if !s.validationExhausted(attempts) && len(queryBlob) > 0 && ctx.Err() == nil {
+		if !validationExhausted(state.cfg, attempts) && len(queryBlob) > 0 && ctx.Err() == nil {
 			crossHits, err := s.repo.SearchByDescriptionCrossGuild(ctx, guildID, tag.Kind, queryBlob, state.filter, lookupCandidateLimit)
 			if err != nil {
 				hadErr = true
@@ -697,7 +723,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 					zap.String("tag", tag.Raw),
 					zap.String("guild_id", guildID),
 					zap.Error(err))
-			} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
+			} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, state.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 				logger.Info("Media library matched tag",
 					zap.String("tag", tag.Raw),
 					zap.String("url", hit.Entry.URL),
@@ -713,7 +739,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	logger.Info("Media library no match",
 		zap.String("tag", tag.Raw),
 		zap.Float64("best_similarity", bestSim),
-		zap.Float64("threshold", s.cfg.MinSimilarity),
+		zap.Float64("threshold", state.cfg.MinSimilarity),
 		zap.String("guild_id", guildID))
 	return ai.MediaResolveResult{}, false, hadErr
 }
@@ -724,12 +750,12 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 		logger.Info("Media library no match",
 			zap.String("tag", tag.Raw),
 			zap.Float64("best_similarity", 0),
-			zap.Float64("threshold", s.cfg.MinTriggerSimilarity),
+			zap.Float64("threshold", state.cfg.MinTriggerSimilarity),
 			zap.String("guild_id", guildID))
 		return ai.MediaResolveResult{}, false, false
 	}
 
-	embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback)
+	embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback, state.cfg)
 	if !hasBudget {
 		logger.Warn("Media library skipped trigger embedding: lookup timeout budget reserved for fallback",
 			zap.String("tag", tag.Raw),
@@ -756,7 +782,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
-	} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
+	} else if hit, postedURL, ok := s.pickHit(ctx, hits, state.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 		logger.Info("Media library matched tag",
 			zap.String("tag", tag.Raw),
 			zap.String("url", hit.Entry.URL),
@@ -767,7 +793,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 		return ai.MediaResolveResult{Tag: tag.Raw, URL: postedURL, Similarity: hit.Similarity}, true, false
 	}
 
-	if !s.validationExhausted(attempts) && s.cfg.CrossGuild && ctx.Err() == nil {
+	if !validationExhausted(state.cfg, attempts) && state.cfg.CrossGuild && ctx.Err() == nil {
 		crossHits, err := s.repo.SearchByTriggerCrossGuild(ctx, guildID, "gif", queryBlob, state.filter, lookupCandidateLimit)
 		if err != nil {
 			hadErr = true
@@ -775,7 +801,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", guildID),
 				zap.Error(err))
-		} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
+		} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, state.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 			logger.Info("Media library matched tag",
 				zap.String("tag", tag.Raw),
 				zap.String("url", hit.Entry.URL),
@@ -790,17 +816,18 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 	logger.Info("Media library no match",
 		zap.String("tag", tag.Raw),
 		zap.Float64("best_similarity", bestSim),
-		zap.Float64("threshold", s.cfg.MinTriggerSimilarity),
+		zap.Float64("threshold", state.cfg.MinTriggerSimilarity),
 		zap.String("guild_id", guildID))
 	return ai.MediaResolveResult{}, false, hadErr
 }
 
 type lookupState struct {
+	cfg      config.MediaLibraryConfig
 	filter   LookupFilter
 	excluded map[string]bool
 }
 
-func newLookupState(allowDiscordCDN bool, excludeList []string, recentURLs map[string]bool) *lookupState {
+func newLookupState(cfg config.MediaLibraryConfig, excludeList []string, recentURLs map[string]bool) *lookupState {
 	excluded := make(map[string]bool, len(recentURLs))
 	for k, v := range recentURLs {
 		if v {
@@ -808,8 +835,9 @@ func newLookupState(allowDiscordCDN bool, excludeList []string, recentURLs map[s
 		}
 	}
 	return &lookupState{
+		cfg: cfg,
 		filter: LookupFilter{
-			AllowDiscordCDN: allowDiscordCDN,
+			AllowDiscordCDN: cfg.AllowDiscordCDN,
 			ExcludeURLs:     append([]string(nil), excludeList...),
 		},
 		excluded: excluded,
@@ -826,11 +854,11 @@ func (st *lookupState) exclude(rawURL string) {
 
 func (s *Service) pickEntry(ctx context.Context, entries []Entry, state *lookupState, attempts *int, reserveForFallback bool) (Entry, string, bool) {
 	for _, entry := range entries {
-		if !s.eligible(entry.URL, state.excluded) {
+		if !eligible(entry.URL, state.excluded, state.cfg.AllowDiscordCDN) {
 			continue
 		}
 		remainingCandidates := 1
-		if s.cfg.ValidateLinks {
+		if state.cfg.ValidateLinks {
 			if *attempts >= maxValidationCandidates || ctx.Err() != nil {
 				return Entry{}, "", false
 			}
@@ -842,7 +870,7 @@ func (s *Service) pickEntry(ctx context.Context, entries []Entry, state *lookupS
 		} else if reserveForFallback {
 			remainingCandidates = 2
 		}
-		postedURL, action := s.prepareCandidate(ctx, entry, remainingCandidates)
+		postedURL, action := s.prepareCandidate(ctx, entry, remainingCandidates, state.cfg)
 		switch action {
 		case candidateDead, candidateBlocked:
 			state.exclude(entry.URL)
@@ -858,7 +886,7 @@ func (s *Service) pickEntry(ctx context.Context, entries []Entry, state *lookupS
 
 func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64, state *lookupState, attempts *int, bestSim *float64, reserveForFallback bool) (SearchHit, string, bool) {
 	for _, hit := range hits {
-		if !s.eligible(hit.Entry.URL, state.excluded) {
+		if !eligible(hit.Entry.URL, state.excluded, state.cfg.AllowDiscordCDN) {
 			continue
 		}
 		if hit.Similarity < minSim {
@@ -868,7 +896,7 @@ func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64,
 			continue
 		}
 		remainingCandidates := 1
-		if s.cfg.ValidateLinks {
+		if state.cfg.ValidateLinks {
 			if *attempts >= maxValidationCandidates || ctx.Err() != nil {
 				return SearchHit{}, "", false
 			}
@@ -880,7 +908,7 @@ func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64,
 		} else if reserveForFallback {
 			remainingCandidates = 2
 		}
-		postedURL, action := s.prepareCandidate(ctx, hit.Entry, remainingCandidates)
+		postedURL, action := s.prepareCandidate(ctx, hit.Entry, remainingCandidates, state.cfg)
 		switch action {
 		case candidateDead, candidateBlocked:
 			state.exclude(hit.Entry.URL)

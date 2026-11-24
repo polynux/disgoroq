@@ -12,31 +12,40 @@ import (
 	"github.com/disgoorg/snowflake/v2"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/config"
 	appcontext "polynux/disgoroq/context"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
 	"polynux/disgoroq/voice"
 )
 
+const fallbackVoicePrompt = "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues."
+
 // VoiceCommands contains the dependencies for voice commands.
 type VoiceCommands struct {
 	repo         *database.Repository
 	orchestrator *voice.Orchestrator
 	client       *bot.Client
-	voicePrompt  string // Default voice prompt from config
+	runtime      *config.Runtime
 }
 
 // NewVoiceCommands creates a new VoiceCommands instance.
-func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client, defaultVoicePrompt string) *VoiceCommands {
-	if defaultVoicePrompt == "" {
-		defaultVoicePrompt = "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues."
-	}
+func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrator, client *bot.Client, cfgRuntime *config.Runtime) *VoiceCommands {
 	return &VoiceCommands{
 		repo:         repo,
 		orchestrator: orchestrator,
 		client:       client,
-		voicePrompt:  defaultVoicePrompt,
+		runtime:      cfgRuntime,
 	}
+}
+
+func (vc *VoiceCommands) defaultVoicePrompt() string {
+	if vc.runtime != nil {
+		if prompt := vc.runtime.Current().Voice.VoiceSystemPrompt; prompt != "" {
+			return prompt
+		}
+	}
+	return fallbackVoicePrompt
 }
 
 // RegisterVoiceCommands registers all voice-related slash commands.
@@ -573,7 +582,7 @@ func (vc *VoiceCommands) handlePromptSee(e *events.ApplicationCommandInteraction
 	prompt, hasCustom := vc.repo.GetVoicePrompt(ctx, guildID)
 
 	if !hasCustom {
-		prompt = vc.voicePrompt
+		prompt = vc.defaultVoicePrompt()
 	}
 
 	title := "Current voice prompt"
@@ -591,7 +600,7 @@ func (vc *VoiceCommands) handlePromptAppend(e *events.ApplicationCommandInteract
 
 	currentPrompt, hasCustom := vc.repo.GetVoicePrompt(ctx, guildID)
 	if !hasCustom {
-		currentPrompt = vc.voicePrompt
+		currentPrompt = vc.defaultVoicePrompt()
 	}
 
 	newPrompt := currentPrompt + "\n" + textToAppend

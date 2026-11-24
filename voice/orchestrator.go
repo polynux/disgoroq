@@ -30,6 +30,7 @@ type Orchestrator struct {
 	contextBuilder    *ai.ContextBuilder
 	client            *bot.Client
 	repo              Repository
+	configRuntime     *config.Runtime
 	defaultPrompt     string
 	voiceSystemPrompt string // Separate prompt for voice mode
 	config            config.VoiceConfig
@@ -87,6 +88,7 @@ type OrchestratorConfig struct {
 	MemoryService     memory.Service
 	Client            *bot.Client
 	Repository        Repository
+	ConfigRuntime     *config.Runtime
 	DefaultPrompt     string
 	VoiceConfig       config.VoiceConfig
 	VoiceSystemPrompt string // Separate system prompt for voice mode
@@ -109,6 +111,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		contextBuilder:    ai.NewContextBuilder(cfg.Client, cfg.AIService),
 		client:            cfg.Client,
 		repo:              cfg.Repository,
+		configRuntime:     cfg.ConfigRuntime,
 		defaultPrompt:     cfg.DefaultPrompt,
 		voiceSystemPrompt: voicePrompt,
 		config:            cfg.VoiceConfig,
@@ -121,6 +124,24 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 	o.manager.onLeave = o.handleLeave
 
 	return o
+}
+
+func (o *Orchestrator) currentDefaultPrompt() string {
+	if o.configRuntime != nil {
+		return o.configRuntime.Current().Bot.DefaultPrompt
+	}
+	return o.defaultPrompt
+}
+
+func (o *Orchestrator) currentVoiceSystemPrompt() string {
+	if o.configRuntime != nil {
+		cfg := o.configRuntime.Current()
+		if cfg.Voice.VoiceSystemPrompt != "" {
+			return cfg.Voice.VoiceSystemPrompt
+		}
+		return cfg.Bot.DefaultPrompt
+	}
+	return o.voiceSystemPrompt
 }
 
 // JoinVoice connects to a voice channel and starts listening.
@@ -269,7 +290,7 @@ func (o *Orchestrator) ProcessVoiceInput(ctx context.Context, userID, guildID, t
 		instructions = prompt
 	} else {
 		// Use the voice system prompt (already includes voice context instructions)
-		instructions = o.voiceSystemPrompt
+		instructions = o.currentVoiceSystemPrompt()
 
 		// Apply bot nickname template if needed
 		if strings.Contains(instructions, "{{.BotNick}}") {
@@ -880,7 +901,7 @@ func (o *Orchestrator) maybeUnloadTTS() {
 
 // getDefaultPrompt generates the default system prompt.
 func (o *Orchestrator) getDefaultPrompt(botNick string) string {
-	tmpl, err := template.New("prompt").Parse(o.defaultPrompt)
+	tmpl, err := template.New("prompt").Parse(o.currentDefaultPrompt())
 	if err != nil {
 		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
 	}
