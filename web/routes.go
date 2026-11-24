@@ -39,8 +39,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /guilds/{id}/reengage/channel/{channelID}/reset", s.guildRoute(s.handleGuildReengageChannelReset))
 	s.mux.HandleFunc("POST /guilds/{id}/reset", s.guildRoute(s.handleGuildSettingReset))
 
-	// Phase 2a: Global config.yaml editor (stub)
-	s.mux.HandleFunc("GET /config", s.handleStub("Config", "config", "Global config.yaml editor — coming soon."))
+	// Phase 2a: Global config.yaml editor
+	s.mux.HandleFunc("GET /config", s.handleConfigPage)
+	s.mux.HandleFunc("POST /config/{section}", s.handleConfigSectionSave)
 
 	// Phase 2b: Data views (stub)
 	s.mux.HandleFunc("GET /data", s.handleStub("Data", "data", "Summaries, message cache, media library, and events — coming soon."))

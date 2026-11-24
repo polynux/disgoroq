@@ -175,14 +175,12 @@ func TestStubsAndStaticAssets(t *testing.T) {
 	assert.Equal(t, http.StatusFound, rec.Code)
 	assert.Equal(t, "/guilds", rec.Header().Get("Location"))
 
-	// Phase 2 stubs
-	for _, path := range []string{"/config", "/data"} {
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090"+path, nil)
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, req)
-		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "coming soon")
-	}
+	// Phase 2b stub (/config is now implemented and tested in config_test.go)
+	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/data", nil)
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "coming soon")
 
 	// Static files
 	for _, path := range []string{"/static/style.css", "/static/htmx-2.0.4.min.js"} {
