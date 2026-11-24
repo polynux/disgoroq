@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,6 +61,10 @@ func (c *Config) Validate() error {
 	}
 
 	if err := c.Voice.validate(); err != nil {
+		errors = append(errors, err.Error())
+	}
+
+	if err := c.Web.validate(); err != nil {
 		errors = append(errors, err.Error())
 	}
 
@@ -576,6 +582,30 @@ func (c *VoiceConfig) validate() error {
 	}
 	if strings.TrimSpace(c.STT.SocketPath) == "" {
 		return fmt.Errorf("voice.stt.socket_path is required when voice is enabled")
+	}
+	return nil
+}
+
+func (c *WebConfig) validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	listen := strings.TrimSpace(c.Listen)
+	if listen == "" {
+		return fmt.Errorf("web.listen is required when web is enabled")
+	}
+	_, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("web.listen must be a valid host:port (%w)", err)
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 0 || portNum > 65535 {
+		return fmt.Errorf("web.listen port must be between 0 and 65535, got %q", port)
+	}
+	for _, host := range c.AllowedHosts {
+		if strings.TrimSpace(host) == "" {
+			return fmt.Errorf("web.allowed_hosts cannot contain empty values")
+		}
 	}
 	return nil
 }

@@ -18,6 +18,7 @@ type Config struct {
 	MediaLibrary MediaLibraryConfig `yaml:"media_library"`
 	Bot          BotConfig          `yaml:"bot"`
 	Voice        VoiceConfig        `yaml:"voice"`
+	Web          WebConfig          `yaml:"web"`
 }
 
 // DiscordConfig contains Discord-related configuration.
@@ -228,6 +229,13 @@ type MediaLibraryConfig struct {
 	ValidateLinks        bool    `yaml:"validate_links"`
 }
 
+// WebConfig contains configuration for the embedded web admin UI.
+type WebConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	Listen       string   `yaml:"listen"`
+	AllowedHosts []string `yaml:"allowed_hosts"`
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -402,6 +410,11 @@ func DefaultConfig() *Config {
 				// Streaming settings
 				StreamBufferSize: 200, // Pre-buffer 200ms before playing
 			},
+		},
+		Web: WebConfig{
+			Enabled:      false,
+			Listen:       "127.0.0.1:8090",
+			AllowedHosts: nil,
 		},
 	}
 }

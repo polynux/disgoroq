@@ -1796,3 +1796,108 @@ ai:
 		}
 	})
 }
+
+func TestWebConfigDefaultsAndValidation(t *testing.T) {
+	defaults := DefaultConfig()
+	if defaults.Web.Enabled {
+		t.Errorf("DefaultConfig().Web.Enabled = true, want false")
+	}
+	if defaults.Web.Listen != "127.0.0.1:8090" {
+		t.Errorf("DefaultConfig().Web.Listen = %q, want %q", defaults.Web.Listen, "127.0.0.1:8090")
+	}
+	if len(defaults.Web.AllowedHosts) != 0 {
+		t.Errorf("DefaultConfig().Web.AllowedHosts = %v, want empty", defaults.Web.AllowedHosts)
+	}
+
+	makeBase := func() *Config {
+		cfg := DefaultConfig()
+		cfg.Discord.Token = "test-token"
+		cfg.Database.Local = true
+		cfg.AI.Groq.APIKey = "test-key"
+		cfg.Memory.Enabled = false
+		return cfg
+	}
+
+	t.Run("disabled ignores invalid listen", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = false
+		cfg.Web.Listen = "not-a-host-port"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error when web disabled: %v", err)
+		}
+	})
+
+	t.Run("enabled accepts valid listen and allowed_hosts", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "127.0.0.1:8090"
+		cfg.Web.AllowedHosts = []string{"admin.local", "10.0.0.5"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("enabled accepts ipv6 listen", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "[::1]:8090"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("enabled rejects invalid listen", func(t *testing.T) {
+		for _, listen := range []string{"", "127.0.0.1", "127.0.0.1:", "127.0.0.1:abc", "127.0.0.1:70000"} {
+			cfg := makeBase()
+			cfg.Web.Enabled = true
+			cfg.Web.Listen = listen
+			if err := cfg.Validate(); err == nil {
+				t.Errorf("Validate() accepted invalid web.listen %q", listen)
+			}
+		}
+	})
+
+	t.Run("enabled rejects empty allowed_hosts entry", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "127.0.0.1:8090"
+		cfg.Web.AllowedHosts = []string{"   "}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "web.allowed_hosts") {
+			t.Fatalf("Validate() error = %v, want web.allowed_hosts error", err)
+		}
+	})
+
+	t.Run("loads web section from YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		t.Setenv("DISCORD_TOKEN", "test-token")
+		t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+		content := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  local: true
+memory:
+  enabled: false
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+web:
+  enabled: true
+  listen: "127.0.0.1:9090"
+  allowed_hosts:
+    - "bot.tailnet.ts.net"
+`
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.Web.Enabled || cfg.Web.Listen != "127.0.0.1:9090" || len(cfg.Web.AllowedHosts) != 1 || cfg.Web.AllowedHosts[0] != "bot.tailnet.ts.net" {
+			t.Fatalf("unexpected web config: %+v", cfg.Web)
+		}
+	})
+}
