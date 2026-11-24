@@ -24,6 +24,8 @@
     {{range .Guilds}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
   </datalist>
 
+  {{if gt .Pagination.TotalPages 1}}{{template "data_pagination" .}}{{end}}
+
   {{if eq .Tab "summaries"}}{{template "data_summaries" .}}{{end}}
   {{if eq .Tab "buffer"}}{{template "data_buffer" .}}{{end}}
   {{if eq .Tab "messages"}}{{template "data_messages" .}}{{end}}
@@ -47,8 +49,7 @@
   {{if .Pagination.LastURL}}<a class="btn btn-sm" href="{{.Pagination.LastURL}}">Last &raquo;</a>{{else}}<span class="btn btn-sm" aria-disabled="true">Last &raquo;</span>{{end}}
   <form class="page-jump" method="get" action="/data">
     {{range .Pagination.JumpQuery}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
-    <label class="muted" for="page-jump-input">Go to page</label>
-    <input id="page-jump-input" name="page" type="number" min="1"{{if .Pagination.TotalPages}} max="{{.Pagination.TotalPages}}"{{end}} value="{{.Pagination.Page}}" inputmode="numeric" required>
+    <label class="muted">Go to page <input name="page" type="number" min="1"{{if .Pagination.TotalPages}} max="{{.Pagination.TotalPages}}"{{end}} value="{{.Pagination.Page}}" inputmode="numeric" required></label>
     <button type="submit" class="btn btn-sm">Go</button>
   </form>
 </div>
