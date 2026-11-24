@@ -614,6 +614,39 @@ th {
   line-height: 0;
 }
 
+.thumb-slot {
+  display: inline-block;
+  line-height: 0;
+}
+
+.thumb-missing {
+  display: none;
+  width: 88px;
+  height: 88px;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.thumb-slot.missing .media-preview {
+  display: none;
+}
+
+.thumb-slot.missing .thumb-missing {
+  display: flex;
+}
+
+.thumb-slot-sm .thumb-missing {
+  width: 52px;
+  height: 52px;
+  font-size: 10px;
+}
+
 .media-open {
   display: inline-flex;
   align-items: center;

@@ -258,9 +258,12 @@
           </td>
           <td>
             {{if .MediaThumb}}
-            <a class="media-preview" href="{{.MediaHref}}" target="_blank" rel="noopener noreferrer" title="{{.MediaLabel}}">
-              <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.MediaThumb}}" alt="">
-            </a>
+            <span class="thumb-slot thumb-slot-sm">
+              <a class="media-preview" href="{{.MediaHref}}" target="_blank" rel="noopener noreferrer" title="{{.MediaLabel}}">
+                <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.thumb-slot').classList.add('missing')" src="{{.MediaThumb}}" alt="">
+              </a>
+              <span class="thumb-missing">n/a</span>
+            </span>
             {{end}}
             <div class="cell-content">{{.Content}}</div>
             <div class="mono muted">{{.MessageID}}</div>
@@ -349,9 +352,12 @@
           <td>
             <div class="file-cell">
               {{if .ThumbURL}}
-              <a class="media-preview" href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer" title="{{.Filename}}">
-                <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
-              </a>
+              <span class="thumb-slot">
+                <a class="media-preview" href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer" title="{{.Filename}}">
+                  <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.thumb-slot').classList.add('missing')" src="{{.ThumbURL}}" alt="">
+                </a>
+                <span class="thumb-missing">no preview</span>
+              </span>
               {{end}}
               <div class="file-meta">
                 <div>{{if .Filename}}{{.Filename}}{{else}}<span class="muted">no filename</span>{{end}}</div>
@@ -638,9 +644,12 @@
             <td class="mono">{{.Uses}}</td>
             <td class="cell-preview">
               {{if .ThumbURL}}
-              <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
-                <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
-              </a>
+              <span class="thumb-slot thumb-slot-sm">
+                <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+                  <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.thumb-slot').classList.add('missing')" src="{{.ThumbURL}}" alt="">
+                </a>
+                <span class="thumb-missing">n/a</span>
+              </span>
               {{else if .Linkable}}
               <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
               {{end}}
@@ -679,9 +688,12 @@
         <tr>
           <td class="cell-preview">
             {{if .ThumbURL}}
-            <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
-              <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
-            </a>
+            <span class="thumb-slot">
+              <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+                <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.thumb-slot').classList.add('missing')" src="{{.ThumbURL}}" alt="">
+              </a>
+              <span class="thumb-missing">no preview</span>
+            </span>
             {{else if .Linkable}}
             <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
             {{else}}
