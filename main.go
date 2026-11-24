@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -47,6 +48,7 @@ var (
 	mediaSearchQuery        string
 	mediaSearchGuild        string
 	mediaSearchTrigger      bool
+	mediaCheckURL           string
 )
 
 func init() {
@@ -58,6 +60,7 @@ func init() {
 	flag.StringVar(&mediaSearchQuery, "media-search", "", "Search media library entries by query text and exit (requires -guild)")
 	flag.StringVar(&mediaSearchGuild, "guild", "", "Guild ID for -media-search")
 	flag.BoolVar(&mediaSearchTrigger, "trigger", false, "Search trigger embeddings instead of description embeddings in -media-search")
+	flag.StringVar(&mediaCheckURL, "media-check", "", "Dry-run refresh and link validation check for a media URL and exit")
 	if !runningUnderGoTest() {
 		flag.Parse()
 	}
@@ -89,10 +92,31 @@ func main() {
 	logger.InitFromConfig(&cfg.Logging)
 
 	// CLI modes run without opening a Discord connection and exit when done.
-	if importMediaLibrary != "" || mediaSearchQuery != "" {
-		if importMediaLibrary != "" && mediaSearchQuery != "" {
-			logger.Fatal("Cannot combine -import-media-library and -media-search")
+	cliModes := 0
+	if importMediaLibrary != "" {
+		cliModes++
+	}
+	if mediaSearchQuery != "" {
+		cliModes++
+	}
+	if mediaCheckURL != "" {
+		cliModes++
+	}
+	if cliModes > 1 {
+		logger.Fatal("Cannot combine -import-media-library, -media-search, and -media-check")
+	}
+	if mediaCheckURL != "" {
+		cliCtx, cliStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+		cliErr := runMediaCheck(cliCtx, cfg, mediaCheckURL, os.Stdout)
+		cliStop()
+		logger.Sync()
+		if cliErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", cliErr)
+			os.Exit(1)
 		}
+		return
+	}
+	if importMediaLibrary != "" || mediaSearchQuery != "" {
 		utils.SetLogger(logger.Log)
 		utils.InitializeDB(&cfg.Database, local)
 
@@ -198,8 +222,17 @@ func main() {
 		logger.Info("Media library disabled by configuration")
 	}
 	if mediaLibraryService != nil {
-		mediaLibraryService.SetDiscordRestClient(client.Rest)
-		defer mediaLibraryService.Close()
+		mediaRefreshClient := medialibrary.NewDiscordRefreshClient(
+			cfg.Discord.Token,
+			rest.WithLogger(slogLogger),
+		)
+		mediaLibraryService.SetDiscordRestClient(mediaRefreshClient)
+		defer func() {
+			mediaLibraryService.Close()
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer closeCancel()
+			mediaRefreshClient.Close(closeCtx)
+		}()
 	}
 
 	// Create AI service configuration from central config
@@ -691,4 +724,84 @@ func formatMediaSearchResults(hits []medialibrary.SearchHit) string {
 	}
 	return b.String()
 }
+
+func runMediaCheck(ctx context.Context, cfg *config.Config, rawURL string, out io.Writer) error {
+	var restClient rest.Client
+	if cfg != nil && strings.TrimSpace(cfg.Discord.Token) != "" {
+		restClient = medialibrary.NewDiscordRefreshClient(
+			cfg.Discord.Token,
+			rest.WithLogger(logger.NewSlogLogger()),
+		)
+		defer func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer closeCancel()
+			restClient.Close(closeCtx)
+		}()
+	}
+	return runMediaCheckWithClients(ctx, cfg, rawURL, restClient, nil, out)
+}
+
+func runMediaCheckWithClients(ctx context.Context, cfg *config.Config, rawURL string, restClient medialibrary.DiscordRestClient, httpClient *http.Client, out io.Writer) error {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return fmt.Errorf("-media-check requires a non-empty URL")
+	}
+
+	timeout := 5 * time.Second
+	if cfg != nil && cfg.MediaLibrary.LookupTimeoutMs > 0 {
+		timeout = time.Duration(cfg.MediaLibrary.LookupTimeoutMs) * time.Millisecond
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	report := medialibrary.CheckURL(checkCtx, trimmed, restClient, httpClient)
+	if cfg != nil {
+		report.Error = redactSecret(report.Error, cfg.Discord.Token)
+	}
+	_, err := io.WriteString(out, formatMediaCheckReport(report))
+	return err
+}
+
+func formatMediaCheckReport(report medialibrary.LinkCheckReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "is_attachment: %t\n", report.IsAttachment)
+	refreshStatus := report.RefreshStatus
+	if refreshStatus == "" {
+		refreshStatus = "-"
+	}
+	fmt.Fprintf(&b, "refresh_status: %s\n", refreshStatus)
+	refreshed := report.RefreshedHostPath
+	if refreshed == "" {
+		refreshed = "-"
+	}
+	fmt.Fprintf(&b, "refreshed_url: %s\n", refreshed)
+	if report.HeadStatus != 0 {
+		fmt.Fprintf(&b, "head_status: %d\n", report.HeadStatus)
+	} else {
+		fmt.Fprintf(&b, "head_status: -\n")
+	}
+	if report.GetStatus != 0 {
+		fmt.Fprintf(&b, "get_status: %d\n", report.GetStatus)
+	} else {
+		fmt.Fprintf(&b, "get_status: -\n")
+	}
+	verdict := report.Verdict
+	if verdict == "" {
+		verdict = "unknown"
+	}
+	fmt.Fprintf(&b, "verdict: %s\n", verdict)
+	if report.Error != "" {
+		fmt.Fprintf(&b, "error: %s\n", report.Error)
+	}
+	return b.String()
+}
+
+func redactSecret(s, secret string) string {
+	secret = strings.TrimSpace(secret)
+	if secret == "" || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, secret, "[REDACTED]")
+}
+
 

@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/disgoorg/disgo/rest"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/config"
@@ -163,4 +169,99 @@ func TestFormatMediaSearchResults(t *testing.T) {
 		}
 	}
 }
+
+func TestMediaCheckCLI(t *testing.T) {
+	const secretToken = "CLI_SECRET_BOT_TOKEN_123456"
+
+	t.Run("prints attachment refresh host/path without signature and never leaks token", func(t *testing.T) {
+		cdnServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer cdnServer.Close()
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Authorization"); got != "Bot "+secretToken {
+				t.Errorf("Authorization = %q, want Bot %s", got, secretToken)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"refreshed_urls": []map[string]string{
+					{
+						"original":  "https://cdn.discordapp.com/attachments/1/2/cat.gif",
+						"refreshed": cdnServer.URL + "/attachments/1/2/cat.gif?ex=111&is=222&hm=secret-sig",
+					},
+				},
+			})
+		}))
+		defer apiServer.Close()
+
+		restClient := medialibrary.NewDiscordRefreshClient(
+			secretToken,
+			rest.WithURL(apiServer.URL),
+			rest.WithHTTPClient(apiServer.Client()),
+		)
+		cfg := config.DefaultConfig()
+		cfg.Discord.Token = secretToken
+
+		var buf bytes.Buffer
+		err := runMediaCheckWithClients(
+			context.Background(),
+			cfg,
+			"https://cdn.discordapp.com/attachments/1/2/cat.gif",
+			restClient,
+			cdnServer.Client(),
+			&buf,
+		)
+		if err != nil {
+			t.Fatalf("runMediaCheckWithClients() error = %v", err)
+		}
+
+		out := buf.String()
+		for _, want := range []string{
+			"is_attachment: true",
+			"refresh_status: ok",
+			"/attachments/1/2/cat.gif",
+			"head_status: 200",
+			"get_status: -",
+			"verdict: alive",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("output missing %q:\n%s", want, out)
+			}
+		}
+		for _, forbidden := range []string{"secret-sig", "ex=111", secretToken} {
+			if strings.Contains(out, forbidden) {
+				t.Fatalf("output leaked %q:\n%s", forbidden, out)
+			}
+		}
+	})
+
+	t.Run("redacts bot token if ever present in error output and reports blocked private IP", func(t *testing.T) {
+		if got := redactSecret("failed with "+secretToken+" here", secretToken); strings.Contains(got, secretToken) || !strings.Contains(got, "[REDACTED]") {
+			t.Fatalf("redactSecret() = %q", got)
+		}
+
+		cfg := config.DefaultConfig()
+		cfg.Discord.Token = secretToken
+		var buf bytes.Buffer
+		err := runMediaCheckWithClients(context.Background(), cfg, "http://127.0.0.1:9999/secret.gif", nil, nil, &buf)
+		if err != nil {
+			t.Fatalf("runMediaCheckWithClients() error = %v", err)
+		}
+		out := buf.String()
+		for _, want := range []string{
+			"is_attachment: false",
+			"refresh_status: skipped",
+			"verdict: blocked",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("output missing %q:\n%s", want, out)
+			}
+		}
+		if strings.Contains(out, secretToken) {
+			t.Fatalf("output leaked bot token:\n%s", out)
+		}
+	})
+}
+
 
