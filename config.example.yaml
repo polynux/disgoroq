@@ -40,6 +40,8 @@ media_library:
   allow_discord_cdn: false
   repeat_window: 20
   lookup_timeout_ms: 3000
+  random_gif_fallback: false
+  gif_on_request: false
 
 ai:
   # Primary AI provider to use by default: "groq", "ollama", "opencode", or "openrouter"

@@ -1122,7 +1122,9 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		cfg.MediaLibrary.CrossGuild ||
 		cfg.MediaLibrary.AllowDiscordCDN ||
 		cfg.MediaLibrary.RepeatWindow != 20 ||
-		cfg.MediaLibrary.LookupTimeoutMs != 3000 {
+		cfg.MediaLibrary.LookupTimeoutMs != 3000 ||
+		cfg.MediaLibrary.RandomGifFallback ||
+		cfg.MediaLibrary.GifOnRequest {
 		t.Fatalf("unexpected media_library defaults: %+v", cfg.MediaLibrary)
 	}
 
@@ -1139,6 +1141,8 @@ func TestMediaLibraryConfigDefaultsAndValidation(t *testing.T) {
 		AllowDiscordCDN:      true,
 		RepeatWindow:         200,
 		LookupTimeoutMs:      1,
+		RandomGifFallback:    true,
+		GifOnRequest:         true,
 	}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() unexpected error for valid boundary config: %v", err)
@@ -1222,6 +1226,8 @@ media_library:
   cross_guild: true
   repeat_window: 10
   lookup_timeout_ms: 1500
+  random_gif_fallback: true
+  gif_on_request: true
 `
 	if err := os.WriteFile(configPath, []byte(yamlContent), 0644); err != nil {
 		t.Fatal(err)
@@ -1236,8 +1242,34 @@ media_library:
 		!loaded.MediaLibrary.CrossGuild ||
 		loaded.MediaLibrary.AllowDiscordCDN ||
 		loaded.MediaLibrary.RepeatWindow != 10 ||
-		loaded.MediaLibrary.LookupTimeoutMs != 1500 {
+		loaded.MediaLibrary.LookupTimeoutMs != 1500 ||
+		!loaded.MediaLibrary.RandomGifFallback ||
+		!loaded.MediaLibrary.GifOnRequest {
 		t.Fatalf("unexpected loaded media_library config: %+v", loaded.MediaLibrary)
+	}
+
+	// Verify omitting the two new keys keeps them false.
+	yamlMinimal := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+media_library:
+  enabled: true
+`
+	minimalPath := filepath.Join(tmpDir, "minimal.yaml")
+	if err := os.WriteFile(minimalPath, []byte(yamlMinimal), 0644); err != nil {
+		t.Fatal(err)
+	}
+	loadedMinimal, err := Load(minimalPath)
+	if err != nil {
+		t.Fatalf("Load() minimal error = %v", err)
+	}
+	if loadedMinimal.MediaLibrary.RandomGifFallback || loadedMinimal.MediaLibrary.GifOnRequest {
+		t.Fatalf("expected omitted random_gif_fallback and gif_on_request to default false, got %+v", loadedMinimal.MediaLibrary)
 	}
 }
 

@@ -187,7 +187,9 @@ func main() {
 					zap.Float64("min_trigger_similarity", cfg.MediaLibrary.MinTriggerSimilarity),
 					zap.Bool("cross_guild", cfg.MediaLibrary.CrossGuild),
 					zap.Bool("allow_discord_cdn", cfg.MediaLibrary.AllowDiscordCDN),
-					zap.Int("repeat_window", cfg.MediaLibrary.RepeatWindow))
+					zap.Int("repeat_window", cfg.MediaLibrary.RepeatWindow),
+					zap.Bool("random_gif_fallback", cfg.MediaLibrary.RandomGifFallback),
+					zap.Bool("gif_on_request", cfg.MediaLibrary.GifOnRequest))
 			}
 			hcCancel()
 		}
