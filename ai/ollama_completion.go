@@ -125,8 +125,9 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		if finishReason == "" {
 			finishReason = "stop"
 		}
+		cleaned := cleanCompletionReply(generated.Response, req.BotName)
 		var mediaURL string
-		if o.mediaResolver != nil {
+		if o.mediaResolver != nil && (cleaned != "" || attempt == 1 || len(ParseMediaTags(generated.Response)) > 0) {
 			if resolved, ok := o.mediaResolver.Resolve(ctx, MediaResolveRequest{
 				RawReply:   generated.Response,
 				GuildID:    req.GuildID,
@@ -137,7 +138,7 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 				mediaURL = resolved.URL
 			}
 		}
-		content := AssembleMediaReply(cleanCompletionReply(generated.Response, req.BotName), mediaURL)
+		content := AssembleMediaReply(cleaned, mediaURL)
 		response := &ChatResponse{
 			Content: content, MediaURL: mediaURL, Model: model,
 			TokensUsed:   generated.EvalCount + generated.PromptEvalCount,

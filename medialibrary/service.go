@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -227,10 +228,28 @@ func (s *Service) Close() {
 type resolveFailureReason string
 
 const (
-	reasonNoMatch resolveFailureReason = "no_match"
-	reasonJunk    resolveFailureReason = "junk"
-	reasonError   resolveFailureReason = "error"
+	reasonNoMatch   resolveFailureReason = "no_match"
+	reasonJunk      resolveFailureReason = "junk"
+	reasonError     resolveFailureReason = "error"
+	gifOnRequestTag                      = "gif_on_request"
 )
+
+var (
+	gifRequestPlaceholderPattern = regexp.MustCompile(`(?i)\[(?:gif|lien|image|youtube|tweet|tiktok|insta|son|steam|video|fichier|sticker)(?::[^\]]*)?\]`)
+	gifRequestURLPattern         = regexp.MustCompile(`(?i)(?:https?://|www\.)[^\s\p{Z}]+`)
+	gifRequestEmojiPattern       = regexp.MustCompile(`<a?:\w+:\d+>`)
+	gifRequestWordPattern        = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])gifs?(?:$|[^\p{L}\p{N}_])`)
+)
+
+// IsGifRequest reports whether text explicitly asks for a gif (standalone
+// case-insensitive word "gif" or "gifs"), ignoring media placeholder tags,
+// raw URLs, and Discord custom emoji markup.
+func IsGifRequest(text string) bool {
+	cleaned := gifRequestPlaceholderPattern.ReplaceAllString(text, " ")
+	cleaned = gifRequestURLPattern.ReplaceAllString(cleaned, " ")
+	cleaned = gifRequestEmojiPattern.ReplaceAllString(cleaned, " ")
+	return gifRequestWordPattern.MatchString(cleaned)
+}
 
 // Resolve implements ai.MediaResolver. It runs under a dedicated short timeout
 // independent of the completion context so a slow or hung embedder only strips
@@ -241,7 +260,8 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 	}
 
 	tags := ai.ParseMediaTags(req.RawReply)
-	if len(tags) == 0 {
+	gifRequested := s.cfg.GifOnRequest && IsGifRequest(req.TargetText)
+	if len(tags) == 0 && !gifRequested {
 		return ai.MediaResolveResult{}, false
 	}
 
@@ -262,6 +282,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		fallbackTag     string
 		fallbackReason  resolveFailureReason
 		hasUnmatchedGif bool
+		triedBareGif    bool
 	)
 	recordGifFailure := func(tagRaw string, reason resolveFailureReason) {
 		if !hasUnmatchedGif {
@@ -287,7 +308,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 				recordGifFailure(tag.Raw, reasonJunk)
 				continue
 			}
-			reserve := s.cfg.RandomGifFallback && tag.Kind == "gif"
+			reserve := s.cfg.RandomGifFallback && (tag.Kind == "gif" || gifRequested)
 			if result, ok, hadErr := s.resolveDescribedTag(lookupCtx, req.GuildID, tag, filter, recentURLs, reserve); ok {
 				return result, true
 			} else if tag.Kind == "gif" {
@@ -300,6 +321,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 			continue
 		}
 		if tag.Kind == "gif" {
+			triedBareGif = true
 			reserve := s.cfg.RandomGifFallback
 			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs, reserve); ok {
 				return result, true
@@ -311,9 +333,30 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		}
 	}
 
+	triedRandomFallback := false
 	if hasUnmatchedGif && s.cfg.RandomGifFallback {
+		triedRandomFallback = true
 		if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, fallbackTag, fallbackReason, filter, recentURLs); ok {
 			return result, true
+		}
+	}
+
+	if gifRequested {
+		reqTag := ai.MediaTag{Raw: gifOnRequestTag, Kind: "gif"}
+		reason := reasonNoMatch
+		if !triedBareGif {
+			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, reqTag, req.TargetText, filter, recentURLs, s.cfg.RandomGifFallback); ok {
+				return result, true
+			} else if hadErr {
+				reason = reasonError
+			}
+		} else if hasUnmatchedGif {
+			reason = fallbackReason
+		}
+		if s.cfg.RandomGifFallback && !triedRandomFallback {
+			if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, reqTag.Raw, reason, filter, recentURLs); ok {
+				return result, true
+			}
 		}
 	}
 

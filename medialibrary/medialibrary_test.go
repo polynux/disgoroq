@@ -1952,3 +1952,233 @@ func TestResolveRandomGifFallbackCDNAndRepeatWindowExclusions(t *testing.T) {
 	assert.True(t, ai.IsDiscordCDNURL(res.URL), "expected CDN gif when AllowDiscordCDN is true, got %s", res.URL)
 }
 
+func TestIsGifRequest(t *testing.T) {
+	positive := []string{
+		"gif",
+		"GIF",
+		"gifs",
+		"GIFs",
+		"envoie un gif stp",
+		"un gif ?",
+		"un gif?",
+		"un gif\u00a0?",
+		"balance des gifs !",
+		"tu peux m'envoyer un GIF de chat.",
+		"(gif)",
+		"envoie un gif comme [gif: cat]",
+		"envoie un gif comme https://tenor.com/view/cat-1",
+		"<@12345> un gif stp",
+	}
+	for _, tc := range positive {
+		assert.True(t, IsGifRequest(tc), "expected %q to be detected as a gif request", tc)
+	}
+
+	negative := []string{
+		"",
+		"bonjour ça va ?",
+		"je vais te mettre une gifle",
+		"gifler quelqu'un",
+		"he is gifted",
+		"antigif",
+		"gifé",
+		"my_gif",
+		"gif2",
+		"[gif]",
+		"[gif: cat smile]",
+		"regarde [gif: funny cat]",
+		"https://tenor.com/view/cat-gif-12345",
+		"regarde https://example.com/funny.gif",
+		"<:gif:123456789>",
+		"<a:gif:123456789>",
+	}
+	for _, tc := range negative {
+		assert.False(t, IsGifRequest(tc), "expected %q NOT to be detected as a gif request", tc)
+	}
+}
+
+func TestResolveGifOnRequest(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	triggerURL := "https://tenor.com/view/trigger-cat-1"
+	fallbackURL := "https://tenor.com/view/random-popular-2"
+	exactYoutubeURL := "https://www.youtube.com/watch?v=existing123"
+
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:          "g1",
+		URL:              triggerURL,
+		Kind:             "gif",
+		Description:      "happy cat",
+		Uses:             1,
+		FirstSeen:        100,
+		LastSeen:         200,
+		TriggerText:      "envoie un gif de chat",
+		TriggerEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.92)),
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:          "g1",
+		URL:              fallbackURL,
+		Kind:             "gif",
+		Description:      "popular dance",
+		Uses:             5,
+		FirstSeen:        100,
+		LastSeen:         300,
+		TriggerText:      "autre chose",
+		TriggerEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.20)),
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:     "g1",
+		URL:         exactYoutubeURL,
+		Kind:        "youtube",
+		Description: "cool song",
+		Uses:        3,
+		FirstSeen:   100,
+		LastSeen:    200,
+	}))
+
+	embedder := newFakeEmbedder()
+	embedder.set("search_query: envoie un gif de chat stp", unitVec2D(1, 0))
+	unrelatedVec := make([]float32, EmbeddingDim)
+	unrelatedVec[2] = 1
+	embedder.set("search_query: un gif ?", unrelatedVec)
+	embedder.setErr("search_query: envoie un gif casse", errors.New("ollama 500"))
+
+	t.Run("disabled does nothing for text-only reply", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = false
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens frérot",
+			TargetText: "envoie un gif de chat stp",
+		})
+		assert.False(t, ok)
+	})
+
+	t.Run("uses trigger search first when enabled", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens bg",
+			TargetText: "envoie un gif de chat stp",
+		})
+		require.True(t, ok)
+		assert.Equal(t, triggerURL, res.URL)
+	})
+
+	t.Run("falls back to random gif when trigger misses and random_gif_fallback is enabled", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		logs := captureMediaLogs(t)
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "voilà pour toi",
+			TargetText: "un gif ?",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+
+		entries := logs.FilterMessage("Media library random gif fallback").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, "no_match", entries[0].ContextMap()["reason"])
+		assert.Equal(t, fallbackURL, entries[0].ContextMap()["url"])
+
+		// Embedder error also falls back to random gif with reason=error.
+		logsErr := captureMediaLogs(t)
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "voilà",
+			TargetText: "envoie un gif casse",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		entriesErr := logsErr.FilterMessage("Media library random gif fallback").All()
+		require.Len(t, entriesErr, 1)
+		assert.Equal(t, "error", entriesErr[0].ContextMap()["reason"])
+	})
+
+	t.Run("does not fall back to random gif when random_gif_fallback is disabled", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = false
+		svc := NewService(repo, embedder, cfg)
+
+		// Trigger match still succeeds without random_gif_fallback.
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens",
+			TargetText: "envoie un gif de chat stp",
+		})
+		require.True(t, ok)
+		assert.Equal(t, triggerURL, res.URL)
+
+		// Trigger miss stays text-only when random_gif_fallback is false.
+		_, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens",
+			TargetText: "un gif ?",
+		})
+		assert.False(t, ok)
+	})
+
+	t.Run("does not trigger on negative phrases like gifle or v1 gif tag", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		for _, target := range []string{
+			"je vais te mettre une gifle",
+			"regarde [gif: cat]",
+			"https://tenor.com/view/cat-gif-123",
+		} {
+			_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+				GuildID:    "g1",
+				RawReply:   "mdr",
+				TargetText: target,
+			})
+			assert.False(t, ok, "must not trigger gif_on_request for %q", target)
+		}
+	})
+
+	t.Run("does not override already resolved media URL", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens [youtube: cool song]",
+			TargetText: "envoie un gif de chat stp",
+		})
+		require.True(t, ok)
+		assert.Equal(t, exactYoutubeURL, res.URL)
+	})
+
+	t.Run("resolves gif when unmatched link tag leaves reply without media URL", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "tiens [youtube: unknown video]",
+			TargetText: "un gif ?",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+	})
+}
+
+

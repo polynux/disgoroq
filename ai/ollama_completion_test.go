@@ -320,6 +320,65 @@ func TestOllamaCompletionMediaResolver(t *testing.T) {
 		assert.Equal(t, "lol", resp.Content)
 		assert.Empty(t, resp.MediaURL)
 	})
+
+	t.Run("text-only reply keeps model text and appends resolved gif_on_request url", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"response":" tiens bg"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "gif_on_request", URL: "https://tenor.com/view/cat-smile-1"},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", GuildID: "g-1",
+			TargetMessageID: "m-1",
+			Messages:        []Message{{Role: RoleUser, MessageID: "m-1", AuthorID: "1", AuthorNick: "Alice", Text: "envoie un gif stp"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "tiens bg\nhttps://tenor.com/view/cat-smile-1", resp.Content)
+		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "envoie un gif stp", resolver.reqs[0].TargetText)
+	})
+
+	t.Run("empty tagless attempt 0 retries before calling resolver", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				_, _ = io.WriteString(w, `{"response":" @Deleted"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"response":" voilà"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "gif_on_request", URL: "https://tenor.com/view/cat-smile-1"},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", GuildID: "g-1",
+			Messages: []Message{{Role: RoleUser, AuthorID: "1", AuthorNick: "Alice", Text: "un gif ?"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 2, calls)
+		assert.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "voilà\nhttps://tenor.com/view/cat-smile-1", resp.Content)
+		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
+	})
 }
 
 func TestOllamaCompletionModeUsesRawGenerateAndRetriesEmpty(t *testing.T) {
