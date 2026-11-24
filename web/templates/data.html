@@ -40,9 +40,30 @@
 
 {{define "data_pagination"}}
 <div class="pagination">
-  {{if .Pagination.HasPrev}}<a class="btn btn-sm" href="{{.Pagination.PrevURL}}">&larr; Previous page</a>{{else}}<span class="btn btn-sm" aria-disabled="true">&larr; Previous page</span>{{end}}
-  <span class="muted">Page {{.Pagination.Page}} · {{.Pagination.Limit}} per page</span>
-  {{if .Pagination.HasNext}}<a class="btn btn-sm" href="{{.Pagination.NextURL}}">Next page &rarr;</a>{{else}}<span class="btn btn-sm" aria-disabled="true">Next page &rarr;</span>{{end}}
+  {{if .Pagination.FirstURL}}<a class="btn btn-sm" href="{{.Pagination.FirstURL}}">&laquo; First</a>{{else}}<span class="btn btn-sm" aria-disabled="true">&laquo; First</span>{{end}}
+  {{if .Pagination.HasPrev}}<a class="btn btn-sm" href="{{.Pagination.PrevURL}}">&larr; Previous</a>{{else}}<span class="btn btn-sm" aria-disabled="true">&larr; Previous</span>{{end}}
+  <span class="muted">Page {{.Pagination.Page}}{{if .Pagination.TotalPages}} of {{.Pagination.TotalPages}}{{end}} · {{.Pagination.Limit}} per page</span>
+  {{if .Pagination.HasNext}}<a class="btn btn-sm" href="{{.Pagination.NextURL}}">Next &rarr;</a>{{else}}<span class="btn btn-sm" aria-disabled="true">Next &rarr;</span>{{end}}
+  {{if .Pagination.LastURL}}<a class="btn btn-sm" href="{{.Pagination.LastURL}}">Last &raquo;</a>{{else}}<span class="btn btn-sm" aria-disabled="true">Last &raquo;</span>{{end}}
+  <form class="page-jump" method="get" action="/data">
+    {{range .Pagination.JumpQuery}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+    <label class="muted" for="page-jump-input">Go to page</label>
+    <input id="page-jump-input" name="page" type="number" min="1"{{if .Pagination.TotalPages}} max="{{.Pagination.TotalPages}}"{{end}} value="{{.Pagination.Page}}" inputmode="numeric" required>
+    <button type="submit" class="btn btn-sm">Go</button>
+  </form>
+</div>
+{{end}}
+
+{{define "data_embed"}}
+<div class="link-preview">
+  {{if .Image}}
+  <a class="link-preview-media" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+    <img class="link-preview-image" loading="lazy" referrerpolicy="no-referrer" onerror="this.closest('.link-preview-media').remove()" src="{{.Image}}" alt="">
+  </a>
+  {{end}}
+  <a class="link-preview-title" href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Title}}</a>
+  {{if .Description}}<div class="link-preview-desc muted">{{.Description}}</div>{{end}}
+  <div class="link-preview-site mono" title="{{.Site}}">{{.Site}}</div>
 </div>
 {{end}}
 
@@ -650,12 +671,14 @@
                 </a>
                 <span class="thumb-missing">n/a</span>
               </span>
+              {{if .Linkable}}<a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>{{else}}<span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>{{end}}
               {{else if .Linkable}}
-              <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
-              {{end}}
-              {{if .Linkable}}
-              <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
+              <div class="link-embed"{{if .EmbedURL}} hx-get="{{.EmbedURL}}" hx-trigger="revealed" hx-swap="innerHTML"{{end}}>
+                <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+                <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
+              </div>
               {{else}}
+              <span class="muted">unsafe URL</span>
               <span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>
               {{end}}
             </td>
@@ -694,14 +717,14 @@
               </a>
               <span class="thumb-missing">no preview</span>
             </span>
+            {{if .Linkable}}<a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>{{else}}<span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>{{end}}
             {{else if .Linkable}}
-            <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+            <div class="link-embed"{{if .EmbedURL}} hx-get="{{.EmbedURL}}" hx-trigger="revealed" hx-swap="innerHTML"{{end}}>
+              <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+              <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
+            </div>
             {{else}}
             <span class="muted">unsafe URL</span>
-            {{end}}
-            {{if .Linkable}}
-            <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
-            {{else}}
             <span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>
             {{end}}
           </td>

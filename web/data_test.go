@@ -214,7 +214,7 @@ func TestDataTabsEmpty(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "tab %s", tab)
 		body := rec.Body.String()
 		assert.Contains(t, body, want, "tab %s", tab)
-		assert.Contains(t, body, "Page 1 · 50 per page", "tab %s", tab)
+		assert.Contains(t, body, "Page 1 of 1 · 50 per page", "tab %s", tab)
 	}
 
 	// Unknown tab falls back to summaries.
@@ -234,7 +234,7 @@ func TestDataPaginationClampingAndBeyondEnd(t *testing.T) {
 	rec := env.get(t, "/data?tab=summaries")
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	assert.Contains(t, body, "Page 1 · 50 per page")
+	assert.Contains(t, body, "Page 1 of 2 · 50 per page")
 	assert.Contains(t, body, "unique-summary-50")
 	assert.NotContains(t, body, "unique-summary-00")
 	assert.Contains(t, body, "page=2")
@@ -243,7 +243,7 @@ func TestDataPaginationClampingAndBeyondEnd(t *testing.T) {
 	rec = env.get(t, "/data?tab=summaries&page=2")
 	require.Equal(t, http.StatusOK, rec.Code)
 	body = rec.Body.String()
-	assert.Contains(t, body, "Page 2 · 50 per page")
+	assert.Contains(t, body, "Page 2 of 2 · 50 per page")
 	assert.Contains(t, body, "unique-summary-00")
 	assert.Contains(t, body, "page=1")
 	assert.NotContains(t, body, "page=3")
@@ -251,21 +251,23 @@ func TestDataPaginationClampingAndBeyondEnd(t *testing.T) {
 	rec = env.get(t, "/data?tab=summaries&page=99")
 	require.Equal(t, http.StatusOK, rec.Code)
 	body = rec.Body.String()
-	assert.Contains(t, body, "No summaries match these filters.")
-	assert.Contains(t, body, "page=98")
+	// 51 rows at 50 per page is two pages; a hand-typed 99 clamps to the last.
+	assert.Contains(t, body, "Page 2 of 2 · 50 per page")
+	assert.Contains(t, body, "unique-summary-00")
+	assert.NotContains(t, body, "page=98")
 	assert.NotContains(t, body, "page=100")
 
 	rec = env.get(t, "/data?tab=summaries&page=-4&limit=-9")
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Page 1 · 50 per page")
+	assert.Contains(t, rec.Body.String(), "Page 1 of 2 · 50 per page")
 
 	rec = env.get(t, "/data?tab=summaries&page=abc&limit=xyz")
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "Page 1 · 50 per page")
+	assert.Contains(t, rec.Body.String(), "Page 1 of 2 · 50 per page")
 
 	rec = env.get(t, "/data?tab=summaries&limit=1000")
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "200 per page")
+	assert.Contains(t, rec.Body.String(), "Page 1 of 1 · 200 per page")
 }
 
 func TestDataSummaryNamesFiltersAndUnknownGuild(t *testing.T) {
@@ -819,7 +821,8 @@ func TestDataPageCeilingHasNoNextLink(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	assert.NotContains(t, body, fmt.Sprintf("page=%d", dataMaxPage+1))
-	assert.Contains(t, body, "Next page")
+	assert.Contains(t, body, "Page 1 of 1")
+	assert.Contains(t, body, `aria-disabled="true">Next`)
 }
 
 func TestDataWithoutRepoReturns503(t *testing.T) {

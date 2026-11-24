@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -79,12 +80,24 @@ type dataFilters struct {
 }
 
 type dataPagination struct {
-	Page    int
-	Limit   int
-	HasPrev bool
-	HasNext bool
-	PrevURL string
-	NextURL string
+	Page       int
+	Limit      int
+	Total      int64
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	PrevURL    string
+	NextURL    string
+	FirstURL   string
+	LastURL    string
+	JumpQuery  []queryField
+}
+
+// queryField is one filter value echoed as a hidden input so a page jump keeps
+// the active tab and filters.
+type queryField struct {
+	Name  string
+	Value string
 }
 
 // dataActionURLs holds fully built action URLs (path + current filters) so
@@ -188,6 +201,7 @@ type attachmentRowView struct {
 	DeleteURL     string
 	ThumbURL      string
 	ThumbHref     string
+	EmbedURL      string
 	ShortURL      string
 	Linkable      bool
 }
@@ -235,6 +249,7 @@ type mediaRowView struct {
 	LastSeen    string
 	ThumbURL    string
 	ThumbHref   string
+	EmbedURL    string
 	ShortURL    string
 	Linkable    bool
 }
@@ -250,6 +265,7 @@ type mediaSearchRowView struct {
 	Uses        int64
 	ThumbURL    string
 	ThumbHref   string
+	EmbedURL    string
 	ShortURL    string
 	Linkable    bool
 }
@@ -550,6 +566,15 @@ func previewHref(raw, thumb string) string {
 	return raw
 }
 
+// mediaEmbedURL points at the lazy OpenGraph card endpoint for link rows that
+// have no direct image of their own.
+func mediaEmbedURL(raw, thumb string) string {
+	if thumb != "" || !isSafeHTTPURL(raw) {
+		return ""
+	}
+	return "/data/media/embed?url=" + url.QueryEscape(strings.TrimSpace(raw))
+}
+
 func parseFlexibleTime(raw string) (time.Time, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -572,6 +597,65 @@ func dataURL(r *http.Request, page int) string {
 	values := r.URL.Query()
 	values.Set("page", strconv.Itoa(page))
 	return "/data?" + values.Encode()
+}
+
+// paginationJumpQuery echoes every current query value except the page itself
+// as hidden fields, so the jump form keeps the tab and filters.
+func paginationJumpQuery(values url.Values) []queryField {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if key == "page" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	fields := make([]queryField, 0, len(keys))
+	for _, key := range keys {
+		for _, value := range values[key] {
+			fields = append(fields, queryField{Name: key, Value: value})
+		}
+	}
+	return fields
+}
+
+func processedFlag(raw string) int {
+	switch raw {
+	case "yes":
+		return 1
+	case "no":
+		return 0
+	default:
+		return -1
+	}
+}
+
+// countDataRows returns the number of rows the active tab's filters match.
+func (s *Server) countDataRows(ctx context.Context, tab string, filters dataFilters, processed int, eventFilter database.EventListFilter) (int64, error) {
+	switch tab {
+	case "summaries":
+		return s.deps.Repo.CountConversationSummaries(ctx, filters.GuildID, filters.UserID)
+	case "buffer":
+		return s.deps.Repo.CountMessageBuffer(ctx, filters.GuildID, filters.ChannelID, filters.UserID, processed)
+	case "messages":
+		return s.deps.Repo.CountDiscordMessages(ctx, filters.GuildID, filters.ChannelID, filters.AuthorID, filters.Text, filters.IncludeDeleted == "1")
+	case "attachments":
+		return s.deps.Repo.CountAttachmentCache(ctx, filters.CacheKind, filters.Provider, filters.Model)
+	case "votes":
+		return s.deps.Repo.CountMessageVotes(ctx, filters.GuildID, filters.BotOnly == "1")
+	case "events":
+		return s.deps.Repo.CountBotEvents(ctx, eventFilter)
+	case "media":
+		if s.deps.MediaRepo == nil {
+			return 0, errors.New("media library repository is not configured")
+		}
+		return s.deps.MediaRepo.CountEntries(ctx, medialibrary.ListFilter{
+			GuildID: filters.GuildID,
+			Kind:    filters.MediaKind,
+			Text:    filters.MediaText,
+		})
+	}
+	return 0, nil
 }
 
 // dataActionURL returns path with the current filters as its query string.
@@ -699,6 +783,54 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		return data, errors.New("database repository is not configured")
 	}
 
+	processed := processedFlag(filters.Processed)
+	eventFilter := database.EventListFilter{
+		EventType: filters.EventType,
+		GuildID:   filters.GuildID,
+		HasError:  filters.HasError == "1",
+	}
+	if tab == "events" {
+		now := time.Now().UTC()
+		from, fromOK := parseFlexibleTime(filters.From)
+		if !fromOK {
+			from = now.Add(-24 * time.Hour)
+		}
+		to, toOK := parseFlexibleTime(filters.To)
+		if !toOK {
+			to = now
+		}
+		data.Filters.From = from.UTC().Format("2006-01-02T15:04")
+		data.Filters.To = to.UTC().Format("2006-01-02T15:04")
+		eventFilter.From = from.Unix()
+		eventFilter.To = to.Unix()
+	}
+
+	// Count the filtered rows once so the pagination can show the last page and
+	// clamp a hand-typed page number to a real one. A failed count only loses
+	// the total; the list still renders with prev/next.
+	if total, countErr := s.countDataRows(r.Context(), tab, filters, processed, eventFilter); countErr == nil {
+		lastPage := int((total + int64(limit) - 1) / int64(limit))
+		if lastPage < 1 {
+			lastPage = 1
+		}
+		if page > lastPage {
+			page = lastPage
+			data.Pagination.Page = page
+		}
+		offset = (page - 1) * limit
+		data.Pagination.Total = total
+		data.Pagination.TotalPages = lastPage
+	} else if tab != "events" {
+		logger.Warn("Failed to count data rows for pagination", zap.String("tab", tab), zap.Error(countErr))
+	}
+
+	data.Pagination.JumpQuery = paginationJumpQuery(query)
+	if page > 1 {
+		data.Pagination.HasPrev = true
+		data.Pagination.PrevURL = dataURL(r, page-1)
+		data.Pagination.FirstURL = dataURL(r, 1)
+	}
+
 	switch tab {
 	case "summaries":
 		rows, hasNext, listErr := s.deps.Repo.ListConversationSummaries(r.Context(), filters.GuildID, filters.UserID, limit, offset)
@@ -726,13 +858,6 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		}
 
 	case "buffer":
-		processed := -1
-		switch filters.Processed {
-		case "yes":
-			processed = 1
-		case "no":
-			processed = 0
-		}
 		rows, hasNext, listErr := s.deps.Repo.ListMessageBuffer(r.Context(), filters.GuildID, filters.ChannelID, filters.UserID, processed, limit, offset)
 		if listErr != nil {
 			return data, listErr
@@ -856,25 +981,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		}
 		data.EventTypes = eventTypes
 
-		now := time.Now().UTC()
-		from, fromOK := parseFlexibleTime(filters.From)
-		if !fromOK {
-			from = now.Add(-24 * time.Hour)
-		}
-		to, toOK := parseFlexibleTime(filters.To)
-		if !toOK {
-			to = now
-		}
-		data.Filters.From = from.UTC().Format("2006-01-02T15:04")
-		data.Filters.To = to.UTC().Format("2006-01-02T15:04")
-
-		rows, hasNext, listErr := s.deps.Repo.ListBotEvents(r.Context(), database.EventListFilter{
-			From:      from.Unix(),
-			To:        to.Unix(),
-			EventType: filters.EventType,
-			GuildID:   filters.GuildID,
-			HasError:  filters.HasError == "1",
-		}, limit, offset)
+		rows, hasNext, listErr := s.deps.Repo.ListBotEvents(r.Context(), eventFilter, limit, offset)
 		if listErr != nil {
 			return data, listErr
 		}
@@ -930,6 +1037,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				LastSeen:    formatUnixUTC(row.LastSeen),
 				ThumbURL:    thumb,
 				ThumbHref:   previewHref(row.URL, thumb),
+				EmbedURL:    mediaEmbedURL(row.URL, thumb),
 				ShortURL:    shortDisplayURL(row.URL),
 				Linkable:    isSafeHTTPURL(row.URL),
 			})
@@ -941,7 +1049,17 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		}
 	}
 
-	if data.Pagination.HasNext {
+	if data.Pagination.TotalPages > 0 {
+		if page < data.Pagination.TotalPages && page < dataMaxPage {
+			data.Pagination.HasNext = true
+			data.Pagination.NextURL = dataURL(r, page+1)
+			data.Pagination.LastURL = dataURL(r, data.Pagination.TotalPages)
+		} else {
+			data.Pagination.HasNext = false
+			data.Pagination.NextURL = ""
+		}
+	}
+	if data.Pagination.TotalPages == 0 && data.Pagination.HasNext {
 		if page < dataMaxPage {
 			data.Pagination.NextURL = dataURL(r, page+1)
 		} else {
@@ -987,6 +1105,7 @@ func (s *Server) fillMediaSearch(ctx context.Context, data *dataPageData, filter
 			Uses:        hit.Entry.Uses,
 			ThumbURL:    thumb,
 			ThumbHref:   previewHref(hit.Entry.URL, thumb),
+			EmbedURL:    mediaEmbedURL(hit.Entry.URL, thumb),
 			ShortURL:    shortDisplayURL(hit.Entry.URL),
 			Linkable:    isSafeHTTPURL(hit.Entry.URL),
 		})

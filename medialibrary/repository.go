@@ -188,11 +188,7 @@ type ListFilter struct {
 // ListEntries pages through media_library rows, newest last_seen first.
 // Only supplied filters become predicates. Embedding blobs are not selected.
 // hasMore reports whether another page exists.
-func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, offset int) ([]Entry, bool, error) {
-	var (
-		clauses []string
-		args    []any
-	)
+func listFilterWhere(filter ListFilter) (clauses []string, args []any) {
 	if filter.GuildID != "" {
 		clauses = append(clauses, "guild_id = ?")
 		args = append(args, filter.GuildID)
@@ -205,6 +201,25 @@ func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, 
 		clauses = append(clauses, "(INSTR(LOWER(description), LOWER(?)) > 0 OR INSTR(LOWER(trigger_text), LOWER(?)) > 0)")
 		args = append(args, filter.Text, filter.Text)
 	}
+	return clauses, args
+}
+
+// CountEntries returns how many rows ListEntries would paginate with the same filter.
+func (r *Repository) CountEntries(ctx context.Context, filter ListFilter) (int64, error) {
+	clauses, args := listFilterWhere(filter)
+	query := "SELECT COUNT(*) FROM media_library"
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	var total int64
+	if err := r.conn.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, offset int) ([]Entry, bool, error) {
+	clauses, args := listFilterWhere(filter)
 
 	query := `
 		SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text

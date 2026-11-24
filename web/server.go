@@ -43,6 +43,8 @@ type Server struct {
 
 	mediaProxy *mediaProxy
 
+	linkPreviewer *linkPreviewer
+
 	configSaveMu sync.Mutex
 
 	mu         sync.Mutex
@@ -78,6 +80,7 @@ func New(deps Deps, cfg config.WebConfig) *Server {
 		mediaToken = s.currentConfig().Discord.Token
 	}
 	s.mediaProxy = newMediaProxy(mediaToken)
+	s.linkPreviewer = newLinkPreviewer()
 	s.registerRoutes()
 	s.handler = s.withHostAllowlist(s.withCSRFGuard(s.mux))
 	return s

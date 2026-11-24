@@ -111,7 +111,15 @@ func (b *whereBuilder) queryArgs(extra ...any) []any {
 	return args
 }
 
-func (r *Repository) ListConversationSummaries(ctx context.Context, guildID, userID string, limit, offset int) ([]SummaryView, bool, error) {
+// countRows counts a table with the same predicates as its list query.
+// table is always an internal constant, never user input.
+func (r *Repository) countRows(ctx context.Context, table string, where whereBuilder) (int64, error) {
+	var total int64
+	err := r.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table+where.clause(), where.args...).Scan(&total)
+	return total, err
+}
+
+func conversationSummariesWhere(guildID, userID string) whereBuilder {
 	var where whereBuilder
 	if guildID != "" {
 		where.add("cs.guild_id = ?", guildID)
@@ -119,6 +127,17 @@ func (r *Repository) ListConversationSummaries(ctx context.Context, guildID, use
 	if userID != "" {
 		where.add("cs.user_id = ?", userID)
 	}
+	return where
+}
+
+// CountConversationSummaries returns the number of rows the summaries page
+// would paginate over with the same filters.
+func (r *Repository) CountConversationSummaries(ctx context.Context, guildID, userID string) (int64, error) {
+	return r.countRows(ctx, "conversation_summaries cs", conversationSummariesWhere(guildID, userID))
+}
+
+func (r *Repository) ListConversationSummaries(ctx context.Context, guildID, userID string, limit, offset int) ([]SummaryView, bool, error) {
+	where := conversationSummariesWhere(guildID, userID)
 
 	query := `
 		SELECT cs.id,
@@ -209,7 +228,7 @@ func (r *Repository) DeleteConversationSummariesForUser(ctx context.Context, gui
 
 // ListMessageBuffer returns buffered messages, newest first. processed is
 // -1 (all), 0 (unprocessed) or 1 (processed).
-func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, userID string, processed int, limit, offset int) ([]BufferMessageView, bool, error) {
+func messageBufferWhere(guildID, channelID, userID string, processed int) whereBuilder {
 	var where whereBuilder
 	if guildID != "" {
 		where.add("guild_id = ?", guildID)
@@ -228,6 +247,16 @@ func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, 
 	case 1:
 		where.add("processed = 1")
 	}
+	return where
+}
+
+// CountMessageBuffer counts buffered messages under the same filters.
+func (r *Repository) CountMessageBuffer(ctx context.Context, guildID, channelID, userID string, processed int) (int64, error) {
+	return r.countRows(ctx, "message_buffer", messageBufferWhere(guildID, channelID, userID, processed))
+}
+
+func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, userID string, processed int, limit, offset int) ([]BufferMessageView, bool, error) {
+	where := messageBufferWhere(guildID, channelID, userID, processed)
 
 	query := `
 		SELECT id, guild_id, channel_id, message_id, user_id, author_nick, content,
@@ -282,7 +311,7 @@ func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, 
 }
 
 // ListDiscordMessages returns cached Discord messages, newest first.
-func (r *Repository) ListDiscordMessages(ctx context.Context, guildID, channelID, authorID, text string, includeDeleted bool, limit, offset int) ([]DiscordMessageView, bool, error) {
+func discordMessagesWhere(guildID, channelID, authorID, text string, includeDeleted bool) whereBuilder {
 	var where whereBuilder
 	if guildID != "" {
 		where.add("guild_id = ?", guildID)
@@ -299,6 +328,16 @@ func (r *Repository) ListDiscordMessages(ctx context.Context, guildID, channelID
 	if !includeDeleted {
 		where.add("deleted_at IS NULL")
 	}
+	return where
+}
+
+// CountDiscordMessages counts cached messages under the same filters.
+func (r *Repository) CountDiscordMessages(ctx context.Context, guildID, channelID, authorID, text string, includeDeleted bool) (int64, error) {
+	return r.countRows(ctx, "discord_messages", discordMessagesWhere(guildID, channelID, authorID, text, includeDeleted))
+}
+
+func (r *Repository) ListDiscordMessages(ctx context.Context, guildID, channelID, authorID, text string, includeDeleted bool, limit, offset int) ([]DiscordMessageView, bool, error) {
+	where := discordMessagesWhere(guildID, channelID, authorID, text, includeDeleted)
 
 	query := `
 		SELECT message_id, channel_id, guild_id, author_id, author_username, content,
@@ -351,7 +390,7 @@ func (r *Repository) ListDiscordMessages(ctx context.Context, guildID, channelID
 }
 
 // ListAttachmentCache returns cached attachment results, newest first.
-func (r *Repository) ListAttachmentCache(ctx context.Context, kind, provider, model string, limit, offset int) ([]AttachmentCacheView, bool, error) {
+func attachmentCacheWhere(kind, provider, model string) whereBuilder {
 	var where whereBuilder
 	if kind != "" {
 		where.add("cache_kind = ?", kind)
@@ -362,6 +401,16 @@ func (r *Repository) ListAttachmentCache(ctx context.Context, kind, provider, mo
 	if model != "" {
 		where.add("model = ?", model)
 	}
+	return where
+}
+
+// CountAttachmentCache counts cached attachments under the same filters.
+func (r *Repository) CountAttachmentCache(ctx context.Context, kind, provider, model string) (int64, error) {
+	return r.countRows(ctx, "attachment_cache", attachmentCacheWhere(kind, provider, model))
+}
+
+func (r *Repository) ListAttachmentCache(ctx context.Context, kind, provider, model string, limit, offset int) ([]AttachmentCacheView, bool, error) {
+	where := attachmentCacheWhere(kind, provider, model)
 
 	query := `
 		SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
@@ -415,7 +464,7 @@ func (r *Repository) DeleteAttachmentCacheByID(ctx context.Context, id int64) (i
 }
 
 // ListMessageVotes returns votes ordered by sort: newest, good, or bad.
-func (r *Repository) ListMessageVotes(ctx context.Context, guildID string, botOnly bool, sort string, limit, offset int) ([]MessageVote, bool, error) {
+func messageVotesWhere(guildID string, botOnly bool) whereBuilder {
 	var where whereBuilder
 	if guildID != "" {
 		where.add("guild_id = ?", guildID)
@@ -423,6 +472,16 @@ func (r *Repository) ListMessageVotes(ctx context.Context, guildID string, botOn
 	if botOnly {
 		where.add("is_bot_reply = 1")
 	}
+	return where
+}
+
+// CountMessageVotes counts votes under the same filters (sort is irrelevant).
+func (r *Repository) CountMessageVotes(ctx context.Context, guildID string, botOnly bool) (int64, error) {
+	return r.countRows(ctx, "message_votes", messageVotesWhere(guildID, botOnly))
+}
+
+func (r *Repository) ListMessageVotes(ctx context.Context, guildID string, botOnly bool, sort string, limit, offset int) ([]MessageVote, bool, error) {
+	where := messageVotesWhere(guildID, botOnly)
 
 	orderBy := "created_at DESC, message_id"
 	switch sort {
@@ -485,7 +544,7 @@ func (r *Repository) ListMessageVotes(ctx context.Context, guildID string, botOn
 // ListBotEvents returns events inside the filter's time range, newest first.
 // The timestamp range keeps the query on idx_bot_events_timestamp, optional
 // predicates are only emitted when set, and LIMIT/OFFSET is always applied.
-func (r *Repository) ListBotEvents(ctx context.Context, filter EventListFilter, limit, offset int) ([]BotEvent, bool, error) {
+func botEventsWhere(filter EventListFilter) whereBuilder {
 	where := whereBuilder{}
 	where.add("timestamp >= ?", filter.From)
 	where.add("timestamp <= ?", filter.To)
@@ -498,6 +557,16 @@ func (r *Repository) ListBotEvents(ctx context.Context, filter EventListFilter, 
 	if filter.HasError {
 		where.add("error IS NOT NULL AND error != ''")
 	}
+	return where
+}
+
+// CountBotEvents counts events inside the filter's time range and predicates.
+func (r *Repository) CountBotEvents(ctx context.Context, filter EventListFilter) (int64, error) {
+	return r.countRows(ctx, "bot_events", botEventsWhere(filter))
+}
+
+func (r *Repository) ListBotEvents(ctx context.Context, filter EventListFilter, limit, offset int) ([]BotEvent, bool, error) {
+	where := botEventsWhere(filter)
 
 	query := `
 		SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error

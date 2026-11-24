@@ -52,6 +52,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /data/media/delete", s.handleDataMediaDelete)
 	s.mux.HandleFunc("POST /data/media/edit", s.handleDataMediaEdit)
 	s.mux.HandleFunc("GET /data/media/thumb", s.handleMediaThumb)
+	s.mux.HandleFunc("GET /data/media/embed", s.handleMediaEmbed)
 }
 
 type stubPageData struct {
