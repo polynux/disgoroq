@@ -569,6 +569,66 @@ th {
   min-width: 720px;
 }
 
+.data-table {
+  table-layout: fixed;
+}
+
+.data-table th,
+.data-table td {
+  overflow-wrap: anywhere;
+}
+
+.summaries-table th:nth-child(1) { width: 190px; }
+.summaries-table th:nth-child(2) { width: 80px; }
+.summaries-table th:nth-child(3) { width: 120px; }
+.summaries-table th:nth-child(4) { width: 120px; }
+.summaries-table th:nth-child(6) { width: 80px; }
+
+.buffer-table th:nth-child(1) { width: 110px; }
+.buffer-table th:nth-child(2) { width: 180px; }
+.buffer-table th:nth-child(3) { width: 140px; }
+.buffer-table th:nth-child(4) { width: 140px; }
+.buffer-table th:nth-child(5) { width: 80px; }
+
+.messages-table th:nth-child(1) { width: 110px; }
+.messages-table th:nth-child(2) { width: 170px; }
+.messages-table th:nth-child(3) { width: 140px; }
+.messages-table th:nth-child(4) { width: 140px; }
+.messages-table th:nth-child(6) { width: 90px; }
+.messages-table th:nth-child(7) { width: 100px; }
+
+.attachments-table th:nth-child(1) { width: 105px; }
+.attachments-table th:nth-child(2) { width: 190px; }
+.attachments-table th:nth-child(3) { width: 300px; }
+.attachments-table th:nth-child(4) { width: 70px; }
+.attachments-table th:nth-child(5) { width: 110px; }
+.attachments-table th:nth-child(7) { width: 90px; }
+
+.votes-table th:nth-child(1) { width: 110px; }
+.votes-table th:nth-child(2) { width: 170px; }
+.votes-table th:nth-child(3) { width: 160px; }
+.votes-table th:nth-child(4) { width: 80px; }
+.votes-table th:nth-child(6) { width: 120px; }
+
+.events-table th:nth-child(1) { width: 110px; }
+.events-table th:nth-child(2) { width: 150px; }
+.events-table th:nth-child(3) { width: 170px; }
+.events-table th:nth-child(4) { width: 140px; }
+.events-table th:nth-child(5) { width: 130px; }
+.events-table th:nth-child(6) { width: 80px; }
+
+.search-table th:nth-child(1) { width: 80px; }
+.search-table th:nth-child(2) { width: 170px; }
+.search-table th:nth-child(3) { width: 70px; }
+.search-table th:nth-child(6) { width: 60px; }
+.search-table th:nth-child(7) { width: 150px; }
+
+.media-table th:nth-child(1) { width: 150px; }
+.media-table th:nth-child(2) { width: 70px; }
+.media-table th:nth-child(5) { width: 60px; }
+.media-table th:nth-child(6) { width: 220px; }
+.media-table th:nth-child(7) { width: 90px; }
+
 .pagination {
   display: flex;
   align-items: center;
@@ -691,7 +751,7 @@ th {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  min-width: 220px;
+  min-width: 0;
 }
 
 .file-meta {
