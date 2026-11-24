@@ -358,8 +358,8 @@ func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
 	}
 
 	var (
-		mu         sync.Mutex
-		tempsSeen  []float64
+		mu        sync.Mutex
+		tempsSeen []float64
 	)
 	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct {
@@ -436,4 +436,3 @@ func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
 		t.Fatalf("expected guild temperature 0.85, got %v", tempsSeen[1])
 	}
 }
-
