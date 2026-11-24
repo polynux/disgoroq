@@ -557,7 +557,7 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 			if isBlockReplacement {
 				comment := string(bytes.TrimRight(src[commentStart:lineEnd], " \t"))
 				replacement := " " + attachBlockHeaderComment(emitted, comment, eol)
-				return keepFollowingCommentsOutOfBlock(spliceBytes(src, insertPos, lineEnd, []byte(replacement)), insertPos+len(replacement), keyIndent, eol), nil
+				return keepFollowingCommentsOutOfBlock(spliceBytes(src, insertPos, lineEnd, []byte(replacement)), insertPos+len(replacement), keyIndent), nil
 			}
 			replacement := " " + emitted + " "
 			return spliceBytes(src, insertPos, commentStart, []byte(replacement)), nil
@@ -565,7 +565,7 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 		replacement := " " + emitted
 		out := spliceBytes(src, insertPos, lineEnd, []byte(replacement))
 		if isBlockReplacement {
-			out = keepFollowingCommentsOutOfBlock(out, insertPos+len(replacement), keyIndent, eol)
+			out = keepFollowingCommentsOutOfBlock(out, insertPos+len(replacement), keyIndent)
 		}
 		return out, nil
 	}
@@ -589,7 +589,7 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 		}
 		out := spliceBytes(src, start, end, []byte(emitted))
 		if isBlockReplacement {
-			out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent, eol)
+			out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent)
 		}
 		return out, nil
 	}
@@ -609,7 +609,7 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 
 	out := spliceBytes(src, start, end, []byte(emitted))
 	if isBlockReplacement {
-		out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent, eol)
+		out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent)
 	}
 	return out, nil
 }
@@ -618,7 +618,7 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 // newly emitted "|-" block (written at keyIndent+2) to keyIndent. A comment
 // indented at or past the block's content indent would otherwise be read as
 // block text. Blank lines are skipped; the run ends at the first other line.
-func keepFollowingCommentsOutOfBlock(out []byte, after, keyIndent int, eol string) []byte {
+func keepFollowingCommentsOutOfBlock(out []byte, after, keyIndent int) []byte {
 	contentIndent := keyIndent + 2
 	pos := after
 	if i := bytes.IndexByte(out[pos:], '\n'); i >= 0 {
@@ -839,6 +839,7 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 	}
 
 	var b strings.Builder
+	blockEnd, blockIndent := -1, 0
 	b.WriteString(prefix)
 	for i, key := range remaining {
 		indent := baseIndent + i*2
@@ -867,11 +868,20 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 			}
 			b.WriteByte(' ')
 			b.WriteString(emitted)
+			if strings.HasPrefix(emitted, "|-") {
+				blockEnd, blockIndent = b.Len(), indent
+			}
 		}
 	}
 	b.WriteString(suffix)
 
-	return spliceBytes(src, spliceFrom, spliceTo, []byte(b.String())), nil
+	out := spliceBytes(src, spliceFrom, spliceTo, []byte(b.String()))
+	if blockEnd >= 0 {
+		// A comment that followed the insertion point would otherwise read as
+		// text of the new block (written at blockIndent+2).
+		out = keepFollowingCommentsOutOfBlock(out, spliceFrom+blockEnd, blockIndent)
+	}
+	return out, nil
 }
 
 func findKeyColonOffset(li lineIndex, keyNode *yaml.Node) (int, bool) {

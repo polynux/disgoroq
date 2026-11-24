@@ -91,6 +91,18 @@ func TestPatchKeepsCommentsAroundBlockScalarsAndLists(t *testing.T) {
 			patch: yamlPatch{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"a", "b"}},
 			want:  "bot:\n  trigger_words: # keep\n    - a\n    - b\nlogging:\n  level: info\n",
 		},
+		{
+			name:  "inserting a multi-line field above a commented-out list item",
+			src:   "bot:\n  trigger_words:\n    - foo\n    # - bar\nlogging:\n  level: info\n",
+			patch: yamlPatch{Path: "bot.default_prompt", Kind: fieldKindText, Val: "line1\nline2"},
+			want:  "bot:\n  trigger_words:\n    - foo\n  default_prompt: |-\n    line1\n    line2\n  # - bar\nlogging:\n  level: info\n",
+		},
+		{
+			name:  "inserting a multi-line field into an empty section with a deep comment",
+			src:   "votes:\n      # deep\nlogging:\n  level: info\n",
+			patch: yamlPatch{Path: "votes.good_emoji", Kind: fieldKindText, Val: "line1\nline2"},
+			want:  "votes:\n  good_emoji: |-\n    line1\n    line2\n  # deep\nlogging:\n  level: info\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
