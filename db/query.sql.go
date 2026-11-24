@@ -10,6 +10,19 @@ import (
 	"database/sql"
 )
 
+const deleteAttachmentCacheByID = `-- name: DeleteAttachmentCacheByID :execrows
+DELETE FROM attachment_cache
+WHERE id = ?
+`
+
+func (q *Queries) DeleteAttachmentCacheByID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAttachmentCacheByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteAttachmentCacheOlderThan = `-- name: DeleteAttachmentCacheOlderThan :execrows
 DELETE FROM attachment_cache
 WHERE created_at < ?
@@ -17,6 +30,42 @@ WHERE created_at < ?
 
 func (q *Queries) DeleteAttachmentCacheOlderThan(ctx context.Context, createdAt int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteAttachmentCacheOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteConversationSummariesForUser = `-- name: DeleteConversationSummariesForUser :execrows
+DELETE FROM conversation_summaries
+WHERE guild_id = ? AND user_id = ?
+`
+
+type DeleteConversationSummariesForUserParams struct {
+	GuildID string
+	UserID  string
+}
+
+func (q *Queries) DeleteConversationSummariesForUser(ctx context.Context, arg DeleteConversationSummariesForUserParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteConversationSummariesForUser, arg.GuildID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteConversationSummaryByID = `-- name: DeleteConversationSummaryByID :execrows
+
+DELETE FROM conversation_summaries
+WHERE id = ?
+`
+
+// Web admin data views
+// Admin list queries are built in database/data_views.go and
+// medialibrary/repository.go so only supplied filters become predicates.
+// These statement-level queries never select embedding blobs.
+func (q *Queries) DeleteConversationSummaryByID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteConversationSummaryByID, id)
 	if err != nil {
 		return 0, err
 	}
@@ -50,7 +99,7 @@ func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSetting
 	return err
 }
 
-const deleteMediaLibraryEntry = `-- name: DeleteMediaLibraryEntry :exec
+const deleteMediaLibraryEntry = `-- name: DeleteMediaLibraryEntry :execrows
 DELETE FROM media_library
 WHERE url = ? AND guild_id = ?
 `
@@ -60,9 +109,12 @@ type DeleteMediaLibraryEntryParams struct {
 	GuildID string
 }
 
-func (q *Queries) DeleteMediaLibraryEntry(ctx context.Context, arg DeleteMediaLibraryEntryParams) error {
-	_, err := q.db.ExecContext(ctx, deleteMediaLibraryEntry, arg.Url, arg.GuildID)
-	return err
+func (q *Queries) DeleteMediaLibraryEntry(ctx context.Context, arg DeleteMediaLibraryEntryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteMediaLibraryEntry, arg.Url, arg.GuildID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteMessageBufferEntry = `-- name: DeleteMessageBufferEntry :exec
@@ -718,6 +770,38 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 	return items, nil
 }
 
+const getGuildSettingsByGuild = `-- name: GetGuildSettingsByGuild :many
+SELECT name, value FROM guild_settings WHERE guild_id = ?
+`
+
+type GetGuildSettingsByGuildRow struct {
+	Name  string
+	Value string
+}
+
+func (q *Queries) GetGuildSettingsByGuild(ctx context.Context, guildID string) ([]GetGuildSettingsByGuildRow, error) {
+	rows, err := q.db.QueryContext(ctx, getGuildSettingsByGuild, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetGuildSettingsByGuildRow
+	for rows.Next() {
+		var i GetGuildSettingsByGuildRow
+		if err := rows.Scan(&i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getGuildsWithAutoJoin = `-- name: GetGuildsWithAutoJoin :many
 SELECT guild_id, auto_join_channel
 FROM voice_settings
@@ -1311,6 +1395,36 @@ func (q *Queries) InsertSummary(ctx context.Context, arg InsertSummaryParams) er
 		arg.Embedding,
 	)
 	return err
+}
+
+const listBotEventTypes = `-- name: ListBotEventTypes :many
+SELECT DISTINCT event_type
+FROM bot_events
+ORDER BY event_type
+LIMIT 500
+`
+
+func (q *Queries) ListBotEventTypes(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listBotEventTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var event_type string
+		if err := rows.Scan(&event_type); err != nil {
+			return nil, err
+		}
+		items = append(items, event_type)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markDiscordMessageDeleted = `-- name: MarkDiscordMessageDeleted :exec
@@ -1913,6 +2027,39 @@ func (q *Queries) SetVoiceSettings(ctx context.Context, arg SetVoiceSettingsPara
 		arg.VoiceEnabled,
 	)
 	return err
+}
+
+const updateMediaLibraryText = `-- name: UpdateMediaLibraryText :execrows
+UPDATE media_library
+SET description = ?,
+    trigger_text = ?,
+    description_embedding = ?,
+    trigger_embedding = ?
+WHERE url = ? AND guild_id = ?
+`
+
+type UpdateMediaLibraryTextParams struct {
+	Description          string
+	TriggerText          string
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+	Url                  string
+	GuildID              string
+}
+
+func (q *Queries) UpdateMediaLibraryText(ctx context.Context, arg UpdateMediaLibraryTextParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateMediaLibraryText,
+		arg.Description,
+		arg.TriggerText,
+		arg.DescriptionEmbedding,
+		arg.TriggerEmbedding,
+		arg.Url,
+		arg.GuildID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateMessageVoteCounts = `-- name: UpdateMessageVoteCounts :exec

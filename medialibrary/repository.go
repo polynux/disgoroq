@@ -44,11 +44,12 @@ type LookupFilter struct {
 // Repository wraps sqlc queries for media_library and cached discord_messages.
 type Repository struct {
 	queries *db.Queries
+	conn    *sql.DB
 }
 
 // NewRepository creates a Repository backed by dbConn.
 func NewRepository(dbConn *sql.DB) *Repository {
-	return &Repository{queries: db.New(dbConn)}
+	return &Repository{queries: db.New(dbConn), conn: dbConn}
 }
 
 func nullableBlob(b []byte) any {
@@ -168,11 +169,99 @@ func (r *Repository) UpsertLive(ctx context.Context, entry Entry) error {
 	})
 }
 
-// DeleteEntry deletes a single media_library row identified by canonical URL and guild ID.
-func (r *Repository) DeleteEntry(ctx context.Context, rawURL, guildID string) error {
+// DeleteEntry deletes a single media_library row identified by canonical URL and
+// guild ID, reporting how many rows were removed.
+func (r *Repository) DeleteEntry(ctx context.Context, rawURL, guildID string) (int64, error) {
 	return r.queries.DeleteMediaLibraryEntry(ctx, db.DeleteMediaLibraryEntryParams{
 		Url:     rawURL,
 		GuildID: guildID,
+	})
+}
+
+// ListFilter narrows media_library browsing queries.
+type ListFilter struct {
+	GuildID string
+	Kind    string
+	Text    string // case-insensitive substring of description or trigger_text
+}
+
+// ListEntries pages through media_library rows, newest last_seen first.
+// Only supplied filters become predicates. Embedding blobs are not selected.
+// hasMore reports whether another page exists.
+func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, offset int) ([]Entry, bool, error) {
+	var (
+		clauses []string
+		args    []any
+	)
+	if filter.GuildID != "" {
+		clauses = append(clauses, "guild_id = ?")
+		args = append(args, filter.GuildID)
+	}
+	if filter.Kind != "" {
+		clauses = append(clauses, "kind = ?")
+		args = append(args, filter.Kind)
+	}
+	if filter.Text != "" {
+		clauses = append(clauses, "(INSTR(LOWER(description), LOWER(?)) > 0 OR INSTR(LOWER(trigger_text), LOWER(?)) > 0)")
+		args = append(args, filter.Text, filter.Text)
+	}
+
+	query := `
+		SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+		FROM media_library`
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += `
+		ORDER BY last_seen DESC, id DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit+1, offset)
+
+	rows, err := r.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+
+	var out []Entry
+	for rows.Next() {
+		var entry Entry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.GuildID,
+			&entry.URL,
+			&entry.Kind,
+			&entry.Description,
+			&entry.Uses,
+			&entry.FirstSeen,
+			&entry.LastSeen,
+			&entry.TriggerText,
+		); err != nil {
+			return nil, false, err
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	return out, hasMore, nil
+}
+
+// UpdateText writes description, trigger_text and both embeddings in one statement.
+// Embeddings must already be computed by the caller; nil leaves the column NULL.
+func (r *Repository) UpdateText(ctx context.Context, guildID, rawURL, description, triggerText string, descriptionEmbedding, triggerEmbedding []byte) (int64, error) {
+	return r.queries.UpdateMediaLibraryText(ctx, db.UpdateMediaLibraryTextParams{
+		GuildID:              guildID,
+		Url:                  rawURL,
+		Description:          description,
+		TriggerText:          triggerText,
+		DescriptionEmbedding: nullableBlob(descriptionEmbedding),
+		TriggerEmbedding:     nullableBlob(triggerEmbedding),
 	})
 }
 

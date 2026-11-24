@@ -131,6 +131,22 @@ Security note: keep `server.secret_key` private. If a real secret key was pasted
 - The build and test workflow expects the local `libdave` pkg-config path used by the Makefile.
 - Per-guild voice usage is still gated by stored `voice_enabled` settings.
 
+## Web Admin UI
+
+- Optional and disabled by default. Enable it under `web` in `config.yaml`:
+
+  ```yaml
+  web:
+    enabled: true
+    listen: "127.0.0.1:8090"   # use a LAN IP or 0.0.0.0 to reach it from another machine
+    allowed_hosts: []          # extra Host names/IPs you browse it with, e.g. ["msi.local", "192.168.1.20"]
+  ```
+
+- It edits per-guild settings (the same ones the slash commands manage); changes apply immediately.
+- **There is no login.** Anyone who can reach `listen` can change the bot's settings. Keep it on localhost or a trusted network.
+- Requests are rejected unless their `Host` is `localhost`, `127.0.0.1`, `::1`, the listen host, or an `allowed_hosts` entry. When listening on `0.0.0.0`, add the names you browse it with to `allowed_hosts`.
+- Cross-site form posts are rejected, so a random web page can't change settings through your browser.
+
 ## Notes
 
 - Local slash command registration uses `discord.dev_guild_ids` from config.

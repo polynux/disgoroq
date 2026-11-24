@@ -12,7 +12,7 @@ import (
 )
 
 func TestVoteRecountCoalescesTriggersAndAdopt(t *testing.T) {
-	handler := NewVoteHandler(nil, nil, config.VotesConfig{Enabled: true})
+	handler := NewVoteHandler(nil, nil, config.NewRuntime(&config.Config{Votes: config.VotesConfig{Enabled: true}}))
 	started := make(chan bool, 2)
 	release := make(chan struct{})
 	var executions atomic.Int32
@@ -56,7 +56,7 @@ func TestVoteRecountCoalescesTriggersAndAdopt(t *testing.T) {
 }
 
 func TestVoteRecountsForDifferentMessagesRunInParallel(t *testing.T) {
-	handler := NewVoteHandler(nil, nil, config.VotesConfig{Enabled: true})
+	handler := NewVoteHandler(nil, nil, config.NewRuntime(&config.Config{Votes: config.VotesConfig{Enabled: true}}))
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	handler.recountFn = func(_, _, _ snowflake.ID, _ bool) {

@@ -31,7 +31,7 @@ type Scheduler struct {
 	memoryCfg       config.MemoryConfig
 }
 
-func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, reengageCfg config.ReengageConfig, defaultPrompt string, memoryCfg config.MemoryConfig) *Scheduler {
+func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, emojiManager *emoji.Manager, horoscopeCfg config.HoroscopeConfig, memoryService memory.Service, cfgRuntime *config.Runtime, memoryCfg config.MemoryConfig) *Scheduler {
 	location, _ := time.LoadLocation("Europe/Paris")
 	schedulerLogger := gocron.NewLogger(gocron.LogLevelInfo)
 	scheduler, schedulerErr := gocron.NewScheduler(gocron.WithLocation(location), gocron.WithLogger(schedulerLogger))
@@ -39,7 +39,7 @@ func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, e
 		logger.Error("Failed to create scheduler", zap.Error(schedulerErr))
 	}
 
-	reengageService := reengage.NewService(client, aiService, repo, memoryService, emojiManager, reengageCfg, defaultPrompt)
+	reengageService := reengage.NewService(client, aiService, repo, memoryService, emojiManager, cfgRuntime)
 
 	return &Scheduler{
 		client:          client,
@@ -50,7 +50,7 @@ func New(client *bot.Client, aiService *ai.Service, repo *database.Repository, e
 		emojiManager:    emojiManager,
 		horoscopeCfg:    horoscopeCfg,
 		reengageService: reengageService,
-		reengageCfg:     reengageCfg,
+		reengageCfg:     cfgRuntime.Current().Reengage,
 		memoryCfg:       memoryCfg,
 	}
 }

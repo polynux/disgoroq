@@ -1796,3 +1796,213 @@ ai:
 		}
 	})
 }
+
+func TestWebConfigDefaultsAndValidation(t *testing.T) {
+	defaults := DefaultConfig()
+	if defaults.Web.Enabled {
+		t.Errorf("DefaultConfig().Web.Enabled = true, want false")
+	}
+	if defaults.Web.Listen != "127.0.0.1:8090" {
+		t.Errorf("DefaultConfig().Web.Listen = %q, want %q", defaults.Web.Listen, "127.0.0.1:8090")
+	}
+	if len(defaults.Web.AllowedHosts) != 0 {
+		t.Errorf("DefaultConfig().Web.AllowedHosts = %v, want empty", defaults.Web.AllowedHosts)
+	}
+
+	makeBase := func() *Config {
+		cfg := DefaultConfig()
+		cfg.Discord.Token = "test-token"
+		cfg.Database.Local = true
+		cfg.AI.Groq.APIKey = "test-key"
+		cfg.Memory.Enabled = false
+		return cfg
+	}
+
+	t.Run("disabled ignores invalid listen", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = false
+		cfg.Web.Listen = "not-a-host-port"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error when web disabled: %v", err)
+		}
+	})
+
+	t.Run("enabled accepts valid listen and allowed_hosts", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "127.0.0.1:8090"
+		cfg.Web.AllowedHosts = []string{"admin.local", "10.0.0.5"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("enabled accepts ipv6 listen", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "[::1]:8090"
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() unexpected error: %v", err)
+		}
+	})
+
+	t.Run("enabled rejects invalid listen", func(t *testing.T) {
+		for _, listen := range []string{"", "127.0.0.1", "127.0.0.1:", "127.0.0.1:abc", "127.0.0.1:70000"} {
+			cfg := makeBase()
+			cfg.Web.Enabled = true
+			cfg.Web.Listen = listen
+			if err := cfg.Validate(); err == nil {
+				t.Errorf("Validate() accepted invalid web.listen %q", listen)
+			}
+		}
+	})
+
+	t.Run("enabled rejects empty allowed_hosts entry", func(t *testing.T) {
+		cfg := makeBase()
+		cfg.Web.Enabled = true
+		cfg.Web.Listen = "127.0.0.1:8090"
+		cfg.Web.AllowedHosts = []string{"   "}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "web.allowed_hosts") {
+			t.Fatalf("Validate() error = %v, want web.allowed_hosts error", err)
+		}
+	})
+
+	t.Run("enabled rejects allowed_hosts with scheme or path", func(t *testing.T) {
+		for _, host := range []string{"https://admin.example", "admin.example/path", "user@admin.example"} {
+			cfg := makeBase()
+			cfg.Web.Enabled = true
+			cfg.Web.AllowedHosts = []string{host}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "web.allowed_hosts") {
+				t.Errorf("Validate() accepted allowed_hosts entry %q (err=%v)", host, err)
+			}
+		}
+	})
+
+	t.Run("loads web section from YAML", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		configPath := filepath.Join(tmpDir, "config.yaml")
+		t.Setenv("DISCORD_TOKEN", "test-token")
+		t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+		content := `
+discord:
+  token: "${DISCORD_TOKEN}"
+database:
+  local: true
+memory:
+  enabled: false
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+web:
+  enabled: true
+  listen: "127.0.0.1:9090"
+  allowed_hosts:
+    - "bot.tailnet.ts.net"
+`
+		if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(configPath)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.Web.Enabled || cfg.Web.Listen != "127.0.0.1:9090" || len(cfg.Web.AllowedHosts) != 1 || cfg.Web.AllowedHosts[0] != "bot.tailnet.ts.net" {
+			t.Fatalf("unexpected web config: %+v", cfg.Web)
+		}
+	})
+}
+
+func TestParse(t *testing.T) {
+	t.Run("interpolates env vars, applies defaults, normalizes triggers, converts durations", func(t *testing.T) {
+		t.Setenv("PARSE_DISCORD_TOKEN", "tok-123")
+		t.Setenv("PARSE_GROQ_KEY", "groq-secret")
+
+		raw := []byte(`
+discord:
+  token: "${PARSE_DISCORD_TOKEN}"
+database:
+  local: true
+memory:
+  enabled: false
+  summary_interval_seconds: 120
+ai:
+  groq:
+    api_key: "${PARSE_GROQ_KEY}"
+  retry:
+    initial_delay_ms: 250
+    max_delay_ms: 2500
+  tools:
+    timeout_ms: 4500
+bot:
+  trigger_words:
+    - "  Feun "
+    - "FEUN"
+    - "Bot-One"
+`)
+
+		cfg, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		if cfg.Discord.Token != "tok-123" {
+			t.Errorf("Discord.Token = %q, want %q", cfg.Discord.Token, "tok-123")
+		}
+		if cfg.AI.Groq.APIKey != "groq-secret" {
+			t.Errorf("AI.Groq.APIKey = %q, want %q", cfg.AI.Groq.APIKey, "groq-secret")
+		}
+		if len(cfg.Bot.TriggerWords) != 2 || cfg.Bot.TriggerWords[0] != "feun" || cfg.Bot.TriggerWords[1] != "bot-one" {
+			t.Errorf("Bot.TriggerWords = %v, want [feun bot-one]", cfg.Bot.TriggerWords)
+		}
+		if cfg.AI.Retry.InitialDelay != 250*time.Millisecond {
+			t.Errorf("AI.Retry.InitialDelay = %v, want 250ms", cfg.AI.Retry.InitialDelay)
+		}
+		if cfg.AI.Retry.MaxDelay != 2500*time.Millisecond {
+			t.Errorf("AI.Retry.MaxDelay = %v, want 2500ms", cfg.AI.Retry.MaxDelay)
+		}
+		if cfg.AI.Tools.Timeout != 4500*time.Millisecond {
+			t.Errorf("AI.Tools.Timeout = %v, want 4500ms", cfg.AI.Tools.Timeout)
+		}
+		if cfg.Memory.SummaryInterval != 120*time.Second {
+			t.Errorf("Memory.SummaryInterval = %v, want 120s", cfg.Memory.SummaryInterval)
+		}
+		// Default applied for omitted field.
+		if cfg.Emoji.CacheTTLMinutes != DefaultConfig().Emoji.CacheTTLMinutes {
+			t.Errorf("Emoji.CacheTTLMinutes = %d, want default %d", cfg.Emoji.CacheTTLMinutes, DefaultConfig().Emoji.CacheTTLMinutes)
+		}
+	})
+
+	t.Run("fails on missing required env var", func(t *testing.T) {
+		raw := []byte(`
+discord:
+  token: "${UNSET_PARSE_VAR_FOR_TEST}"
+database:
+  local: true
+memory:
+  enabled: false
+`)
+		if _, err := Parse(raw); err == nil {
+			t.Fatal("Parse() expected error for unset env var, got nil")
+		}
+	})
+
+	t.Run("fails on validation error", func(t *testing.T) {
+		raw := []byte(`
+discord:
+  token: "tok"
+database:
+  local: true
+memory:
+  enabled: false
+ai:
+  groq:
+    api_key: "key"
+votes:
+  enabled: true
+  probability: 2.5
+`)
+		if _, err := Parse(raw); err == nil {
+			t.Fatal("Parse() expected validation error for invalid votes.probability, got nil")
+		}
+	})
+}

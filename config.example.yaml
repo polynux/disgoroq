@@ -433,3 +433,9 @@ voice:
 
     # Pre-buffer size for streaming playback (in milliseconds)
     stream_buffer_size: 200
+
+# Embedded web admin UI (no authentication; bind to localhost or a private interface).
+web:
+  enabled: false
+  listen: "127.0.0.1:8090"
+  allowed_hosts: []

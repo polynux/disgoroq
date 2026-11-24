@@ -167,13 +167,14 @@ func handleTriggerWordsReset(e *events.ApplicationCommandInteractionCreate, repo
 		return
 	}
 
-	if len(defaultTriggerWords) == 0 {
+	defaults := currentDefaultTriggerWords()
+	if len(defaults) == 0 {
 		_ = e.CreateMessage(discord.MessageCreate{Content: "✅ Trigger words reset. No default trigger words are configured."})
 		return
 	}
 
 	_ = e.CreateMessage(discord.MessageCreate{
-		Content:         fmt.Sprintf("✅ Trigger words reset to defaults: `%s`", strings.Join(defaultTriggerWords, "`, `")),
+		Content:         fmt.Sprintf("✅ Trigger words reset to defaults: `%s`", strings.Join(defaults, "`, `")),
 		AllowedMentions: &discord.AllowedMentions{Parse: []discord.AllowedMentionType{}},
 	})
 }
@@ -182,12 +183,12 @@ func effectiveTriggerWords(ctx stdcontext.Context, repo *database.Repository, gu
 	if triggerWords, ok := repo.GetTriggerWords(ctx, guildID); ok {
 		return triggerWords, true
 	}
-	return append([]string(nil), defaultTriggerWords...), false
+	return append([]string(nil), currentDefaultTriggerWords()...), false
 }
 
 func saveTriggerWords(ctx stdcontext.Context, repo *database.Repository, guildID string, words []string) error {
 	normalized := triggerwords.NormalizeAll(words)
-	if slices.Equal(normalized, defaultTriggerWords) {
+	if slices.Equal(normalized, currentDefaultTriggerWords()) {
 		return repo.DeleteTriggerWords(ctx, guildID)
 	}
 	return repo.SetTriggerWords(ctx, guildID, normalized)

@@ -218,6 +218,24 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 	return summary, nil
 }
 
+// normalizeTriggerText canonicalises trigger text coming from the admin
+// editor: CRLF becomes LF, each line is trimmed, empty and duplicate lines are
+// dropped, and the remaining lines keep their order.
+func normalizeTriggerText(raw string) string {
+	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	seen := make(map[string]bool, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
 // joinTriggerTexts keeps the most recent maxItems non-empty unique trigger texts
 // from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]) and
 // stores them newest first, the order prependTriggerText keeps for live updates.

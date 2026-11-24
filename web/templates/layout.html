@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{if .Title}}{{.Title}} — {{end}}DisgoroQ Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/htmx-2.0.4.min.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="/guilds">DisgoroQ</a>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="/guilds" class="nav-link{{if eq .ActiveNav "guilds"}} active{{end}}">Guilds</a>
+        <a href="/config" class="nav-link{{if eq .ActiveNav "config"}} active{{end}}">Config</a>
+        <a href="/data" class="nav-link{{if eq .ActiveNav "data"}} active{{end}}">Data</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container main-content">
+    {{block "content" .}}{{end}}
+  </main>
+</body>
+</html>

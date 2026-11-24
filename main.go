@@ -35,6 +35,7 @@ import (
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
 	voicepkg "polynux/disgoroq/voice"
+	"polynux/disgoroq/web"
 )
 
 var (
@@ -87,6 +88,7 @@ func main() {
 	if configErr != nil {
 		logger.Fatal("Failed to load configuration", zap.Error(configErr))
 	}
+	cfgRuntime := config.NewRuntime(cfg)
 
 	// Initialize logger with configuration
 	logger.InitFromConfig(&cfg.Logging)
@@ -145,6 +147,12 @@ func main() {
 	// Create slog adapter for disgo
 	slogLogger := logger.NewSlogLogger()
 
+	// The channel cache only feeds the web admin UI's channel pickers.
+	cacheFlags := cache.FlagGuilds | cache.FlagVoiceStates
+	if cfg.Web.Enabled {
+		cacheFlags |= cache.FlagChannels
+	}
+
 	// Create disgo client
 	client, err := disgo.New(cfg.Discord.Token,
 		bot.WithLogger(slogLogger),
@@ -158,7 +166,7 @@ func main() {
 			),
 		),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds|cache.FlagVoiceStates),
+			cache.WithCaches(cacheFlags),
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
@@ -184,7 +192,10 @@ func main() {
 	logger.SetEventRepository(eventRepo)
 	repo := database.NewRepository()
 
-	// Initialize media library service if enabled.
+	// Initialize media library service if enabled. The repository is always
+	// available so the web admin can browse the media library while the
+	// service itself is disabled.
+	mediaRepo := medialibrary.NewRepository(utils.DB)
 	var mediaLibraryService *medialibrary.Service
 	if cfg.MediaLibrary.Enabled {
 		embURL, embModel := resolveMediaEmbeddingConfig(cfg)
@@ -194,9 +205,9 @@ func main() {
 				zap.String("ollama_url", embURL),
 				zap.String("embedding_model", embModel),
 				zap.Error(err))
-			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), nil, cfg.MediaLibrary)
+			mediaLibraryService = medialibrary.NewService(mediaRepo, nil, cfg.MediaLibrary)
 		} else {
-			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), mediaEmbedder, cfg.MediaLibrary)
+			mediaLibraryService = medialibrary.NewService(mediaRepo, mediaEmbedder, cfg.MediaLibrary)
 			hcCtx, hcCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if hcErr := mediaEmbedder.HealthCheck(hcCtx); hcErr != nil {
 				logger.Warn("Media library embedding provider unavailable at startup; exact match active, vector search will retry",
@@ -222,6 +233,9 @@ func main() {
 		logger.Info("Media library disabled by configuration")
 	}
 	if mediaLibraryService != nil {
+		mediaLibraryService.SetConfigSource(func() config.MediaLibraryConfig {
+			return cfgRuntime.Current().MediaLibrary
+		})
 		mediaRefreshClient := medialibrary.NewDiscordRefreshClient(
 			cfg.Discord.Token,
 			rest.WithLogger(slogLogger),
@@ -401,11 +415,11 @@ func main() {
 	emojiManager := emoji.NewManager(client, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Votes)
+	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfgRuntime)
 	if mediaLibraryService != nil {
 		messageHandler.SetMediaLibrary(mediaLibraryService)
 	}
-	voteHandler := handlers.NewVoteHandler(client, repo, cfg.Votes)
+	voteHandler := handlers.NewVoteHandler(client, repo, cfgRuntime)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
 		bot.NewListenerFunc(messageHandler.HandleMessageUpdate),
@@ -442,6 +456,7 @@ func main() {
 			MemoryService:     memoryService,
 			Client:            client,
 			Repository:        repo,
+			ConfigRuntime:     cfgRuntime,
 			DefaultPrompt:     cfg.Bot.DefaultPrompt,
 			VoiceConfig:       cfg.Voice,
 			VoiceSystemPrompt: cfg.Voice.VoiceSystemPrompt,
@@ -465,7 +480,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Invalid command registry configuration", zap.Error(err))
 	}
-	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
+	commands.RegisterAll(registry, repo, memoryService, cfgRuntime, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		go func() {
 			// disgo only recovers panics in inline listeners.
@@ -498,9 +513,26 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Memory)
+	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfgRuntime, cfg.Memory)
 	sched.Start()
 	defer sched.Shutdown()
+
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer = web.New(web.Deps{
+			Client:        client,
+			Repo:          repo,
+			Config:        cfg,
+			ConfigRuntime: cfgRuntime,
+			ConfigPath:    config.DefaultConfigPath,
+			Memory:        memoryService,
+			Media:         mediaLibraryService,
+			MediaRepo:     mediaRepo,
+		}, cfg.Web)
+		if err := webServer.Start(); err != nil {
+			webServer = nil
+		}
+	}
 
 	if sendDirectHoroscope {
 		sched.SendHoroscope()
@@ -514,6 +546,14 @@ func main() {
 	<-sc
 
 	logger.Info("Shutting down gracefully")
+
+	if webServer != nil {
+		webCtx, webCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := webServer.Shutdown(webCtx); err != nil {
+			logger.Error("Error shutting down web admin UI", zap.Error(err))
+		}
+		webCancel()
+	}
 
 	// Close memory service (cancels in-flight summarizations)
 	if memoryService != nil {
@@ -806,5 +846,3 @@ func redactSecret(s, secret string) string {
 	}
 	return strings.ReplaceAll(s, secret, "[REDACTED]")
 }
-
-

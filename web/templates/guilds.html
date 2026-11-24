@@ -1,0 +1,33 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Guilds</h1>
+    <p class="muted">Select a server to inspect and edit its settings.</p>
+  </div>
+</div>
+
+{{if .Guilds}}
+<div class="guild-list">
+  {{range .Guilds}}
+  <a class="guild-card" href="/guilds/{{.ID}}">
+    {{if .IconURL}}
+      <img class="guild-icon" src="{{.IconURL}}" alt="">
+    {{else}}
+      <span class="guild-icon-placeholder" aria-hidden="true">#</span>
+    {{end}}
+    <div class="guild-card-meta">
+      <div class="guild-card-name">{{.Name}}</div>
+      <div class="mono muted">{{.ID}}</div>
+      {{if not .InCache}}
+        <span class="badge badge-warn">Not in cache (DB only)</span>
+      {{end}}
+    </div>
+  </a>
+  {{end}}
+</div>
+{{else}}
+<section class="card">
+  <p class="muted">No guilds found in the Discord cache or database yet.</p>
+</section>
+{{end}}
+{{end}}

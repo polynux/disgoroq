@@ -822,3 +822,23 @@ func TestRepository_MemoryEnabled_RoundTrip(t *testing.T) {
 		t.Error("expected other guilds to keep default enabled")
 	}
 }
+
+func TestRepository_GetGuildSettingsMap(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	require.NoError(t, repo.SetGuildSetting(ctx, "guild-1", "state", "off"))
+	require.NoError(t, repo.SetGuildSetting(ctx, "guild-1", "threshold", "0.25"))
+	require.NoError(t, repo.SetGuildSetting(ctx, "guild-2", "state", "on"))
+
+	got, err := repo.GetGuildSettingsMap(ctx, "guild-1")
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{
+		"state":     "off",
+		"threshold": "0.25",
+	}, got)
+
+	empty, err := repo.GetGuildSettingsMap(ctx, "guild-missing")
+	require.NoError(t, err)
+	assert.Empty(t, empty)
+}
