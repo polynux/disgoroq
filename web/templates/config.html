@@ -69,9 +69,11 @@
               <span>Enabled</span>
             </label>
           {{else if eq .Kind "text"}}
-            <textarea id="{{.InputID}}" name="{{.InputName}}" class="prompt-textarea">{{.Value}}</textarea>
+            <textarea id="{{.InputID}}" name="{{.InputName}}" class="prompt-textarea">
+{{.Value}}</textarea>
           {{else if eq .Kind "string_slice"}}
-            <textarea id="{{.InputID}}" name="{{.InputName}}" placeholder="One entry per line">{{.Value}}</textarea>
+            <textarea id="{{.InputID}}" name="{{.InputName}}" placeholder="One entry per line">
+{{.Value}}</textarea>
             <div class="field-hint">One item per line. Default: <span class="mono">{{.DefaultDisplay}}</span></div>
           {{else if eq .Kind "int"}}
             <input id="{{.InputID}}" name="{{.InputName}}" type="number" step="1" value="{{.Value}}">

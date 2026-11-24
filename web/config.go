@@ -133,9 +133,10 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Parse submitted values and apply changes to the YAML node tree.
+	// Parse submitted values and collect in-place YAML patches.
 	var (
 		parseErrs       []string
+		patches         []yamlPatch
 		touchedPaths    []string
 		restartRequired []string
 		submittedRaw    = make(map[string]string, len(secSpec.Fields))
@@ -154,10 +155,7 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 			bVal := r.FormValue(inputName) == "on" || r.FormValue(inputName) == "true"
 			submittedBool[field.Path] = bVal
 			if !fieldValueEqual(field, node, found, bVal) {
-				if err := setYAMLValue(doc, field.Path, field.Kind, bVal); err != nil {
-					parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", field.Path, err))
-					continue
-				}
+				patches = append(patches, yamlPatch{Path: field.Path, Kind: field.Kind, Val: bVal})
 				touchedPaths = append(touchedPaths, field.Path)
 				if !field.HotApply {
 					restartRequired = append(restartRequired, field.Path)
@@ -176,10 +174,7 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 		}
 
 		if !fieldValueEqual(field, node, found, parsedVal) {
-			if err := setYAMLValue(doc, field.Path, field.Kind, parsedVal); err != nil {
-				parseErrs = append(parseErrs, fmt.Sprintf("%s: %v", field.Path, err))
-				continue
-			}
+			patches = append(patches, yamlPatch{Path: field.Path, Kind: field.Kind, Val: parsedVal})
 			touchedPaths = append(touchedPaths, field.Path)
 			if !field.HotApply {
 				restartRequired = append(restartRequired, field.Path)
@@ -188,30 +183,9 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(parseErrs) > 0 {
-		// Re-parse original doc so view reflects disk state with user's attempted inputs preserved.
-		origDoc, _ := parseYAMLDocument(origData)
-		secView := buildSectionViewWithOverrides(secSpec, origDoc, currentHash, submittedRaw, submittedBool)
+		secView := buildSectionViewWithOverrides(secSpec, doc, currentHash, submittedRaw, submittedBool)
 		secView.Error = strings.Join(parseErrs, "; ")
-		s.renderConfigSectionResponse(w, r, schema, origDoc, currentHash, secView, http.StatusUnprocessableEntity)
-		return
-	}
-
-	newData, err := marshalYAMLDocument(doc)
-	if err != nil {
-		origDoc, _ := parseYAMLDocument(origData)
-		secView := buildSectionViewWithOverrides(secSpec, origDoc, currentHash, submittedRaw, submittedBool)
-		secView.Error = "Failed to serialize YAML: " + err.Error()
-		s.renderConfigSectionResponse(w, r, schema, origDoc, currentHash, secView, http.StatusUnprocessableEntity)
-		return
-	}
-
-	// Validate using the exact same pipeline as config.Load.
-	parsedCfg, err := config.Parse(newData)
-	if err != nil {
-		origDoc, _ := parseYAMLDocument(origData)
-		secView := buildSectionViewWithOverrides(secSpec, origDoc, currentHash, submittedRaw, submittedBool)
-		secView.Error = err.Error()
-		s.renderConfigSectionResponse(w, r, schema, origDoc, currentHash, secView, http.StatusUnprocessableEntity)
+		s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusUnprocessableEntity)
 		return
 	}
 
@@ -219,6 +193,24 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 		secView := buildSectionView(secSpec, doc, currentHash)
 		secView.Success = "No changes to save."
 		s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusOK)
+		return
+	}
+
+	newData, err := patchYAMLBytes(origData, patches)
+	if err != nil {
+		logger.Error("Failed to patch config.yaml in place", zap.String("path", cfgPath), zap.Error(err))
+		secView := buildSectionViewWithOverrides(secSpec, doc, currentHash, submittedRaw, submittedBool)
+		secView.Error = "Failed to update YAML: " + err.Error()
+		s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusInternalServerError)
+		return
+	}
+
+	// Validate using the exact same pipeline as config.Load.
+	parsedCfg, err := config.Parse(newData)
+	if err != nil {
+		secView := buildSectionViewWithOverrides(secSpec, doc, currentHash, submittedRaw, submittedBool)
+		secView.Error = err.Error()
+		s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusUnprocessableEntity)
 		return
 	}
 

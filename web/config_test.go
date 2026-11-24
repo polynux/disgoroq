@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/html"
 
 	"polynux/disgoroq/config"
 )
@@ -93,19 +94,16 @@ func postConfigSection(t *testing.T, srv *Server, section string, form url.Value
 }
 
 func TestYAMLNodeEditsPreserveCommentsPlaceholdersAndInsertMissingKeys(t *testing.T) {
-	doc, err := parseYAMLDocument([]byte(sampleConfigYAML))
-	require.NoError(t, err)
-
-	// Update an existing scalar.
-	require.NoError(t, setYAMLValue(doc, "votes.probability", fieldKindFloat, 0.5))
-	// Update an existing sequence.
-	require.NoError(t, setYAMLValue(doc, "bot.trigger_words", fieldKindStringSlice, []string{"alpha", "beta"}))
-	// Insert a missing nested key (neither reengage nor its child exists in sampleConfigYAML).
-	require.NoError(t, setYAMLValue(doc, "reengage.default_inactivity_minutes", fieldKindInt, int64(45)))
-	// Insert a missing deeply nested key under an existing section.
-	require.NoError(t, setYAMLValue(doc, "ai.tools.web.max_bytes", fieldKindInt, int64(1048576)))
-
-	out, err := marshalYAMLDocument(doc)
+	out, err := patchYAMLBytes([]byte(sampleConfigYAML), []yamlPatch{
+		// Update an existing scalar.
+		{Path: "votes.probability", Kind: fieldKindFloat, Val: 0.5},
+		// Update an existing sequence.
+		{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"alpha", "beta"}},
+		// Insert a missing nested key (neither reengage nor its child exists in sampleConfigYAML).
+		{Path: "reengage.default_inactivity_minutes", Kind: fieldKindInt, Val: int64(45)},
+		// Insert a missing deeply nested key under an existing section.
+		{Path: "ai.tools.web.max_bytes", Kind: fieldKindInt, Val: int64(1048576)},
+	})
 	require.NoError(t, err)
 	rendered := string(out)
 
@@ -116,6 +114,11 @@ func TestYAMLNodeEditsPreserveCommentsPlaceholdersAndInsertMissingKeys(t *testin
 	assert.Contains(t, rendered, "# Vote configuration comment")
 	assert.Contains(t, rendered, "${TEST_CFG_DISCORD_TOKEN}")
 	assert.Contains(t, rendered, "${TEST_CFG_GROQ_KEY}")
+
+	// Untouched emoji and blank separator lines stay byte-identical.
+	assert.Contains(t, rendered, "  good_emoji: \"😂\"")
+	assert.Contains(t, rendered, "  bad_emoji: \"🗑️\"")
+	assert.Contains(t, rendered, "\n\ndatabase:\n")
 
 	// 2-space indentation is preserved and missing keys are inserted at the right place.
 	assert.Contains(t, rendered, "  probability: 0.5")
@@ -131,6 +134,268 @@ func TestYAMLNodeEditsPreserveCommentsPlaceholdersAndInsertMissingKeys(t *testin
 	assert.Equal(t, []string{"alpha", "beta"}, parsed.Bot.TriggerWords)
 	assert.Equal(t, 45, parsed.Reengage.DefaultInactivityMinutes)
 	assert.Equal(t, int64(1048576), parsed.AI.Tools.Web.MaxBytes)
+}
+
+func TestPatchYAMLBytesEdgeCases(t *testing.T) {
+	t.Run("empty section converted to mapping", func(t *testing.T) {
+		src := []byte("discord:\n  token: \"tok\"\nreengage:\n\nlogging:\n  level: \"info\"\n")
+		out, err := patchYAMLBytes(src, []yamlPatch{
+			{Path: "reengage.default_chance", Kind: fieldKindFloat, Val: 0.05},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, string(out), "reengage:\n  default_chance: 0.05\n\nlogging:\n  level: \"info\"\n")
+	})
+
+	t.Run("YAML 1.1 reserved words, emoji, block scalars, and leading newlines", func(t *testing.T) {
+		src := []byte("bot:\n  default_prompt: |\n    line one\n    line two\nreengage:\n  reengage_message: \"old\"\nvotes:\n  good_emoji: \"😂\"\n")
+		out, err := patchYAMLBytes(src, []yamlPatch{
+			{Path: "bot.default_prompt", Kind: fieldKindText, Val: "first line\nsecond line"},
+			{Path: "reengage.reengage_message", Kind: fieldKindText, Val: "\n\nleading newline"},
+			{Path: "votes.good_emoji", Kind: fieldKindString, Val: "on"},
+		})
+		require.NoError(t, err)
+		rendered := string(out)
+		assert.Contains(t, rendered, "default_prompt: |-\n    first line\n    second line")
+		assert.Contains(t, rendered, `reengage_message: "\n\nleading newline"`)
+		assert.Contains(t, rendered, `good_emoji: "on"`)
+
+		doc, err := parseYAMLDocument(out)
+		require.NoError(t, err)
+		n, ok := getYAMLNode(doc, "reengage.reengage_message")
+		require.True(t, ok)
+		assert.Equal(t, "\n\nleading newline", n.Value)
+		n2, ok := getYAMLNode(doc, "bot.default_prompt")
+		require.True(t, ok)
+		assert.Equal(t, "first line\nsecond line", n2.Value)
+		n3, ok := getYAMLNode(doc, "votes.good_emoji")
+		require.True(t, ok)
+		assert.Equal(t, "!!str", n3.Tag)
+		assert.Equal(t, "on", n3.Value)
+	})
+}
+
+// extractSectionFormValues parses rendered HTML with the HTML5 parser (which
+// performs the browser's textarea leading-newline strip) and returns the exact
+// form submission values for the given /config/{section} form.
+func extractSectionFormValues(t *testing.T, htmlBody, section string) url.Values {
+	t.Helper()
+	root, err := html.Parse(strings.NewReader(htmlBody))
+	require.NoError(t, err)
+
+	wantAction := "/config/" + section
+	var formNode *html.Node
+	var findForm func(*html.Node)
+	findForm = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "form" {
+			for _, a := range n.Attr {
+				if a.Key == "action" && a.Val == wantAction {
+					formNode = n
+					return
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil && formNode == nil; c = c.NextSibling {
+			findForm(c)
+		}
+	}
+	findForm(root)
+	require.NotNil(t, formNode, "form for section %q not found", section)
+
+	values := url.Values{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "input":
+				var name, typ, val string
+				var checked bool
+				for _, a := range n.Attr {
+					switch a.Key {
+					case "name":
+						name = a.Val
+					case "type":
+						typ = a.Val
+					case "value":
+						val = a.Val
+					case "checked":
+						checked = true
+					}
+				}
+				if name != "" {
+					if typ == "checkbox" {
+						if checked {
+							if val == "" {
+								val = "on"
+							}
+							values.Add(name, val)
+						}
+					} else {
+						values.Add(name, val)
+					}
+				}
+			case "textarea":
+				var name string
+				for _, a := range n.Attr {
+					if a.Key == "name" {
+						name = a.Val
+					}
+				}
+				if name != "" {
+					var text strings.Builder
+					for c := n.FirstChild; c != nil; c = c.NextSibling {
+						if c.Type == html.TextNode {
+							text.WriteString(c.Data)
+						}
+					}
+					values.Add(name, text.String())
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(formNode)
+	return values
+}
+
+func TestConfigNoEditSaveInvariant(t *testing.T) {
+	exampleBytes, err := os.ReadFile(filepath.Join("..", "config.example.yaml"))
+	require.NoError(t, err)
+
+	trickyFixture := `# Tricky YAML fixture
+discord:
+  token: "${DISCORD_TOKEN}"
+
+database:
+  local: true
+
+ai:
+  groq:
+    api_key: "${GROQ_API_KEY}"
+    model: "on"
+    vision_model: 'yes'
+
+memory:
+  enabled: false
+
+reengage:
+  reengage_message: "\n\nLe chat est calme!"
+
+bot:
+  default_prompt: |
+    first line of block
+    second line of block
+  trigger_words:
+    - "feun"
+    - "yes"
+`
+
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{name: "config.example.yaml", yaml: string(exampleBytes)},
+		{name: "tricky fixture", yaml: trickyFixture},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VAR_NAME", "dummy") // config.example.yaml mentions ${VAR_NAME} in a header comment
+			t.Setenv("DISCORD_TOKEN", "test-discord-token")
+			t.Setenv("DB_URL", "libsql://example.invalid")
+			t.Setenv("DB_TOKEN", "test-db-token")
+			t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+			tmpDir := t.TempDir()
+			cfgPath := filepath.Join(tmpDir, "config.yaml")
+			require.NoError(t, os.WriteFile(cfgPath, []byte(tc.yaml), 0o640))
+
+			cfg, err := config.Load(cfgPath)
+			require.NoError(t, err)
+			runtime := config.NewRuntime(cfg)
+
+			srv := New(Deps{
+				Repo:          setupTestRepo(t),
+				Config:        cfg,
+				ConfigRuntime: runtime,
+				ConfigPath:    cfgPath,
+			}, config.WebConfig{Enabled: true, Listen: "127.0.0.1:8090"})
+
+			getReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/config", nil)
+			getRec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(getRec, getReq)
+			require.Equal(t, http.StatusOK, getRec.Code)
+			pageHTML := getRec.Body.String()
+
+			for _, sec := range buildConfigSchema() {
+				form := extractSectionFormValues(t, pageHTML, sec.Name)
+				postRec := postConfigSection(t, srv, sec.Name, form, true)
+				require.Equal(t, http.StatusOK, postRec.Code, "section %s", sec.Name)
+				assert.Contains(t, postRec.Body.String(), "No changes to save.", "section %s unexpectedly detected changes", sec.Name)
+
+				afterBytes, err := os.ReadFile(cfgPath)
+				require.NoError(t, err)
+				assert.Equal(t, []byte(tc.yaml), afterBytes, "section %s modified file on no-edit save", sec.Name)
+
+				_, bakErr := os.Stat(cfgPath + ".bak")
+				assert.True(t, os.IsNotExist(bakErr), "section %s wrote .bak on no-edit save", sec.Name)
+			}
+		})
+	}
+}
+
+func TestConfigSingleFieldEditChangesExactlyOneLine(t *testing.T) {
+	exampleBytes, err := os.ReadFile(filepath.Join("..", "config.example.yaml"))
+	require.NoError(t, err)
+
+	t.Setenv("VAR_NAME", "dummy") // config.example.yaml mentions ${VAR_NAME} in a header comment
+	t.Setenv("DISCORD_TOKEN", "test-discord-token")
+	t.Setenv("DB_URL", "libsql://example.invalid")
+	t.Setenv("DB_TOKEN", "test-db-token")
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, exampleBytes, 0o640))
+
+	cfg, err := config.Load(cfgPath)
+	require.NoError(t, err)
+	srv := New(Deps{
+		Repo:          setupTestRepo(t),
+		Config:        cfg,
+		ConfigRuntime: config.NewRuntime(cfg),
+		ConfigPath:    cfgPath,
+	}, config.WebConfig{Enabled: true, Listen: "127.0.0.1:8090"})
+
+	getReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/config", nil)
+	getRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRec, getReq)
+	require.Equal(t, http.StatusOK, getRec.Code)
+
+	form := extractSectionFormValues(t, getRec.Body.String(), "votes")
+	form.Set("field:votes.probability", "0.5")
+
+	postRec := postConfigSection(t, srv, "votes", form, true)
+	require.Equal(t, http.StatusOK, postRec.Code)
+	assert.Contains(t, postRec.Body.String(), "Saved Votes settings (1 updated).")
+
+	afterBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	beforeLines := strings.Split(string(exampleBytes), "\n")
+	afterLines := strings.Split(string(afterBytes), "\n")
+	require.Equal(t, len(beforeLines), len(afterLines))
+
+	diffCount := 0
+	for i := range beforeLines {
+		if beforeLines[i] != afterLines[i] {
+			diffCount++
+			assert.Equal(t, "  probability: 0.25", beforeLines[i])
+			assert.Equal(t, "  probability: 0.5", afterLines[i])
+		}
+	}
+	assert.Equal(t, 1, diffCount, "editing one field must change exactly one line")
 }
 
 func TestConfigPageMasksSecretsAndNeverExposesResolvedValues(t *testing.T) {
