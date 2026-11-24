@@ -32,6 +32,7 @@ DisgoroQ is a Go Discord bot with:
 | Scheduling | `scheduler/` | Farting Friday, cleanup, reengage checks |
 | AI providers | `ai/` | GROQ, Ollama, context building |
 | Config | `config/` | Defaults, loading, validation |
+| Web admin | `web/` | Guild, config, and data pages; media preview proxy |
 | SQL queries | `query.sql` and `db/` | sqlc source and generated code |
 
 ## Current Behavior Notes
@@ -42,6 +43,8 @@ DisgoroQ is a Go Discord bot with:
 - Voice join now respects per-guild `voice_enabled`.
 - Voice playback uses configured default voice, text fallback policy, max text length, stream buffer size, and frame timing.
 - Votes on any human message or AI reply are stored in `message_votes`; the bot seeds reactions only on a random share of its AI replies.
+- The built-in web admin UI (`web/`) binds `web.listen` and serves `/guilds`, `/config`, and `/data` with no authentication; treat that port as LAN-only.
+- Data previews load through `/data/media/thumb`, which refreshes expired Discord CDN signatures with the bot token and resolves Tenor, Giphy, and Klipy GIF pages to direct images.
 
 ## Conventions
 
