@@ -671,4 +671,3 @@ func (s *Service) deleteDeadEntry(rawURL, guildID string, status int) {
 		zap.String("guild_id", guildID),
 		zap.Int("status", status))
 }
-

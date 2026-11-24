@@ -1771,4 +1771,3 @@ func TestCheckURLDryRun(t *testing.T) {
 		assert.Equal(t, http.StatusOK, getStatus)
 	})
 }
-
