@@ -15,6 +15,7 @@ import (
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/medialibrary"
 	"polynux/disgoroq/memory"
 )
 
@@ -27,7 +28,9 @@ type Deps struct {
 	Config        *config.Config
 	ConfigRuntime *config.Runtime
 	ConfigPath    string
-	Memory        memory.Service // optional, may be nil
+	Memory        memory.Service           // optional, may be nil
+	Media         *medialibrary.Service    // optional, nil when the media library is disabled
+	MediaRepo     *medialibrary.Repository // optional, nil when the database is unavailable
 }
 
 // Server serves the embedded web admin UI.

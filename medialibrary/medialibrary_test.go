@@ -2377,3 +2377,32 @@ func TestResolveGifOnRequest(t *testing.T) {
 		assert.Equal(t, "junk", entries[0].ContextMap()["reason"])
 	})
 }
+
+func TestServiceUpdateEntryTextNormalizesAndReembeds(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	embedder := newFakeEmbedder()
+	svc := NewService(repo, embedder, defaultEnabledConfig())
+	ctx := context.Background()
+
+	const guildID = "111"
+	const rawURL = "https://example.com/cat.png"
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:     guildID,
+		URL:         rawURL,
+		Kind:        "image",
+		Description: "old description",
+		TriggerText: "old trigger",
+	}))
+
+	require.NoError(t, svc.UpdateEntryText(ctx, guildID, rawURL, " cat ", "a\r\n\r\nb\r\na"))
+
+	entry, err := repo.GetEntry(ctx, rawURL, guildID)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "cat", entry.Description)
+	assert.Equal(t, "a\nb", entry.TriggerText)
+	assert.NotEmpty(t, entry.DescriptionEmbedding)
+	assert.NotEmpty(t, entry.TriggerEmbedding)
+	assert.Contains(t, embedder.calls, SearchDocumentPrefix+"cat")
+	assert.Contains(t, embedder.calls, SearchDocumentPrefix+"a\nb")
+}

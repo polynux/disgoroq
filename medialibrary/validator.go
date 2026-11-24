@@ -658,7 +658,7 @@ func (s *Service) deleteDeadEntry(rawURL, guildID string, status int) {
 	delCtx, cancel := context.WithTimeout(context.Background(), deadLinkDeleteTimeout)
 	defer cancel()
 
-	if err := s.repo.DeleteEntry(delCtx, rawURL, guildID); err != nil {
+	if _, err := s.repo.DeleteEntry(delCtx, rawURL, guildID); err != nil {
 		logger.Warn("Media library failed to delete dead link",
 			zap.String("url", rawURL),
 			zap.String("guild_id", guildID),

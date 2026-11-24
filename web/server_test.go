@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -25,7 +26,7 @@ import (
 	"polynux/disgoroq/utils"
 )
 
-func setupTestRepo(t *testing.T) *database.Repository {
+func setupTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -47,7 +48,12 @@ func setupTestRepo(t *testing.T) *database.Repository {
 		require.NoError(t, err)
 	}
 
-	return database.NewRepositoryWithDB(sqlDB)
+	return sqlDB
+}
+
+func setupTestRepo(t *testing.T) *database.Repository {
+	t.Helper()
+	return database.NewRepositoryWithDB(setupTestDB(t))
 }
 
 func newTestServer(t *testing.T, client *bot.Client, webCfg config.WebConfig) (*Server, *database.Repository) {
@@ -175,12 +181,12 @@ func TestStubsAndStaticAssets(t *testing.T) {
 	assert.Equal(t, http.StatusFound, rec.Code)
 	assert.Equal(t, "/guilds", rec.Header().Get("Location"))
 
-	// Phase 2b stub (/config is now implemented and tested in config_test.go)
+	// Phase 2b data views (/config is covered in config_test.go)
 	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/data", nil)
 	rec = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "coming soon")
+	assert.Contains(t, rec.Body.String(), "Conversation summaries")
 
 	// Static files
 	for _, path := range []string{"/static/style.css", "/static/htmx-2.0.4.min.js"} {

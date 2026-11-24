@@ -1146,6 +1146,43 @@ func (s *Service) Search(ctx context.Context, guildID, query string, useTrigger 
 	return s.repo.SearchAllKindsByDescription(ctx, guildID, queryBlob, limit)
 }
 
+// UpdateEntryText recomputes both embeddings for the entry identified by
+// guildID and rawURL, then writes texts and embeddings in one statement.
+// If the embedder is missing or fails, the row is left untouched.
+func (s *Service) UpdateEntryText(ctx context.Context, guildID, rawURL, description, triggerText string) error {
+	if s == nil || s.repo == nil {
+		return fmt.Errorf("media library repository is not initialized")
+	}
+	guildID = strings.TrimSpace(guildID)
+	rawURL = strings.TrimSpace(rawURL)
+	if guildID == "" || rawURL == "" {
+		return fmt.Errorf("guild ID and media URL are required")
+	}
+	description = strings.TrimSpace(description)
+	triggerText = normalizeTriggerText(triggerText)
+	if s.embedder == nil {
+		return fmt.Errorf("media library embedding provider is not configured; refusing to edit without recomputed embeddings")
+	}
+
+	descriptionEmbedding, err := EmbedDocument(ctx, s.embedder, description)
+	if err != nil {
+		return fmt.Errorf("recompute description embedding: %w", err)
+	}
+	triggerEmbedding, err := EmbedDocument(ctx, s.embedder, triggerText)
+	if err != nil {
+		return fmt.Errorf("recompute trigger embedding: %w", err)
+	}
+
+	affected, err := s.repo.UpdateText(ctx, guildID, rawURL, description, triggerText, descriptionEmbedding, triggerEmbedding)
+	if err != nil {
+		return fmt.Errorf("update media library entry: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("media library entry not found for this guild and URL")
+	}
+	return nil
+}
+
 func discordMessageTime(m discord.Message) time.Time {
 	if !m.CreatedAt.IsZero() {
 		return m.CreatedAt

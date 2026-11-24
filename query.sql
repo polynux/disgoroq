@@ -570,8 +570,38 @@ WHERE guild_id = sqlc.arg(guild_id)
 ORDER BY CASE WHEN uses >= 2 THEN 0 ELSE 1 END ASC, RANDOM()
 LIMIT sqlc.arg(result_limit);
 
--- name: DeleteMediaLibraryEntry :exec
+-- name: DeleteMediaLibraryEntry :execrows
 DELETE FROM media_library
 WHERE url = ? AND guild_id = ?;
 
 
+-- Web admin data views
+-- Admin list queries are built in database/data_views.go and
+-- medialibrary/repository.go so only supplied filters become predicates.
+-- These statement-level queries never select embedding blobs.
+
+-- name: DeleteConversationSummaryByID :execrows
+DELETE FROM conversation_summaries
+WHERE id = ?;
+
+-- name: DeleteConversationSummariesForUser :execrows
+DELETE FROM conversation_summaries
+WHERE guild_id = ? AND user_id = ?;
+
+-- name: DeleteAttachmentCacheByID :execrows
+DELETE FROM attachment_cache
+WHERE id = ?;
+
+-- name: ListBotEventTypes :many
+SELECT DISTINCT event_type
+FROM bot_events
+ORDER BY event_type
+LIMIT 500;
+
+-- name: UpdateMediaLibraryText :execrows
+UPDATE media_library
+SET description = ?,
+    trigger_text = ?,
+    description_embedding = ?,
+    trigger_embedding = ?
+WHERE url = ? AND guild_id = ?;

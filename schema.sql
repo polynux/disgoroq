@@ -83,6 +83,10 @@ ON message_buffer(channel_id, processed, timestamp ASC);
 CREATE INDEX IF NOT EXISTS idx_buffer_message_id
 ON message_buffer(message_id);
 
+-- Latest author name per (guild, user) for summary display, without a sort.
+CREATE INDEX IF NOT EXISTS idx_buffer_guild_user_timestamp
+ON message_buffer(guild_id, user_id, timestamp DESC);
+
 CREATE TABLE IF NOT EXISTS attachment_cache (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cache_kind TEXT NOT NULL,
@@ -122,6 +126,14 @@ ON discord_messages(channel_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_channel_created
 ON discord_messages(guild_id, channel_id, created_at DESC);
+
+-- Author-name fallback for summaries, ordered without a temp B-tree.
+CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_author_created
+ON discord_messages(guild_id, author_id, created_at DESC);
+
+-- Stable (created_at, message_id) paging for guild+channel listings.
+CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_channel_created_id
+ON discord_messages(guild_id, channel_id, created_at DESC, message_id DESC);
 
 CREATE TABLE IF NOT EXISTS discord_message_cache_state (
     channel_id TEXT PRIMARY KEY,

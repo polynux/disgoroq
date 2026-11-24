@@ -43,8 +43,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /config", s.handleConfigPage)
 	s.mux.HandleFunc("POST /config/{section}", s.handleConfigSectionSave)
 
-	// Phase 2b: Data views (stub)
-	s.mux.HandleFunc("GET /data", s.handleStub("Data", "data", "Summaries, message cache, media library, and events — coming soon."))
+	// Phase 2b: Data views
+	s.mux.HandleFunc("GET /data", s.handleData)
+	s.mux.HandleFunc("POST /data/summaries/forget", s.handleDataSummariesForget)
+	s.mux.HandleFunc("POST /data/summaries/{id}/delete", s.handleDataSummaryDelete)
+	s.mux.HandleFunc("POST /data/attachments/purge", s.handleDataAttachmentPurge)
+	s.mux.HandleFunc("POST /data/attachments/{id}/delete", s.handleDataAttachmentDelete)
+	s.mux.HandleFunc("POST /data/media/delete", s.handleDataMediaDelete)
+	s.mux.HandleFunc("POST /data/media/edit", s.handleDataMediaEdit)
 }
 
 type stubPageData struct {

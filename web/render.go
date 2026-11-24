@@ -25,6 +25,7 @@ var pageTemplates = map[string][]string{
 	"guilds": {"templates/layout.html", "templates/guilds.html"},
 	"guild":  {"templates/layout.html", "templates/guild.html"},
 	"config": {"templates/layout.html", "templates/config.html"},
+	"data":   {"templates/layout.html", "templates/data.html"},
 }
 
 func templateFuncs() template.FuncMap {
