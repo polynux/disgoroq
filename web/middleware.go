@@ -91,7 +91,8 @@ func (s *Server) withCSRFGuard(next http.Handler) http.Handler {
 		}
 
 		parsed, err := url.Parse(source)
-		if err != nil || parsed.Host == "" || !strings.EqualFold(parsed.Host, r.Host) {
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || !strings.EqualFold(parsed.Host, r.Host) {
 			http.Error(w, "Forbidden: origin mismatch", http.StatusForbidden)
 			return
 		}

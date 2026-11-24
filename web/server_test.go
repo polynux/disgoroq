@@ -408,6 +408,8 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 		Listen:  "127.0.0.1:8090",
 	})
 	guildID := "555555555555555555"
+	// Make the guild known to the route guard (no cache in this test).
+	require.NoError(t, repo.SetLastMessage(context.Background(), guildID, 1))
 
 	post := func(path string, form url.Values, htmx bool) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8090"+path, strings.NewReader(form.Encode()))
@@ -440,11 +442,11 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 			wantErr string
 		}{
 			{name: "bad state", mutate: func(v url.Values) { v.Set("state", "maybe") }, wantErr: "State must be"},
-			{name: "threshold > 1", mutate: func(v url.Values) { v.Set("threshold", "1.5") }, wantErr: "Threshold must be"},
+			{name: "threshold not a number", mutate: func(v url.Values) { v.Set("threshold", "abc") }, wantErr: "Threshold must be"},
 			{name: "thresholdSexe < 0", mutate: func(v url.Values) { v.Set("thresholdSexe", "-0.1") }, wantErr: "Threshold (sexe)"},
-			{name: "temperature > 1", mutate: func(v url.Values) { v.Set("temperature", "2.0") }, wantErr: "Temperature must be"},
+			{name: "temperature NaN", mutate: func(v url.Values) { v.Set("temperature", "NaN") }, wantErr: "Temperature must be"},
 			{name: "messagescount 0", mutate: func(v url.Values) { v.Set("messagescount", "0") }, wantErr: "Messages count"},
-			{name: "messagescount 101", mutate: func(v url.Values) { v.Set("messagescount", "101") }, wantErr: "Messages count"},
+			{name: "messagescount not int", mutate: func(v url.Values) { v.Set("messagescount", "1.5") }, wantErr: "Messages count"},
 			{name: "invalid trigger word", mutate: func(v url.Values) { v.Set("trigger_words", "bad word!") }, wantErr: "Invalid trigger words"},
 		}
 		for _, tc := range cases {
@@ -464,7 +466,7 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 
 		stored, err := repo.GetGuildSettingsMap(context.Background(), guildID)
 		require.NoError(t, err)
-		assert.Empty(t, stored)
+		assert.Equal(t, map[string]string{"last_message": "1"}, stored)
 	})
 
 	t.Run("channels and voice snowflake validation", func(t *testing.T) {
@@ -491,18 +493,18 @@ func TestGuildSettingsValidationErrors(t *testing.T) {
 		rec = post("/guilds/"+guildID+"/reengage/channel", url.Values{
 			"channel_id": {"333333333333333333"},
 			"enabled":    {"on"},
-			"chance":     {"1.5"},
+			"chance":     {"-0.5"},
 		}, true)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "between 0.0 and 1.0")
+		assert.Contains(t, rec.Body.String(), "Reengage chance must be")
 
 		rec = post("/guilds/"+guildID+"/reengage/channel", url.Values{
 			"channel_id": {"333333333333333333"},
 			"enabled":    {"on"},
-			"threshold":  {"0"},
+			"threshold":  {"-1"},
 		}, true)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "at least 1 minute")
+		assert.Contains(t, rec.Body.String(), "Reengage threshold must be")
 	})
 }
 

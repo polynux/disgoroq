@@ -146,6 +146,12 @@ func main() {
 	// Create slog adapter for disgo
 	slogLogger := logger.NewSlogLogger()
 
+	// The channel cache only feeds the web admin UI's channel pickers.
+	cacheFlags := cache.FlagGuilds | cache.FlagVoiceStates
+	if cfg.Web.Enabled {
+		cacheFlags |= cache.FlagChannels
+	}
+
 	// Create disgo client
 	client, err := disgo.New(cfg.Discord.Token,
 		bot.WithLogger(slogLogger),
@@ -159,7 +165,7 @@ func main() {
 			),
 		),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds|cache.FlagVoiceStates|cache.FlagChannels),
+			cache.WithCaches(cacheFlags),
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),

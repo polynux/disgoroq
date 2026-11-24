@@ -1867,6 +1867,17 @@ func TestWebConfigDefaultsAndValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("enabled rejects allowed_hosts with scheme or path", func(t *testing.T) {
+		for _, host := range []string{"https://admin.example", "admin.example/path", "user@admin.example"} {
+			cfg := makeBase()
+			cfg.Web.Enabled = true
+			cfg.Web.AllowedHosts = []string{host}
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "web.allowed_hosts") {
+				t.Errorf("Validate() accepted allowed_hosts entry %q (err=%v)", host, err)
+			}
+		}
+	})
+
 	t.Run("loads web section from YAML", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.yaml")

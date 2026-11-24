@@ -272,27 +272,27 @@ func (s *Server) handleGuildGeneralSave(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	threshold, err := parseFloatRange(thresholdRaw, 0, 1)
+	threshold, err := parseNonNegativeFloat(thresholdRaw)
 	if err != nil {
-		renderErr("Threshold must be a number between 0.0 and 1.0.")
+		renderErr("Threshold must be a non-negative number (0.0-1.0 is the useful range).")
 		return
 	}
 
-	thresholdSexe, err := parseFloatRange(thresholdSexeRaw, 0, 1)
+	thresholdSexe, err := parseNonNegativeFloat(thresholdSexeRaw)
 	if err != nil {
-		renderErr("Threshold (sexe) must be a number between 0.0 and 1.0.")
+		renderErr("Threshold (sexe) must be a non-negative number (0.0-1.0 is the useful range).")
 		return
 	}
 
-	temperature, err := parseFloatRange(temperatureRaw, 0, 1)
+	temperature, err := parseNonNegativeFloat(temperatureRaw)
 	if err != nil {
-		renderErr("Temperature must be a number between 0.0 and 1.0.")
+		renderErr("Temperature must be a non-negative number.")
 		return
 	}
 
 	messagesCount, err := strconv.Atoi(messagesCountRaw)
-	if err != nil || messagesCount < 1 || messagesCount > 100 {
-		renderErr("Messages count must be an integer between 1 and 100.")
+	if err != nil || messagesCount < 1 {
+		renderErr("Messages count must be an integer of at least 1.")
 		return
 	}
 
@@ -379,6 +379,7 @@ func (s *Server) handleGuildPromptsSave(w http.ResponseWriter, r *http.Request) 
 
 	settings, err := s.loadGuildSettings(r.Context(), guildID)
 	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
 		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
 		return
 	}
@@ -453,6 +454,7 @@ func (s *Server) handleGuildChannelsSave(w http.ResponseWriter, r *http.Request)
 
 	settings, err := s.loadGuildSettings(r.Context(), guildID)
 	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
 		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
 		return
 	}
@@ -531,6 +533,7 @@ func (s *Server) handleGuildVoiceSave(w http.ResponseWriter, r *http.Request) {
 
 	settings, err := s.loadGuildSettings(r.Context(), guildID)
 	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
 		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
 		return
 	}
@@ -551,6 +554,11 @@ func (s *Server) handleGuildVoiceSave(w http.ResponseWriter, r *http.Request) {
 	if autoJoinCh != "" {
 		if _, err := snowflake.Parse(autoJoinCh); err != nil {
 			renderErr("Auto-join channel ID must be a valid Discord snowflake.")
+			return
+		}
+		_, voiceChannels, nameByID := s.guildChannels(guildID)
+		if _, known := nameByID[autoJoinCh]; known && !containsChannel(voiceChannels, autoJoinCh) {
+			renderErr("Auto-join channel must be a voice channel.")
 			return
 		}
 	}
@@ -630,6 +638,7 @@ func (s *Server) handleGuildReengageMessageSave(w http.ResponseWriter, r *http.R
 
 	settings, err := s.loadGuildSettings(r.Context(), guildID)
 	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
 		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
 		return
 	}
@@ -685,6 +694,7 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 
 	settings, err := s.loadGuildSettings(r.Context(), guildID)
 	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
 		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
 		return
 	}
@@ -720,9 +730,9 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 		thresholdVal int
 	)
 	if chanceRaw != "" {
-		parsed, err := parseFloatRange(chanceRaw, 0, 1)
+		parsed, err := parseNonNegativeFloat(chanceRaw)
 		if err != nil {
-			renderErr("Reengage chance must be a number between 0.0 and 1.0.")
+			renderErr("Reengage chance must be a non-negative number (0.01 = 1%).")
 			return
 		}
 		hasChance = true
@@ -730,8 +740,8 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 	}
 	if thresholdRaw != "" {
 		parsed, err := strconv.Atoi(thresholdRaw)
-		if err != nil || parsed < 1 {
-			renderErr("Reengage threshold must be an integer of at least 1 minute.")
+		if err != nil || parsed < 0 {
+			renderErr("Reengage threshold must be a non-negative number of minutes.")
 			return
 		}
 		hasThreshold = true
@@ -739,9 +749,11 @@ func (s *Server) handleGuildReengageChannelSave(w http.ResponseWriter, r *http.R
 	}
 
 	ctx := r.Context()
-	if err := s.deps.Repo.SetReengageEnabled(ctx, guildID, channelID, enabled); err != nil {
-		renderErr("Failed to save channel reengage state: " + err.Error())
-		return
+	if _, had := settings["reengage_enabled:"+channelID]; had || enabled {
+		if err := s.deps.Repo.SetReengageEnabled(ctx, guildID, channelID, enabled); err != nil {
+			renderErr("Failed to save channel reengage state: " + err.Error())
+			return
+		}
 	}
 	if hasChance {
 		if err := s.deps.Repo.SetReengageChance(ctx, guildID, channelID, chanceVal); err != nil {
@@ -1280,15 +1292,22 @@ func (s *Server) defaultPrompt() string {
 	return config.DefaultConfig().Bot.DefaultPrompt
 }
 
+// defaultVoicePrompt mirrors voice.NewOrchestrator: an empty
+// voice.voice_system_prompt falls back to the bot's default prompt.
 func (s *Server) defaultVoicePrompt() string {
-	if s.deps.Config != nil && s.deps.Config.Voice.VoiceSystemPrompt != "" {
-		return s.deps.Config.Voice.VoiceSystemPrompt
+	if s.deps.Config != nil {
+		if s.deps.Config.Voice.VoiceSystemPrompt != "" {
+			return s.deps.Config.Voice.VoiceSystemPrompt
+		}
+		return s.defaultPrompt()
 	}
 	return config.GetVoiceConfigDefaults().VoiceSystemPrompt
 }
 
+// defaultTriggerWords returns the configured list as the bot uses it; an
+// explicit empty list (trigger words disabled) stays empty.
 func (s *Server) defaultTriggerWords() []string {
-	if s.deps.Config != nil && len(s.deps.Config.Bot.TriggerWords) > 0 {
+	if s.deps.Config != nil {
 		return triggerwords.NormalizeAll(s.deps.Config.Bot.TriggerWords)
 	}
 	return triggerwords.NormalizeAll(config.DefaultConfig().Bot.TriggerWords)
@@ -1300,18 +1319,18 @@ func (s *Server) reengageConfig() config.ReengageConfig {
 		if cfg.DefaultInactivityMinutes <= 0 {
 			cfg.DefaultInactivityMinutes = database.DefaultReengageThreshold
 		}
-		if cfg.ReengageMessage == "" {
-			cfg.ReengageMessage = config.DefaultConfig().Reengage.ReengageMessage
-		}
 		return cfg
 	}
 	return config.DefaultConfig().Reengage
 }
 
-func parseFloatRange(raw string, minVal, maxVal float64) (float64, error) {
+// parseNonNegativeFloat mirrors the slash commands, which accept any float:
+// it only rejects non-numbers, NaN/Inf and negatives, so values stored through
+// Discord never block a web save.
+func parseNonNegativeFloat(raw string) (float64, error) {
 	v, err := strconv.ParseFloat(raw, 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < minVal || v > maxVal {
-		return 0, fmt.Errorf("out of range")
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0, fmt.Errorf("invalid number")
 	}
 	return v, nil
 }

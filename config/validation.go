@@ -603,8 +603,12 @@ func (c *WebConfig) validate() error {
 		return fmt.Errorf("web.listen port must be between 0 and 65535, got %q", port)
 	}
 	for _, host := range c.AllowedHosts {
-		if strings.TrimSpace(host) == "" {
+		host = strings.TrimSpace(host)
+		if host == "" {
 			return fmt.Errorf("web.allowed_hosts cannot contain empty values")
+		}
+		if strings.ContainsAny(host, "/@?#") {
+			return fmt.Errorf("web.allowed_hosts entries must be bare host names or IPs (no scheme or path), got %q", host)
 		}
 	}
 	return nil

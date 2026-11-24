@@ -89,7 +89,7 @@
           <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"threshold","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
           {{end}}
         </div>
-        <input id="threshold" name="threshold" type="number" step="0.01" min="0" max="1" value="{{.Threshold}}">
+        <input id="threshold" name="threshold" type="number" step="any" min="0" value="{{.Threshold}}">
         <div class="field-hint">Default: {{.ThresholdDefault}}</div>
       </div>
 
@@ -103,7 +103,7 @@
           <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"thresholdSexe","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
           {{end}}
         </div>
-        <input id="thresholdSexe" name="thresholdSexe" type="number" step="0.01" min="0" max="1" value="{{.ThresholdSexe}}">
+        <input id="thresholdSexe" name="thresholdSexe" type="number" step="any" min="0" value="{{.ThresholdSexe}}">
         <div class="field-hint">Default: {{.ThresholdSexeDefault}}</div>
       </div>
 
@@ -117,7 +117,7 @@
           <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"temperature","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
           {{end}}
         </div>
-        <input id="temperature" name="temperature" type="number" step="0.05" min="0" max="1" value="{{.Temperature}}">
+        <input id="temperature" name="temperature" type="number" step="any" min="0" value="{{.Temperature}}">
         <div class="field-hint">Default: {{.TemperatureDefault}}</div>
       </div>
 
@@ -131,7 +131,7 @@
           <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"messagescount","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
           {{end}}
         </div>
-        <input id="messagescount" name="messagescount" type="number" step="1" min="1" max="100" value="{{.MessagesCount}}">
+        <input id="messagescount" name="messagescount" type="number" step="1" min="1" value="{{.MessagesCount}}">
         <div class="field-hint">Default: {{.MessagesCountDefault}}</div>
       </div>
 
@@ -465,12 +465,12 @@
 
       <div class="field">
         <label class="field-label" for="reengage_chance">Chance (0.0–1.0)</label>
-        <input id="reengage_chance" name="chance" type="number" step="0.001" min="0" max="1" value="{{.FormChance}}" placeholder="Default: {{.DefaultChance}}">
+        <input id="reengage_chance" name="chance" type="number" step="any" min="0" value="{{.FormChance}}" placeholder="Default: {{.DefaultChance}}">
       </div>
 
       <div class="field">
         <label class="field-label" for="reengage_threshold">Inactivity Threshold (minutes)</label>
-        <input id="reengage_threshold" name="threshold" type="number" step="1" min="1" value="{{.FormThreshold}}" placeholder="Default: {{.DefaultThreshold}}">
+        <input id="reengage_threshold" name="threshold" type="number" step="1" min="0" value="{{.FormThreshold}}" placeholder="Default: {{.DefaultThreshold}}">
       </div>
     </div>
 

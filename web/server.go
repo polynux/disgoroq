@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 // Deps holds the runtime dependencies injected into the web admin server.
 // Add new optional services here as additional admin pages are implemented.
+// Repo is required for the guild pages; they answer 503 without it.
 type Deps struct {
 	Client *bot.Client
 	Repo   *database.Repository
@@ -70,10 +72,11 @@ func (s *Server) Addr() string {
 // Start binds the configured listen address and serves requests in a background goroutine.
 // If binding fails, the error is logged and returned so the caller can keep the bot running.
 func (s *Server) Start() error {
-	ln, err := net.Listen("tcp", s.cfg.Listen)
+	listen := strings.TrimSpace(s.cfg.Listen)
+	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		logger.Error("Failed to bind web admin UI listener",
-			zap.String("listen", s.cfg.Listen),
+			zap.String("listen", listen),
 			zap.Error(err))
 		return err
 	}
@@ -84,6 +87,8 @@ func (s *Server) Start() error {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		// Route net/http's own errors (handler panics, accept errors) through zap.
+		ErrorLog: zap.NewStdLog(logger.Log.Named("web")),
 	}
 
 	s.mu.Lock()
