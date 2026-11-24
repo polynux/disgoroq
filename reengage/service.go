@@ -279,11 +279,13 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		}
 	}
 
+	temperature := s.repo.GetTemperature(ctx, guildID)
+
 	response, err := s.aiService.Chat(ctx, &ai.ChatRequest{
 		SystemPrompt: systemPrompt,
 		Messages:     processedMessage.Messages,
 		Images:       processedMessage.Images,
-		Temperature:  database.DefaultTemperature,
+		Temperature:  temperature,
 		MaxTokens:    database.DefaultMaxTokens,
 		BotName:      botNick,
 		BotID:        s.client.ID().String(),

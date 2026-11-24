@@ -3,10 +3,13 @@ package reengage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +26,7 @@ import (
 	_ "github.com/tursodatabase/go-libsql"
 	"go.uber.org/zap"
 
+	"polynux/disgoroq/ai"
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/database"
 	"polynux/disgoroq/logger"
@@ -217,9 +221,15 @@ func databaseTestRepository(t *testing.T) *database.Repository {
 		t.Fatalf("failed to read schema: %v", err)
 	}
 
-	if _, err := databaseConn.Exec(string(schema)); err != nil {
-		databaseConn.Close()
-		t.Fatalf("failed to create tables: %v", err)
+	for _, stmt := range strings.Split(string(schema), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if stmt == "" || strings.Contains(stmt, "libsql_vector_idx") {
+			continue
+		}
+		if _, err := databaseConn.Exec(stmt); err != nil {
+			databaseConn.Close()
+			t.Fatalf("failed to create tables (%s): %v", stmt, err)
+		}
 	}
 
 	repo := database.NewRepositoryWithDB(databaseConn)
@@ -297,3 +307,133 @@ func TestCheckAllChannels_EvictsStaleCachedGuildOnUnknownGuild(t *testing.T) {
 		t.Fatal("expected the stale guild to be evicted from the gateway cache")
 	}
 }
+
+type reengageDiscordTransport struct {
+	channelID string
+}
+
+func (t *reengageDiscordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var body string
+	switch {
+	case req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/members/"):
+		body = `{"user":{"id":"123456789012345678","username":"Bot"}}`
+	case req.Method == http.MethodPost && strings.Contains(req.URL.Path, "/messages"):
+		body = fmt.Sprintf(`{"id":"700000000000000099","channel_id":%q,"content":"salut","author":{"id":"123456789012345678","username":"Bot","bot":true}}`, t.channelID)
+	default:
+		return nil, fmt.Errorf("unexpected Discord REST call: %s %s", req.Method, req.URL.Path)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}, nil
+}
+
+func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
+	silenceLogs(t)
+	ctx := context.Background()
+	repo := databaseTestRepository(t)
+
+	const guildID = "400000000000000010"
+	const channelID = "500000000000000010"
+	gID := snowflake.MustParse(guildID)
+	chID := snowflake.MustParse(channelID)
+
+	nick := "Alice"
+	if err := repo.CacheDiscordMessage(ctx, discord.Message{
+		ID:        snowflake.MustParse("700000000000000001"),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: snowflake.MustParse("300000000000000001"), Username: "alice"},
+		Member:    &discord.Member{Nick: &nick},
+		Content:   "bonjour tout le monde",
+		CreatedAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("failed to cache discord message: %v", err)
+	}
+	if err := repo.SetDiscordMessageHistoryExhausted(ctx, channelID, guildID, true); err != nil {
+		t.Fatalf("failed to mark history exhausted: %v", err)
+	}
+
+	var (
+		mu         sync.Mutex
+		tempsSeen  []float64
+	)
+	ollamaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Options struct {
+				Temperature float64 `json:"temperature"`
+			} `json:"options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("failed to decode ollama request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		tempsSeen = append(tempsSeen, payload.Options.Temperature)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"test-model","message":{"role":"assistant","content":"yo ça dit quoi"},"done":true}`)
+	}))
+	defer ollamaServer.Close()
+
+	aiSvc := ai.NewService(ai.ServiceConfig{
+		PrimaryProvider:   ai.ProviderOllama,
+		OllamaEnabled:     true,
+		OllamaURL:         ollamaServer.URL,
+		OllamaModel:       "test-model",
+		OllamaVisionModel: "test-vision",
+		RetryConfig: ai.RetryConfig{
+			MaxRetries:    0,
+			InitialDelay:  time.Millisecond,
+			MaxDelay:      time.Millisecond,
+			BackoffFactor: 1.0,
+		},
+		MinResponseLength: 1,
+	})
+	if aiSvc == nil {
+		t.Fatal("failed to create AI service")
+	}
+
+	client, err := disgo.New("MTIzNDU2Nzg5MDEyMzQ1Njc4.fake.fake",
+		bot.WithRestClientConfigOpts(rest.WithHTTPClient(&http.Client{
+			Transport: &reengageDiscordTransport{channelID: channelID},
+		})),
+	)
+	if err != nil {
+		t.Fatalf("failed to create disgo client: %v", err)
+	}
+
+	svc := NewService(client, aiSvc, repo, nil, nil, config.ReengageConfig{
+		ReengageMessage: "\nRelance le chat.",
+	}, "tu es {{.BotNick}}")
+
+	// 1. No per-guild temperature configured -> falls back to database.DefaultTemperature.
+	if err := svc.GenerateAndSend(ctx, guildID, channelID); err != nil {
+		t.Fatalf("GenerateAndSend (default temp) failed: %v", err)
+	}
+
+	// 2. Per-guild temperature configured -> uses the guild's temperature setting.
+	if err := repo.SetGuildSetting(ctx, guildID, "temperature", "0.85"); err != nil {
+		t.Fatalf("failed to set guild temperature: %v", err)
+	}
+	if err := svc.GenerateAndSend(ctx, guildID, channelID); err != nil {
+		t.Fatalf("GenerateAndSend (custom temp) failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tempsSeen) != 2 {
+		t.Fatalf("expected 2 AI calls, got %d", len(tempsSeen))
+	}
+	if math.Abs(tempsSeen[0]-float64(database.DefaultTemperature)) > 1e-4 {
+		t.Fatalf("expected default temperature %v, got %v", database.DefaultTemperature, tempsSeen[0])
+	}
+	if math.Abs(tempsSeen[1]-0.85) > 1e-4 {
+		t.Fatalf("expected guild temperature 0.85, got %v", tempsSeen[1])
+	}
+}
+
