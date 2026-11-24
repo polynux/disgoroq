@@ -1563,6 +1563,7 @@ func TestIsJunkGifDescription(t *testing.T) {
 		"mp4 to gif converter",
 		"image0",
 		"video12",
+		"1234",
 		"123456",
 		"a1b2c3d4",
 		"---",
@@ -1584,12 +1585,33 @@ func TestIsJunkGifDescription(t *testing.T) {
 		"dragon ball Z",
 		"mdr",
 		"ps5",
+		"404",
+		"ab12cd",
+		"squidgame2",
+		"naruto2023",
+		"dragonball2024",
+		"reverse",
+		"reversed",
+		"uno reverse",
+		"rotate",
+		"rotated",
+		"split",
+		"discord",
+		"thumb",
+		"frame",
+		"frames",
+		"ezgif funny cat",
 		"happy cat 2024",
 		"pleure de rire",
 	}
 	for _, tc := range validCases {
 		assert.False(t, isJunkGifDescription(tc), "expected %q NOT to be detected as junk", tc)
 	}
+
+	assert.Equal(t, "funny cat", cleanGifDescription("ezgif funny cat"))
+	assert.Equal(t, "funny cat", cleanGifDescription("ezgif com funny cat"))
+	assert.Equal(t, "to be continued", cleanGifDescription("to be continued"))
+	assert.Equal(t, "dragon ball Z", cleanGifDescription("dragon ball Z"))
 }
 
 func TestResolveRandomGifFallbackTriggersAndLogs(t *testing.T) {
@@ -1753,6 +1775,78 @@ func TestResolveRandomGifFallbackTriggersAndLogs(t *testing.T) {
 		assert.Less(t, elapsed, 500*time.Millisecond)
 		assert.NoError(t, parentCtx.Err(), "parent completion context must stay uncancelled")
 		assertFallbackLog(t, logs, "[gif: slow embed query]", "error", fallbackURL)
+	})
+
+	t.Run("slow earlier non-gif tag does not starve later gif fallback", func(t *testing.T) {
+		slow := &blockingEmbedder{release: make(chan struct{})}
+		defer close(slow.release)
+
+		timeoutCfg := defaultEnabledConfig()
+		timeoutCfg.RandomGifFallback = true
+		timeoutCfg.LookupTimeoutMs = 80
+		timeoutSvc := NewService(repo, slow, timeoutCfg)
+
+		for _, tc := range []struct {
+			name       string
+			rawReply   string
+			wantTag    string
+			wantReason string
+		}{
+			{
+				name:       "youtube followed by junk gif",
+				rawReply:   "[youtube: slow video] [gif: togif]",
+				wantTag:    "[gif: togif]",
+				wantReason: "junk",
+			},
+			{
+				name:       "youtube followed by described gif",
+				rawReply:   "[youtube: slow video] [gif: slow gif]",
+				wantTag:    "[gif: slow gif]",
+				wantReason: "error",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				logs := captureMediaLogs(t)
+				parentCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+
+				start := time.Now()
+				res, ok := timeoutSvc.Resolve(parentCtx, ai.MediaResolveRequest{
+					GuildID:  "g1",
+					RawReply: tc.rawReply,
+				})
+				elapsed := time.Since(start)
+
+				require.True(t, ok)
+				assert.Equal(t, fallbackURL, res.URL)
+				assert.Less(t, elapsed, 500*time.Millisecond)
+				assert.NoError(t, parentCtx.Err(), "parent completion context must stay uncancelled")
+				assertFallbackLog(t, logs, tc.wantTag, tc.wantReason, fallbackURL)
+			})
+		}
+	})
+
+	t.Run("strips junk tokens and searches remaining meaningful words", func(t *testing.T) {
+		// Exact match after stripping "ezgif": "[gif: ezgif cat smile]" -> searches "cat smile".
+		embedder.resetCalls()
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "tiens [gif: ezgif cat smile]",
+		})
+		require.True(t, ok)
+		assert.Equal(t, exactCatURL, res.URL)
+		assert.Empty(t, embedder.callHistory())
+
+		// Semantic search uses cleaned query "funny cat", not "ezgif funny cat".
+		embedder.resetCalls()
+		embedder.set("search_query: funny cat", unrelatedVec)
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "tiens [gif: ezgif funny cat]",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assert.Equal(t, []string{"search_query: funny cat"}, embedder.callHistory())
 	})
 
 	t.Run("link tags stay stripped when unmatched", func(t *testing.T) {
@@ -2236,5 +2330,49 @@ func TestResolveGifOnRequest(t *testing.T) {
 		})
 		require.True(t, ok)
 		assert.Equal(t, fallbackURL, res.URL)
+	})
+
+	t.Run("tries trigger search on answered message before random fallback when both options are on", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		embedder.set("search_query: totally unmatched tag", unrelatedVec)
+
+		// Junk gif tag on a gif request should try trigger search on TargetText before random fallback.
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:         "g1",
+			RawReply:        "tiens [gif: togif]",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
+		})
+		require.True(t, ok)
+		assert.Equal(t, triggerURL, res.URL)
+
+		// Unmatched described gif tag on a gif request should also try trigger search before random fallback.
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:         "g1",
+			RawReply:        "tiens [gif: totally unmatched tag]",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
+		})
+		require.True(t, ok)
+		assert.Equal(t, triggerURL, res.URL)
+
+		// When trigger search misses as well, falls back to random gif and keeps original junk reason.
+		logs := captureMediaLogs(t)
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:         "g1",
+			RawReply:        "tiens [gif: togif]",
+			TargetText:      "un gif ?",
+			TargetMessageID: "m-1",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		entries := logs.FilterMessage("Media library random gif fallback").All()
+		require.Len(t, entries, 1)
+		assert.Equal(t, "[gif: togif]", entries[0].ContextMap()["tag"])
+		assert.Equal(t, "junk", entries[0].ContextMap()["reason"])
 	})
 }

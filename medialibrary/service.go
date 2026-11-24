@@ -281,6 +281,15 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		ExcludeURLs:     excludeList,
 	}
 
+	hasGifTag := false
+	for _, tag := range tags {
+		if tag.Kind == "gif" {
+			hasGifTag = true
+			break
+		}
+	}
+	reserveForFallback := s.cfg.RandomGifFallback && (hasGifTag || gifRequested)
+
 	var (
 		fallbackTag     string
 		fallbackReason  resolveFailureReason
@@ -307,12 +316,16 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 			break
 		}
 		if tag.Description != "" {
-			if tag.Kind == "gif" && s.cfg.RandomGifFallback && isJunkGifDescription(tag.Description) {
-				recordGifFailure(tag.Raw, reasonJunk)
-				continue
+			searchTag := tag
+			if tag.Kind == "gif" && s.cfg.RandomGifFallback {
+				cleaned := cleanGifDescription(tag.Description)
+				if cleaned == "" {
+					recordGifFailure(tag.Raw, reasonJunk)
+					continue
+				}
+				searchTag.Description = cleaned
 			}
-			reserve := s.cfg.RandomGifFallback && (tag.Kind == "gif" || gifRequested)
-			if result, ok, hadErr := s.resolveDescribedTag(lookupCtx, req.GuildID, tag, filter, recentURLs, reserve); ok {
+			if result, ok, hadErr := s.resolveDescribedTag(lookupCtx, req.GuildID, searchTag, filter, recentURLs, reserveForFallback); ok {
 				return result, true
 			} else if tag.Kind == "gif" {
 				if hadErr {
@@ -325,8 +338,7 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		}
 		if tag.Kind == "gif" {
 			triedBareGif = true
-			reserve := s.cfg.RandomGifFallback
-			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs, reserve); ok {
+			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs, reserveForFallback); ok {
 				return result, true
 			} else if hadErr {
 				recordGifFailure(tag.Raw, reasonError)
@@ -336,30 +348,20 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		}
 	}
 
-	triedRandomFallback := false
-	if hasUnmatchedGif && s.cfg.RandomGifFallback {
-		triedRandomFallback = true
-		if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, fallbackTag, fallbackReason, filter, recentURLs); ok {
+	if gifRequested && !triedBareGif {
+		reqTag := ai.MediaTag{Raw: gifOnRequestTag, Kind: "gif"}
+		if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, reqTag, req.TargetText, filter, recentURLs, reserveForFallback); ok {
 			return result, true
+		} else if hadErr {
+			recordGifFailure(reqTag.Raw, reasonError)
+		} else {
+			recordGifFailure(reqTag.Raw, reasonNoMatch)
 		}
 	}
 
-	if gifRequested {
-		reqTag := ai.MediaTag{Raw: gifOnRequestTag, Kind: "gif"}
-		reason := reasonNoMatch
-		if !triedBareGif {
-			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, reqTag, req.TargetText, filter, recentURLs, s.cfg.RandomGifFallback); ok {
-				return result, true
-			} else if hadErr {
-				reason = reasonError
-			}
-		} else if hasUnmatchedGif {
-			reason = fallbackReason
-		}
-		if s.cfg.RandomGifFallback && !triedRandomFallback {
-			if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, reqTag.Raw, reason, filter, recentURLs); ok {
-				return result, true
-			}
+	if hasUnmatchedGif && s.cfg.RandomGifFallback {
+		if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, fallbackTag, fallbackReason, filter, recentURLs); ok {
+			return result, true
 		}
 	}
 
@@ -423,18 +425,13 @@ func (s *Service) resolveRandomGifFallback(ctx context.Context, guildID, tagRaw 
 	return ai.MediaResolveResult{Tag: tagRaw, URL: chosen.URL}, true
 }
 
-var junkGifStrongTokens = map[string]bool{
-	"ezgif":      true,
-	"togif":      true,
-	"gifmaker":   true,
-	"gifbrewery": true,
-}
-
-var junkGifNoiseTokens = map[string]bool{
+var junkGifArtifactTokens = map[string]bool{
+	// Converter / upload tools
+	"ezgif": true, "togif": true, "gifmaker": true, "gifbrewery": true,
 	// Platforms / domains / URL artifacts
 	"tenor": true, "giphy": true, "klipy": true, "gfycat": true,
 	"imgur": true, "imgflip": true, "kapwing": true,
-	"discord": true, "discordapp": true, "cdn": true,
+	"discordapp": true, "cdn": true,
 	"com": true, "net": true, "org": true, "www": true,
 	"http": true, "https": true, "html": true, "php": true,
 	// Formats / extensions
@@ -446,14 +443,14 @@ var junkGifNoiseTokens = map[string]bool{
 	"converter": true, "convert": true, "maker": true,
 	"resize": true, "resized": true, "crop": true, "cropped": true,
 	"optimize": true, "optimized": true, "compress": true, "compressed": true,
-	"reverse": true, "reversed": true, "rotate": true, "rotated": true,
-	"trim": true, "trimmed": true, "split": true, "overlay": true,
+	"trim": true, "trimmed": true, "overlay": true,
 	"output": true, "export": true, "untitled": true, "unknown": true,
 	"attachment": true, "attachments": true, "image": true, "img": true,
 	"video": true, "vid": true, "media": true, "file": true, "fichier": true,
 	"download": true, "caption": true, "view": true, "thumbnail": true,
-	"thumb": true, "frame": true, "frames": true,
-	// Short connectors that carry no meaning on their own
+}
+
+var junkGifConnectorTokens = map[string]bool{
 	"to": true, "from": true, "by": true, "of": true, "in": true, "on": true,
 	"at": true, "the": true, "a": true, "an": true, "de": true, "du": true,
 	"la": true, "le": true, "en": true, "et": true,
@@ -461,36 +458,54 @@ var junkGifNoiseTokens = map[string]bool{
 
 var junkGifNumberedPrefixes = []string{"img", "image", "video", "vid", "gif", "file", "clip", "ezgif"}
 
-// isJunkGifDescription reports whether a gif tag description consists of
-// uploaded-filename / converter leftovers (e.g. "togif", "ezgif com apng to converter")
-// or non-semantic noise/IDs that will never match meaningful media.
-func isJunkGifDescription(desc string) bool {
-	tokens := strings.FieldsFunc(strings.ToLower(desc), func(r rune) bool {
+// cleanGifDescription strips uploaded-filename / converter artifact tokens from
+// a gif tag description and returns the remaining search query. Returns "" when
+// no meaningful word remains (meaning the description is junk).
+func cleanGifDescription(desc string) string {
+	tokens := strings.FieldsFunc(desc, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 	if len(tokens) == 0 {
-		return true
+		return ""
 	}
+	kept := make([]string, 0, len(tokens))
 	hasMeaningful := false
-	for _, tok := range tokens {
-		if junkGifStrongTokens[tok] {
-			return true
+	droppedAny := false
+	for _, rawTok := range tokens {
+		tok := strings.ToLower(rawTok)
+		if isJunkGifArtifactToken(tok) {
+			droppedAny = true
+			continue
 		}
-		if !isJunkGifToken(tok) {
+		if !isWeakGifToken(tok) {
 			hasMeaningful = true
 		}
+		kept = append(kept, rawTok)
 	}
-	return !hasMeaningful
+	if !hasMeaningful {
+		return ""
+	}
+	if !droppedAny {
+		return desc
+	}
+	return strings.Join(kept, " ")
 }
 
-func isJunkGifToken(tok string) bool {
-	if junkGifNoiseTokens[tok] || junkGifStrongTokens[tok] {
+// isJunkGifDescription reports whether a gif tag description has no meaningful
+// words left after removing uploaded-filename / converter junk tokens.
+func isJunkGifDescription(desc string) bool {
+	return cleanGifDescription(desc) == ""
+}
+
+func isWeakGifToken(tok string) bool {
+	return junkGifConnectorTokens[tok] || utf8.RuneCountInString(tok) <= 1
+}
+
+func isJunkGifArtifactToken(tok string) bool {
+	if junkGifArtifactTokens[tok] {
 		return true
 	}
 	runeCount := utf8.RuneCountInString(tok)
-	if runeCount <= 1 {
-		return true
-	}
 	allDigits := true
 	hasDigit := false
 	allHex := true
@@ -505,13 +520,10 @@ func isJunkGifToken(tok string) bool {
 			allHex = false
 		}
 	}
-	if allDigits {
+	if allDigits && runeCount >= 4 {
 		return true
 	}
-	if runeCount >= 8 && hasDigit {
-		return true
-	}
-	if allHex && runeCount >= 6 && hasDigit {
+	if allHex && runeCount >= 8 && hasDigit {
 		return true
 	}
 	for _, prefix := range junkGifNumberedPrefixes {
