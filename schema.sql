@@ -124,8 +124,9 @@ CREATE TABLE IF NOT EXISTS discord_messages (
 CREATE INDEX IF NOT EXISTS idx_discord_messages_channel_created
 ON discord_messages(channel_id, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_channel_created
-ON discord_messages(guild_id, channel_id, created_at DESC);
+-- Superseded by idx_discord_messages_guild_channel_created_id, which it is a
+-- strict prefix of. Dropped so writes no longer maintain both.
+DROP INDEX IF EXISTS idx_discord_messages_guild_channel_created;
 
 -- Author-name fallback for summaries, ordered without a temp B-tree.
 CREATE INDEX IF NOT EXISTS idx_discord_messages_guild_author_created

@@ -218,12 +218,9 @@ func (s *Service) ImportJSONL(ctx context.Context, r io.Reader, progress func(Im
 	return summary, nil
 }
 
-// joinTriggerTexts keeps the most recent maxItems non-empty unique trigger texts
-// from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]) and
-// stores them newest first, the order prependTriggerText keeps for live updates.
-// normalizeTriggerText canonicalises trigger text coming from the admin editor
-// or an import: CRLF becomes LF, each line is trimmed, empty and duplicate
-// lines are dropped, and the remaining lines keep their order.
+// normalizeTriggerText canonicalises trigger text coming from the admin
+// editor: CRLF becomes LF, each line is trimmed, empty and duplicate lines are
+// dropped, and the remaining lines keep their order.
 func normalizeTriggerText(raw string) string {
 	lines := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n")
 	out := make([]string, 0, len(lines))
@@ -239,6 +236,9 @@ func normalizeTriggerText(raw string) string {
 	return strings.Join(out, "\n")
 }
 
+// joinTriggerTexts keeps the most recent maxItems non-empty unique trigger texts
+// from a JSONL array ordered oldest -> newest (matching the exporter's [-3:]) and
+// stores them newest first, the order prependTriggerText keeps for live updates.
 func joinTriggerTexts(triggers []string, maxItems int) string {
 	if len(triggers) == 0 || maxItems <= 0 {
 		return ""

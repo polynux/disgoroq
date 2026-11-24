@@ -905,6 +905,9 @@ func (s *Server) handleDataAttachmentPurge(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleDataMediaDelete(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	guildID := strings.TrimSpace(r.FormValue("guild_id"))
 	rawURL := strings.TrimSpace(r.FormValue("url"))
 	if guildID == "" || rawURL == "" {
@@ -930,6 +933,9 @@ func (s *Server) handleDataMediaDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDataMediaEdit(w http.ResponseWriter, r *http.Request) {
+	if !s.requireDataRepo(w) {
+		return
+	}
 	guildID := strings.TrimSpace(r.FormValue("guild_id"))
 	rawURL := strings.TrimSpace(r.FormValue("url"))
 	description := r.FormValue("description")

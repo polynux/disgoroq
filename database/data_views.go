@@ -220,8 +220,13 @@ func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, 
 	if userID != "" {
 		where.add("user_id = ?", userID)
 	}
-	if processed >= 0 {
-		where.add("processed = ?", processed)
+	switch processed {
+	case 0:
+		// processed is nullable (DEFAULT 0); a NULL row is unprocessed, as the
+		// list renders it.
+		where.add("(processed = 0 OR processed IS NULL)")
+	case 1:
+		where.add("processed = 1")
 	}
 
 	query := `
