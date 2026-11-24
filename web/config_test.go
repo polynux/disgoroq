@@ -636,3 +636,42 @@ func TestWriteConfigAtomicallyFollowsSymlinkAndUpdatesBackupMode(t *testing.T) {
 	_, strayErr := os.Stat(linkPath + ".bak")
 	assert.True(t, os.IsNotExist(strayErr))
 }
+
+func TestConfigSaveIgnoresAbsentFieldsAndDistinguishesUncheckedCheckbox(t *testing.T) {
+	srv, runtime, cfgPath := newConfigTestServer(t, sampleConfigYAML)
+	origBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	// 1. Omitting field:bot.trigger_words must leave existing trigger words intact.
+	botForm := url.Values{
+		"config_hash":              {computeFileHash(origBytes)},
+		"field:bot.default_prompt": {"updated prompt only"},
+	}
+	rec := postConfigSection(t, srv, "bot", botForm, true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "updated prompt only", runtime.Current().Bot.DefaultPrompt)
+	assert.Equal(t, []string{"feun", "feunboy"}, runtime.Current().Bot.TriggerWords)
+
+	// 2. Omitting field:votes.enabled must leave votes.enabled = true.
+	curBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	votesOmitted := url.Values{
+		"config_hash":             {computeFileHash(curBytes)},
+		"field:votes.probability": {"0.5"},
+	}
+	rec = postConfigSection(t, srv, "votes", votesOmitted, true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, runtime.Current().Votes.Enabled)
+	assert.InDelta(t, 0.5, runtime.Current().Votes.Probability, 1e-9)
+
+	// 3. Submitting hidden sentinel field:votes.enabled=false (unchecked checkbox) sets it to false.
+	curBytes, err = os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	votesUnchecked := url.Values{
+		"config_hash":         {computeFileHash(curBytes)},
+		"field:votes.enabled": {"false"},
+	}
+	rec = postConfigSection(t, srv, "votes", votesUnchecked, true)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, runtime.Current().Votes.Enabled)
+}

@@ -152,8 +152,19 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 		}
 
 		inputName := "field:" + field.Path
+		vals, present := r.PostForm[inputName]
+		if !present {
+			// Fields omitted from the POST are left untouched.
+			continue
+		}
 		if field.Kind == fieldKindBool {
-			bVal := r.FormValue(inputName) == "on" || r.FormValue(inputName) == "true"
+			bVal := false
+			for _, v := range vals {
+				if v == "on" || v == "true" {
+					bVal = true
+					break
+				}
+			}
 			submittedBool[field.Path] = bVal
 			if !fieldValueEqual(field, node, found, bVal) {
 				patches = append(patches, yamlPatch{Path: field.Path, Kind: field.Kind, Val: bVal})
@@ -165,7 +176,7 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 			continue
 		}
 
-		raw := r.FormValue(inputName)
+		raw := vals[len(vals)-1]
 		submittedRaw[field.Path] = raw
 
 		parsedVal, err := parseFormFieldValue(field, raw)

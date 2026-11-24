@@ -64,8 +64,9 @@
           {{if .ReadOnly}}
             <div class="config-readonly-value mono">{{if .Value}}{{.Value}}{{else}}<span class="muted">(not set)</span>{{end}}</div>
           {{else if eq .Kind "bool"}}
+            <input type="hidden" name="{{.InputName}}" value="false">
             <label class="checkbox-row">
-              <input id="{{.InputID}}" type="checkbox" name="{{.InputName}}"{{if .BoolValue}} checked{{end}}>
+              <input id="{{.InputID}}" type="checkbox" name="{{.InputName}}" value="true"{{if .BoolValue}} checked{{end}}>
               <span>Enabled</span>
             </label>
           {{else if eq .Kind "text"}}
