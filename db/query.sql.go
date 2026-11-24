@@ -718,6 +718,38 @@ func (q *Queries) GetGuildSettings(ctx context.Context, id int64) ([]GuildSettin
 	return items, nil
 }
 
+const getGuildSettingsByGuild = `-- name: GetGuildSettingsByGuild :many
+SELECT name, value FROM guild_settings WHERE guild_id = ?
+`
+
+type GetGuildSettingsByGuildRow struct {
+	Name  string
+	Value string
+}
+
+func (q *Queries) GetGuildSettingsByGuild(ctx context.Context, guildID string) ([]GetGuildSettingsByGuildRow, error) {
+	rows, err := q.db.QueryContext(ctx, getGuildSettingsByGuild, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetGuildSettingsByGuildRow
+	for rows.Next() {
+		var i GetGuildSettingsByGuildRow
+		if err := rows.Scan(&i.Name, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getGuildsWithAutoJoin = `-- name: GetGuildsWithAutoJoin :many
 SELECT guild_id, auto_join_channel
 FROM voice_settings

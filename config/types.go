@@ -6,14 +6,14 @@ import "time"
 
 // Config is the root configuration structure containing all nested configurations.
 type Config struct {
-	Discord   DiscordConfig   `yaml:"discord"`
-	Database  DatabaseConfig  `yaml:"database"`
-	AI        AIConfig        `yaml:"ai"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Memory    MemoryConfig    `yaml:"memory"`
-	Emoji     EmojiConfig     `yaml:"emoji"`
-	Horoscope HoroscopeConfig `yaml:"horoscope"`
-	Reengage  ReengageConfig  `yaml:"reengage"`
+	Discord      DiscordConfig      `yaml:"discord"`
+	Database     DatabaseConfig     `yaml:"database"`
+	AI           AIConfig           `yaml:"ai"`
+	Logging      LoggingConfig      `yaml:"logging"`
+	Memory       MemoryConfig       `yaml:"memory"`
+	Emoji        EmojiConfig        `yaml:"emoji"`
+	Horoscope    HoroscopeConfig    `yaml:"horoscope"`
+	Reengage     ReengageConfig     `yaml:"reengage"`
 	Votes        VotesConfig        `yaml:"votes"`
 	MediaLibrary MediaLibraryConfig `yaml:"media_library"`
 	Bot          BotConfig          `yaml:"bot"`

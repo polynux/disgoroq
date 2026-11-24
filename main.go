@@ -35,6 +35,7 @@ import (
 	"polynux/disgoroq/scheduler"
 	"polynux/disgoroq/utils"
 	voicepkg "polynux/disgoroq/voice"
+	"polynux/disgoroq/web"
 )
 
 var (
@@ -158,7 +159,7 @@ func main() {
 			),
 		),
 		bot.WithCacheConfigOpts(
-			cache.WithCaches(cache.FlagGuilds|cache.FlagVoiceStates),
+			cache.WithCaches(cache.FlagGuilds|cache.FlagVoiceStates|cache.FlagChannels),
 		),
 		bot.WithVoiceManagerConfigOpts(
 			voice.WithDaveSessionCreateFunc(golibdave.NewSession),
@@ -502,6 +503,19 @@ func main() {
 	sched.Start()
 	defer sched.Shutdown()
 
+	var webServer *web.Server
+	if cfg.Web.Enabled {
+		webServer = web.New(web.Deps{
+			Client: client,
+			Repo:   repo,
+			Config: cfg,
+			Memory: memoryService,
+		}, cfg.Web)
+		if err := webServer.Start(); err != nil {
+			webServer = nil
+		}
+	}
+
 	if sendDirectHoroscope {
 		sched.SendHoroscope()
 	}
@@ -514,6 +528,14 @@ func main() {
 	<-sc
 
 	logger.Info("Shutting down gracefully")
+
+	if webServer != nil {
+		webCtx, webCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := webServer.Shutdown(webCtx); err != nil {
+			logger.Error("Error shutting down web admin UI", zap.Error(err))
+		}
+		webCancel()
+	}
 
 	// Close memory service (cancels in-flight summarizations)
 	if memoryService != nil {
@@ -806,5 +828,3 @@ func redactSecret(s, secret string) string {
 	}
 	return strings.ReplaceAll(s, secret, "[REDACTED]")
 }
-
-

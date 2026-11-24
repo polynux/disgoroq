@@ -220,6 +220,19 @@ func (r *Repository) GetAllGuilds(ctx context.Context) ([]string, error) {
 	return r.queries.GetAllGuilds(ctx)
 }
 
+// GetGuildSettingsMap returns all stored setting key/value pairs for a guild.
+func (r *Repository) GetGuildSettingsMap(ctx context.Context, guildID string) (map[string]string, error) {
+	rows, err := r.queries.GetGuildSettingsByGuild(ctx, guildID)
+	if err != nil {
+		return nil, err
+	}
+	settings := make(map[string]string, len(rows))
+	for _, row := range rows {
+		settings[row.Name] = row.Value
+	}
+	return settings, nil
+}
+
 func (r *Repository) GetHoroscopeChannel(ctx context.Context, guildID string) (string, error) {
 	return r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
 		Name:    "horoscope_channel",

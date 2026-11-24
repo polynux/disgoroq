@@ -23,6 +23,9 @@ WHERE message_id = ?;
 -- name: GetGuildSetting :one
 SELECT value FROM guild_settings WHERE guild_id = ? AND name = ?;
 
+-- name: GetGuildSettingsByGuild :many
+SELECT name, value FROM guild_settings WHERE guild_id = ?;
+
 -- name: GetAllGuilds :many
 SELECT DISTINCT guild_id FROM guild_settings;
 
