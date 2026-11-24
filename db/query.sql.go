@@ -50,6 +50,21 @@ func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSetting
 	return err
 }
 
+const deleteMediaLibraryEntry = `-- name: DeleteMediaLibraryEntry :exec
+DELETE FROM media_library
+WHERE url = ? AND guild_id = ?
+`
+
+type DeleteMediaLibraryEntryParams struct {
+	Url     string
+	GuildID string
+}
+
+func (q *Queries) DeleteMediaLibraryEntry(ctx context.Context, arg DeleteMediaLibraryEntryParams) error {
+	_, err := q.db.ExecContext(ctx, deleteMediaLibraryEntry, arg.Url, arg.GuildID)
+	return err
+}
+
 const deleteMessageBufferEntry = `-- name: DeleteMessageBufferEntry :exec
 DELETE FROM message_buffer
 WHERE id = ?

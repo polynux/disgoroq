@@ -567,3 +567,8 @@ WHERE guild_id = sqlc.arg(guild_id)
 ORDER BY CASE WHEN uses >= 2 THEN 0 ELSE 1 END ASC, RANDOM()
 LIMIT sqlc.arg(result_limit);
 
+-- name: DeleteMediaLibraryEntry :exec
+DELETE FROM media_library
+WHERE url = ? AND guild_id = ?;
+
+

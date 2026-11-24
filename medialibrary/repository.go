@@ -168,6 +168,14 @@ func (r *Repository) UpsertLive(ctx context.Context, entry Entry) error {
 	})
 }
 
+// DeleteEntry deletes a single media_library row identified by canonical URL and guild ID.
+func (r *Repository) DeleteEntry(ctx context.Context, rawURL, guildID string) error {
+	return r.queries.DeleteMediaLibraryEntry(ctx, db.DeleteMediaLibraryEntryParams{
+		Url:     rawURL,
+		GuildID: guildID,
+	})
+}
+
 func (r *Repository) FindExactDescription(ctx context.Context, guildID, kind, description string, filter LookupFilter, limit int) ([]Entry, error) {
 	rows, err := r.queries.FindMediaLibraryExactDescription(ctx, db.FindMediaLibraryExactDescriptionParams{
 		GuildID:         guildID,
