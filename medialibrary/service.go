@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/disgoorg/disgo/discord"
 	"go.uber.org/zap"
@@ -24,6 +26,7 @@ const (
 	LiveTriggerWindow = 5 * time.Minute
 
 	defaultLookupTimeout   = 3 * time.Second
+	fallbackTimeoutReserve = 150 * time.Millisecond
 	lookupCandidateLimit   = 5
 	recentChannelScanLimit = 200
 	liveQueueSize          = 128
@@ -221,6 +224,14 @@ func (s *Service) Close() {
 	s.workerWG.Wait()
 }
 
+type resolveFailureReason string
+
+const (
+	reasonNoMatch resolveFailureReason = "no_match"
+	reasonJunk    resolveFailureReason = "junk"
+	reasonError   resolveFailureReason = "error"
+)
+
 // Resolve implements ai.MediaResolver. It runs under a dedicated short timeout
 // independent of the completion context so a slow or hung embedder only strips
 // tags and never consumes the completion retry budget.
@@ -247,28 +258,232 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 		ExcludeURLs:     excludeList,
 	}
 
+	var (
+		fallbackTag     string
+		fallbackReason  resolveFailureReason
+		hasUnmatchedGif bool
+	)
+	recordGifFailure := func(tagRaw string, reason resolveFailureReason) {
+		if !hasUnmatchedGif {
+			hasUnmatchedGif = true
+			fallbackTag = tagRaw
+			fallbackReason = reason
+		}
+	}
+
 	for _, tag := range tags {
 		if lookupCtx.Err() != nil {
 			logger.Warn("Media library lookup timed out",
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", req.GuildID),
 				zap.Error(lookupCtx.Err()))
-			return ai.MediaResolveResult{}, false
+			if tag.Kind == "gif" {
+				recordGifFailure(tag.Raw, reasonError)
+			}
+			break
 		}
 		if tag.Description != "" {
-			if result, ok := s.resolveDescribedTag(lookupCtx, req.GuildID, tag, filter, recentURLs); ok {
+			if tag.Kind == "gif" && s.cfg.RandomGifFallback && isJunkGifDescription(tag.Description) {
+				recordGifFailure(tag.Raw, reasonJunk)
+				continue
+			}
+			reserve := s.cfg.RandomGifFallback && tag.Kind == "gif"
+			if result, ok, hadErr := s.resolveDescribedTag(lookupCtx, req.GuildID, tag, filter, recentURLs, reserve); ok {
 				return result, true
+			} else if tag.Kind == "gif" {
+				if hadErr {
+					recordGifFailure(tag.Raw, reasonError)
+				} else {
+					recordGifFailure(tag.Raw, reasonNoMatch)
+				}
 			}
 			continue
 		}
 		if tag.Kind == "gif" {
-			if result, ok := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs); ok {
+			reserve := s.cfg.RandomGifFallback
+			if result, ok, hadErr := s.resolveBareGifTag(lookupCtx, req.GuildID, tag, req.TargetText, filter, recentURLs, reserve); ok {
 				return result, true
+			} else if hadErr {
+				recordGifFailure(tag.Raw, reasonError)
+			} else {
+				recordGifFailure(tag.Raw, reasonNoMatch)
 			}
 		}
 	}
 
+	if hasUnmatchedGif && s.cfg.RandomGifFallback {
+		if result, ok := s.resolveRandomGifFallback(lookupCtx, req.GuildID, fallbackTag, fallbackReason, filter, recentURLs); ok {
+			return result, true
+		}
+	}
+
 	return ai.MediaResolveResult{}, false
+}
+
+// embedContext returns a context for embedding calls that optionally reserves a
+// small slice of lookupCtx's deadline so a local random-gif fallback query can
+// still run within the overall lookup timeout when the embedder hangs.
+func (s *Service) embedContext(lookupCtx context.Context, reserveForFallback bool) (context.Context, context.CancelFunc, bool) {
+	if !reserveForFallback {
+		return lookupCtx, func() {}, true
+	}
+	deadline, ok := lookupCtx.Deadline()
+	if !ok {
+		return lookupCtx, func() {}, true
+	}
+	reserve := fallbackTimeoutReserve
+	if quarter := s.lookupTimeout() / 4; quarter < reserve {
+		reserve = quarter
+	}
+	remaining := time.Until(deadline)
+	if remaining <= reserve {
+		return lookupCtx, func() {}, false
+	}
+	embedCtx, cancel := context.WithTimeout(lookupCtx, remaining-reserve)
+	return embedCtx, cancel, true
+}
+
+func (s *Service) resolveRandomGifFallback(ctx context.Context, guildID, tagRaw string, reason resolveFailureReason, filter LookupFilter, recentURLs map[string]bool) (ai.MediaResolveResult, bool) {
+	if ctx.Err() != nil {
+		logger.Warn("Media library random gif fallback skipped: lookup timed out",
+			zap.String("tag", tagRaw),
+			zap.String("reason", string(reason)),
+			zap.String("guild_id", guildID),
+			zap.Error(ctx.Err()))
+		return ai.MediaResolveResult{}, false
+	}
+	entries, err := s.repo.FindRandomGif(ctx, guildID, filter, lookupCandidateLimit)
+	if err != nil {
+		logger.Warn("Media library random gif fallback query failed",
+			zap.String("tag", tagRaw),
+			zap.String("reason", string(reason)),
+			zap.String("guild_id", guildID),
+			zap.Error(err))
+		return ai.MediaResolveResult{}, false
+	}
+	chosen, ok := firstEligibleEntry(entries, func(u string) bool { return s.eligible(u, recentURLs) })
+	if !ok {
+		logger.Info("Media library random gif fallback found no eligible gif",
+			zap.String("tag", tagRaw),
+			zap.String("reason", string(reason)),
+			zap.String("guild_id", guildID))
+		return ai.MediaResolveResult{}, false
+	}
+	logger.Info("Media library random gif fallback",
+		zap.String("tag", tagRaw),
+		zap.String("reason", string(reason)),
+		zap.String("url", chosen.URL),
+		zap.String("guild_id", guildID))
+	return ai.MediaResolveResult{Tag: tagRaw, URL: chosen.URL}, true
+}
+
+var junkGifStrongTokens = map[string]bool{
+	"ezgif":      true,
+	"togif":      true,
+	"gifmaker":   true,
+	"gifbrewery": true,
+}
+
+var junkGifNoiseTokens = map[string]bool{
+	// Platforms / domains / URL artifacts
+	"tenor": true, "giphy": true, "klipy": true, "gfycat": true,
+	"imgur": true, "imgflip": true, "kapwing": true,
+	"discord": true, "discordapp": true, "cdn": true,
+	"com": true, "net": true, "org": true, "www": true,
+	"http": true, "https": true, "html": true, "php": true,
+	// Formats / extensions
+	"gif": true, "gifs": true, "apng": true, "webp": true,
+	"png": true, "jpg": true, "jpeg": true, "mp4": true,
+	"webm": true, "mov": true, "avi": true, "mkv": true,
+	"svg": true, "bmp": true, "heic": true,
+	// Converter / generic file artifacts
+	"converter": true, "convert": true, "maker": true,
+	"resize": true, "resized": true, "crop": true, "cropped": true,
+	"optimize": true, "optimized": true, "compress": true, "compressed": true,
+	"reverse": true, "reversed": true, "rotate": true, "rotated": true,
+	"trim": true, "trimmed": true, "split": true, "overlay": true,
+	"output": true, "export": true, "untitled": true, "unknown": true,
+	"attachment": true, "attachments": true, "image": true, "img": true,
+	"video": true, "vid": true, "media": true, "file": true, "fichier": true,
+	"download": true, "caption": true, "view": true, "thumbnail": true,
+	"thumb": true, "frame": true, "frames": true,
+	// Short connectors that carry no meaning on their own
+	"to": true, "from": true, "by": true, "of": true, "in": true, "on": true,
+	"at": true, "the": true, "a": true, "an": true, "de": true, "du": true,
+	"la": true, "le": true, "en": true, "et": true,
+}
+
+var junkGifNumberedPrefixes = []string{"img", "image", "video", "vid", "gif", "file", "clip", "ezgif"}
+
+// isJunkGifDescription reports whether a gif tag description consists of
+// uploaded-filename / converter leftovers (e.g. "togif", "ezgif com apng to converter")
+// or non-semantic noise/IDs that will never match meaningful media.
+func isJunkGifDescription(desc string) bool {
+	tokens := strings.FieldsFunc(strings.ToLower(desc), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	if len(tokens) == 0 {
+		return true
+	}
+	hasMeaningful := false
+	for _, tok := range tokens {
+		if junkGifStrongTokens[tok] {
+			return true
+		}
+		if !isJunkGifToken(tok) {
+			hasMeaningful = true
+		}
+	}
+	return !hasMeaningful
+}
+
+func isJunkGifToken(tok string) bool {
+	if junkGifNoiseTokens[tok] || junkGifStrongTokens[tok] {
+		return true
+	}
+	runeCount := utf8.RuneCountInString(tok)
+	if runeCount <= 1 {
+		return true
+	}
+	allDigits := true
+	hasDigit := false
+	allHex := true
+	for _, r := range tok {
+		isDig := r >= '0' && r <= '9'
+		if isDig {
+			hasDigit = true
+		} else {
+			allDigits = false
+		}
+		if !isDig && !(r >= 'a' && r <= 'f') {
+			allHex = false
+		}
+	}
+	if allDigits {
+		return true
+	}
+	if runeCount >= 8 && hasDigit {
+		return true
+	}
+	if allHex && runeCount >= 6 && hasDigit {
+		return true
+	}
+	for _, prefix := range junkGifNumberedPrefixes {
+		if strings.HasPrefix(tok, prefix) && len(tok) > len(prefix) {
+			rest := tok[len(prefix):]
+			restDigits := true
+			for _, r := range rest {
+				if r < '0' || r > '9' {
+					restDigits = false
+					break
+				}
+			}
+			if restDigits {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Service) eligible(rawURL string, recentURLs map[string]bool) bool {
@@ -308,10 +523,13 @@ func (s *Service) recentBotURLs(ctx context.Context, channelID, botID string) ([
 	return list, seen
 }
 
-func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag ai.MediaTag, filter LookupFilter, recentURLs map[string]bool) (ai.MediaResolveResult, bool) {
+func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag ai.MediaTag, filter LookupFilter, recentURLs map[string]bool, reserveForFallback bool) (ai.MediaResolveResult, bool, bool) {
+	hadErr := false
+
 	// 1. Exact description match in the same guild (ordered by uses DESC, last_seen DESC).
 	exactRows, err := s.repo.FindExactDescription(ctx, guildID, tag.Kind, tag.Description, filter, lookupCandidateLimit)
 	if err != nil {
+		hadErr = true
 		logger.Warn("Media library exact description lookup failed",
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
@@ -324,39 +542,50 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 			zap.String("match_type", "exact"),
 			zap.String("guild_id", guildID),
 			zap.Bool("cross_guild", false))
-		return ai.MediaResolveResult{Tag: tag.Raw, URL: chosen.URL, Similarity: 1.0}, true
+		return ai.MediaResolveResult{Tag: tag.Raw, URL: chosen.URL, Similarity: 1.0}, true, false
 	}
 
 	// 2. Semantic vector search in the same guild.
 	var queryBlob []byte
 	bestSim := 0.0
-	if s.embedder != nil {
-		queryBlob, err = EmbedQuery(ctx, s.embedder, tag.Description)
-		if err != nil {
-			logger.Warn("Media library failed to embed tag description",
+	if s.embedder != nil && ctx.Err() == nil {
+		embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback)
+		if !hasBudget {
+			hadErr = true
+			logger.Warn("Media library skipped embedding: lookup timeout budget reserved for fallback",
 				zap.String("tag", tag.Raw),
-				zap.String("guild_id", guildID),
-				zap.Error(err))
+				zap.String("guild_id", guildID))
 		} else {
-			hits, err := s.repo.SearchByDescription(ctx, guildID, tag.Kind, queryBlob, filter, lookupCandidateLimit)
+			queryBlob, err = EmbedQuery(embedCtx, s.embedder, tag.Description)
+			embedCancel()
 			if err != nil {
-				logger.Warn("Media library description vector search failed",
+				hadErr = true
+				logger.Warn("Media library failed to embed tag description",
 					zap.String("tag", tag.Raw),
 					zap.String("guild_id", guildID),
 					zap.Error(err))
-			} else if hit, ok := firstEligibleHit(hits, func(u string) bool { return s.eligible(u, recentURLs) }); ok {
-				if hit.Similarity > bestSim {
-					bestSim = hit.Similarity
-				}
-				if hit.Similarity >= s.cfg.MinSimilarity {
-					logger.Info("Media library matched tag",
+			} else {
+				hits, err := s.repo.SearchByDescription(ctx, guildID, tag.Kind, queryBlob, filter, lookupCandidateLimit)
+				if err != nil {
+					hadErr = true
+					logger.Warn("Media library description vector search failed",
 						zap.String("tag", tag.Raw),
-						zap.String("url", hit.Entry.URL),
-						zap.Float64("similarity", hit.Similarity),
-						zap.String("match_type", "description"),
 						zap.String("guild_id", guildID),
-						zap.Bool("cross_guild", false))
-					return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true
+						zap.Error(err))
+				} else if hit, ok := firstEligibleHit(hits, func(u string) bool { return s.eligible(u, recentURLs) }); ok {
+					if hit.Similarity > bestSim {
+						bestSim = hit.Similarity
+					}
+					if hit.Similarity >= s.cfg.MinSimilarity {
+						logger.Info("Media library matched tag",
+							zap.String("tag", tag.Raw),
+							zap.String("url", hit.Entry.URL),
+							zap.Float64("similarity", hit.Similarity),
+							zap.String("match_type", "description"),
+							zap.String("guild_id", guildID),
+							zap.Bool("cross_guild", false))
+						return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true, false
+					}
 				}
 			}
 		}
@@ -366,6 +595,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 	if s.cfg.CrossGuild && ctx.Err() == nil {
 		crossExact, err := s.repo.FindExactDescriptionCrossGuild(ctx, guildID, tag.Kind, tag.Description, filter, lookupCandidateLimit)
 		if err != nil {
+			hadErr = true
 			logger.Warn("Media library cross-guild exact lookup failed",
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", guildID),
@@ -378,12 +608,13 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 				zap.String("match_type", "exact"),
 				zap.String("guild_id", guildID),
 				zap.Bool("cross_guild", true))
-			return ai.MediaResolveResult{Tag: tag.Raw, URL: chosen.URL, Similarity: 1.0}, true
+			return ai.MediaResolveResult{Tag: tag.Raw, URL: chosen.URL, Similarity: 1.0}, true, false
 		}
 
 		if len(queryBlob) > 0 && ctx.Err() == nil {
 			crossHits, err := s.repo.SearchByDescriptionCrossGuild(ctx, guildID, tag.Kind, queryBlob, filter, lookupCandidateLimit)
 			if err != nil {
+				hadErr = true
 				logger.Warn("Media library cross-guild description search failed",
 					zap.String("tag", tag.Raw),
 					zap.String("guild_id", guildID),
@@ -400,7 +631,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 						zap.String("match_type", "description"),
 						zap.String("guild_id", guildID),
 						zap.Bool("cross_guild", true))
-					return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true
+					return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true, false
 				}
 			}
 		}
@@ -411,10 +642,10 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 		zap.Float64("best_similarity", bestSim),
 		zap.Float64("threshold", s.cfg.MinSimilarity),
 		zap.String("guild_id", guildID))
-	return ai.MediaResolveResult{}, false
+	return ai.MediaResolveResult{}, false, hadErr
 }
 
-func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.MediaTag, targetText string, filter LookupFilter, recentURLs map[string]bool) (ai.MediaResolveResult, bool) {
+func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.MediaTag, targetText string, filter LookupFilter, recentURLs map[string]bool, reserveForFallback bool) (ai.MediaResolveResult, bool, bool) {
 	trimmedTarget := strings.TrimSpace(targetText)
 	if trimmedTarget == "" || s.embedder == nil {
 		logger.Info("Media library no match",
@@ -422,21 +653,31 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 			zap.Float64("best_similarity", 0),
 			zap.Float64("threshold", s.cfg.MinTriggerSimilarity),
 			zap.String("guild_id", guildID))
-		return ai.MediaResolveResult{}, false
+		return ai.MediaResolveResult{}, false, false
 	}
 
-	queryBlob, err := EmbedQuery(ctx, s.embedder, trimmedTarget)
+	embedCtx, embedCancel, hasBudget := s.embedContext(ctx, reserveForFallback)
+	if !hasBudget {
+		logger.Warn("Media library skipped trigger embedding: lookup timeout budget reserved for fallback",
+			zap.String("tag", tag.Raw),
+			zap.String("guild_id", guildID))
+		return ai.MediaResolveResult{}, false, true
+	}
+	queryBlob, err := EmbedQuery(embedCtx, s.embedder, trimmedTarget)
+	embedCancel()
 	if err != nil {
 		logger.Warn("Media library failed to embed trigger query",
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
-		return ai.MediaResolveResult{}, false
+		return ai.MediaResolveResult{}, false, true
 	}
 
+	hadErr := false
 	bestSim := 0.0
 	hits, err := s.repo.SearchByTrigger(ctx, guildID, "gif", queryBlob, filter, lookupCandidateLimit)
 	if err != nil {
+		hadErr = true
 		logger.Warn("Media library trigger vector search failed",
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
@@ -453,13 +694,14 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 				zap.String("match_type", "trigger"),
 				zap.String("guild_id", guildID),
 				zap.Bool("cross_guild", false))
-			return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true
+			return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true, false
 		}
 	}
 
 	if s.cfg.CrossGuild && ctx.Err() == nil {
 		crossHits, err := s.repo.SearchByTriggerCrossGuild(ctx, guildID, "gif", queryBlob, filter, lookupCandidateLimit)
 		if err != nil {
+			hadErr = true
 			logger.Warn("Media library cross-guild trigger search failed",
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", guildID),
@@ -476,7 +718,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 					zap.String("match_type", "trigger"),
 					zap.String("guild_id", guildID),
 					zap.Bool("cross_guild", true))
-				return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true
+				return ai.MediaResolveResult{Tag: tag.Raw, URL: hit.Entry.URL, Similarity: hit.Similarity}, true, false
 			}
 		}
 	}
@@ -486,7 +728,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 		zap.Float64("best_similarity", bestSim),
 		zap.Float64("threshold", s.cfg.MinTriggerSimilarity),
 		zap.String("guild_id", guildID))
-	return ai.MediaResolveResult{}, false
+	return ai.MediaResolveResult{}, false, hadErr
 }
 
 func firstEligibleEntry(entries []Entry, okFn func(string) bool) (Entry, bool) {

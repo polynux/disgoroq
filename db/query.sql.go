@@ -294,6 +294,92 @@ func (q *Queries) FindMediaLibraryExactDescriptionCrossGuild(ctx context.Context
 	return items, nil
 }
 
+const findMediaLibraryRandomGif = `-- name: FindMediaLibraryRandomGif :many
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
+FROM media_library
+WHERE guild_id = ?1
+  AND kind = 'gif'
+  AND (
+      ?2 != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(?3, char(10) || url || char(10)) = 0
+ORDER BY CASE WHEN uses >= 2 THEN 0 ELSE 1 END ASC, RANDOM()
+LIMIT ?4
+`
+
+type FindMediaLibraryRandomGifParams struct {
+	GuildID         string
+	AllowDiscordCdn interface{}
+	ExcludeUrls     string
+	ResultLimit     int64
+}
+
+type FindMediaLibraryRandomGifRow struct {
+	ID          int64
+	GuildID     []byte
+	Url         []byte
+	Kind        []byte
+	Description []byte
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText []byte
+}
+
+func (q *Queries) FindMediaLibraryRandomGif(ctx context.Context, arg FindMediaLibraryRandomGifParams) ([]FindMediaLibraryRandomGifRow, error) {
+	rows, err := q.db.QueryContext(ctx, findMediaLibraryRandomGif,
+		arg.GuildID,
+		arg.AllowDiscordCdn,
+		arg.ExcludeUrls,
+		arg.ResultLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FindMediaLibraryRandomGifRow
+	for rows.Next() {
+		var i FindMediaLibraryRandomGifRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAllGuilds = `-- name: GetAllGuilds :many
 SELECT DISTINCT guild_id FROM guild_settings
 `

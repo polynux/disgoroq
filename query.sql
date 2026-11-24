@@ -539,3 +539,31 @@ WHERE guild_id = ? AND trigger_embedding IS NOT NULL
 ORDER BY distance ASC, uses DESC, last_seen DESC
 LIMIT ?;
 
+-- name: FindMediaLibraryRandomGif :many
+SELECT id,
+       CAST(guild_id AS BLOB) AS guild_id,
+       CAST(url AS BLOB) AS url,
+       CAST(kind AS BLOB) AS kind,
+       CAST(description AS BLOB) AS description,
+       uses, first_seen, last_seen,
+       CAST(trigger_text AS BLOB) AS trigger_text
+FROM media_library
+WHERE guild_id = sqlc.arg(guild_id)
+  AND kind = 'gif'
+  AND (
+      sqlc.arg(allow_discord_cdn) != 0
+      OR (
+          LOWER(url) NOT GLOB 'http://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'http://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com'
+          AND LOWER(url) NOT GLOB 'https://cdn.discordapp.com[/?#:]*'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'http://media.discordapp.net[/?#:]*'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net'
+          AND LOWER(url) NOT GLOB 'https://media.discordapp.net[/?#:]*'
+      )
+  )
+  AND INSTR(sqlc.arg(exclude_urls), char(10) || url || char(10)) = 0
+ORDER BY CASE WHEN uses >= 2 THEN 0 ELSE 1 END ASC, RANDOM()
+LIMIT sqlc.arg(result_limit);
+

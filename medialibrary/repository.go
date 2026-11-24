@@ -226,6 +226,33 @@ func (r *Repository) FindExactDescriptionCrossGuild(ctx context.Context, exclude
 	return out, nil
 }
 
+func (r *Repository) FindRandomGif(ctx context.Context, guildID string, filter LookupFilter, limit int) ([]Entry, error) {
+	rows, err := r.queries.FindMediaLibraryRandomGif(ctx, db.FindMediaLibraryRandomGifParams{
+		GuildID:         guildID,
+		AllowDiscordCdn: allowDiscordCDNArg(filter.AllowDiscordCDN),
+		ExcludeUrls:     encodeExcludeURLs(filter.ExcludeURLs),
+		ResultLimit:     int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Entry, len(rows))
+	for i, row := range rows {
+		out[i] = Entry{
+			ID:          row.ID,
+			GuildID:     string(row.GuildID),
+			URL:         string(row.Url),
+			Kind:        string(row.Kind),
+			Description: string(row.Description),
+			Uses:        row.Uses,
+			FirstSeen:   row.FirstSeen,
+			LastSeen:    row.LastSeen,
+			TriggerText: string(row.TriggerText),
+		}
+	}
+	return out, nil
+}
+
 func (r *Repository) SearchByDescription(ctx context.Context, guildID, kind string, queryBlob []byte, filter LookupFilter, limit int) ([]SearchHit, error) {
 	rows, err := r.queries.SearchMediaLibraryByDescription(ctx, db.SearchMediaLibraryByDescriptionParams{
 		QueryEmbedding:  queryBlob,

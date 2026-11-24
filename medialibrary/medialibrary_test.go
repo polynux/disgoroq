@@ -19,10 +19,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "github.com/tursodatabase/go-libsql"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"polynux/disgoroq/ai"
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/db"
+	"polynux/disgoroq/logger"
 )
 
 func setupMediaTestDB(t *testing.T) (*sql.DB, *Repository) {
@@ -1538,3 +1541,414 @@ func TestImportMissingDatesAndConsecutiveEmbedFailureAbort(t *testing.T) {
 	// 19 failed rows + 1 ok row + 19 failed rows before the 20th aborted = 39 rows written.
 	assert.Equal(t, 39, abortSum.Rows)
 }
+
+func captureMediaLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zap.InfoLevel)
+	prev := logger.Log
+	logger.Log = zap.New(core)
+	t.Cleanup(func() {
+		logger.Log = prev
+	})
+	return logs
+}
+
+func TestIsJunkGifDescription(t *testing.T) {
+	junkCases := []string{
+		"togif",
+		"ToGif",
+		"ezgif com apng to converter",
+		"ezgif-5-ab12cd34",
+		"ezgif com gif maker",
+		"mp4 to gif converter",
+		"image0",
+		"video12",
+		"123456",
+		"a1b2c3d4",
+		"---",
+		"x",
+		"tenor gif",
+		"unknown",
+		"attachment",
+	}
+	for _, tc := range junkCases {
+		assert.True(t, isJunkGifDescription(tc), "expected %q to be detected as junk", tc)
+	}
+
+	validCases := []string{
+		"cat",
+		"cat smile",
+		"ok",
+		"gg",
+		"to be continued",
+		"dragon ball Z",
+		"mdr",
+		"ps5",
+		"happy cat 2024",
+		"pleure de rire",
+	}
+	for _, tc := range validCases {
+		assert.False(t, isJunkGifDescription(tc), "expected %q NOT to be detected as junk", tc)
+	}
+}
+
+func TestResolveRandomGifFallbackTriggersAndLogs(t *testing.T) {
+	_, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	fallbackURL := "https://tenor.com/view/guild-favorite-1"
+	exactCatURL := "https://tenor.com/view/exact-cat-2"
+
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              "g1",
+		URL:                  fallbackURL,
+		Kind:                 "gif",
+		Description:          "dancing duck",
+		Uses:                 5,
+		FirstSeen:            100,
+		LastSeen:             300,
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.20)),
+		TriggerText:          "dance",
+		TriggerEmbedding:     mustBlob(t, vecWithSimilarityToXAxis(0.20)),
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:              "g1",
+		URL:                  exactCatURL,
+		Kind:                 "gif",
+		Description:          "cat smile",
+		Uses:                 1,
+		FirstSeen:            100,
+		LastSeen:             200,
+		DescriptionEmbedding: mustBlob(t, vecWithSimilarityToXAxis(0.20)),
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID:     "g2",
+		URL:         "https://tenor.com/view/other-guild-popular-9",
+		Kind:        "gif",
+		Description: "other guild",
+		Uses:        50,
+		FirstSeen:   100,
+		LastSeen:    500,
+	}))
+
+	embedder := newFakeEmbedder()
+	unrelatedVec := make([]float32, EmbeddingDim)
+	unrelatedVec[2] = 1
+	embedder.set("search_query: totally unmatched query", unrelatedVec)
+	embedder.set("search_query: random human chat", unrelatedVec)
+	embedder.setErr("search_query: broken embed", errors.New("ollama 500"))
+	embedder.setErr("search_query: broken trigger", errors.New("ollama 500"))
+
+	t.Run("disabled keeps exact existing behavior", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.RandomGifFallback = false
+		svc := NewService(repo, embedder, cfg)
+
+		for _, req := range []ai.MediaResolveRequest{
+			{GuildID: "g1", RawReply: "[gif: totally unmatched query]"},
+			{GuildID: "g1", RawReply: "[gif: togif]"},
+			{GuildID: "g1", RawReply: "[gif: ezgif com apng to converter]"},
+			{GuildID: "g1", RawReply: "[gif: broken embed]"},
+			{GuildID: "g1", RawReply: "[gif]", TargetText: "random human chat"},
+			{GuildID: "g1", RawReply: "[gif]", TargetText: "broken trigger"},
+		} {
+			_, ok := svc.Resolve(ctx, req)
+			assert.False(t, ok, "fallback must not trigger when disabled for %q", req.RawReply)
+		}
+	})
+
+	cfg := defaultEnabledConfig()
+	cfg.RandomGifFallback = true
+	svc := NewService(repo, embedder, cfg)
+
+	assertFallbackLog := func(t *testing.T, logs *observer.ObservedLogs, wantTag, wantReason, wantURL string) {
+		t.Helper()
+		entries := logs.FilterMessage("Media library random gif fallback").All()
+		require.Len(t, entries, 1)
+		ctxMap := entries[0].ContextMap()
+		assert.Equal(t, wantTag, ctxMap["tag"])
+		assert.Equal(t, wantReason, ctxMap["reason"])
+		assert.Equal(t, wantURL, ctxMap["url"])
+	}
+
+	t.Run("triggers on no_match for described and bare gif", func(t *testing.T) {
+		logs := captureMediaLogs(t)
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "mdr [gif: totally unmatched query]",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assertFallbackLog(t, logs, "[gif: totally unmatched query]", "no_match", fallbackURL)
+
+		logs2 := captureMediaLogs(t)
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "[gif]",
+			TargetText: "random human chat",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assertFallbackLog(t, logs2, "[gif]", "no_match", fallbackURL)
+	})
+
+	t.Run("triggers on junk without calling embedder", func(t *testing.T) {
+		for _, rawTag := range []string{"[gif: togif]", "[gif: ezgif com apng to converter]"} {
+			embedder.resetCalls()
+			logs := captureMediaLogs(t)
+			res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+				GuildID:  "g1",
+				RawReply: "tiens " + rawTag,
+			})
+			require.True(t, ok)
+			assert.Equal(t, fallbackURL, res.URL)
+			assert.Empty(t, embedder.callHistory(), "junk tag %s should skip embedding", rawTag)
+			assertFallbackLog(t, logs, rawTag, "junk", fallbackURL)
+		}
+	})
+
+	t.Run("triggers on embedder error for described and bare gif", func(t *testing.T) {
+		logs := captureMediaLogs(t)
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "[gif: broken embed]",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assertFallbackLog(t, logs, "[gif: broken embed]", "error", fallbackURL)
+
+		logs2 := captureMediaLogs(t)
+		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "[gif]",
+			TargetText: "broken trigger",
+		})
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assertFallbackLog(t, logs2, "[gif]", "error", fallbackURL)
+	})
+
+	t.Run("triggers on embedder timeout within lookup timeout", func(t *testing.T) {
+		slow := &blockingEmbedder{release: make(chan struct{})}
+		defer close(slow.release)
+
+		timeoutCfg := defaultEnabledConfig()
+		timeoutCfg.RandomGifFallback = true
+		timeoutCfg.LookupTimeoutMs = 80
+		timeoutSvc := NewService(repo, slow, timeoutCfg)
+
+		logs := captureMediaLogs(t)
+		parentCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+
+		start := time.Now()
+		res, ok := timeoutSvc.Resolve(parentCtx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "[gif: slow embed query]",
+		})
+		elapsed := time.Since(start)
+
+		require.True(t, ok)
+		assert.Equal(t, fallbackURL, res.URL)
+		assert.Less(t, elapsed, 500*time.Millisecond)
+		assert.NoError(t, parentCtx.Err(), "parent completion context must stay uncancelled")
+		assertFallbackLog(t, logs, "[gif: slow embed query]", "error", fallbackURL)
+	})
+
+	t.Run("link tags stay stripped when unmatched", func(t *testing.T) {
+		_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "regarde [youtube: totally unmatched query]",
+		})
+		assert.False(t, ok)
+
+		_, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "[tweet: broken embed]",
+		})
+		assert.False(t, ok)
+	})
+
+	t.Run("normal match on later tag wins over earlier junk tag", func(t *testing.T) {
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g1",
+			RawReply: "[gif: togif] [gif: cat smile]",
+		})
+		require.True(t, ok)
+		assert.Equal(t, exactCatURL, res.URL)
+	})
+
+	t.Run("same guild only even when cross_guild is enabled", func(t *testing.T) {
+		crossCfg := defaultEnabledConfig()
+		crossCfg.RandomGifFallback = true
+		crossCfg.CrossGuild = true
+		crossSvc := NewService(repo, embedder, crossCfg)
+
+		// Guild "g3" has no gifs of its own; g2's gifs must NOT be chosen by random fallback.
+		_, ok := crossSvc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  "g3",
+			RawReply: "[gif: togif]",
+		})
+		assert.False(t, ok)
+	})
+}
+
+func TestResolveRandomGifFallbackPopularityPreference(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	gID := snowflake.ID(4100)
+	chID := snowflake.ID(4200)
+	botID := snowflake.ID(4900)
+	baseTime := time.Unix(1700010000, 0)
+
+	popular := map[string]bool{
+		"https://tenor.com/view/pop-1": true,
+		"https://tenor.com/view/pop-2": true,
+	}
+	unpopular := map[string]bool{}
+
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID: gID.String(), URL: "https://tenor.com/view/pop-1", Kind: "gif", Uses: 2, FirstSeen: 100, LastSeen: 200,
+	}))
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID: gID.String(), URL: "https://tenor.com/view/pop-2", Kind: "gif", Uses: 10, FirstSeen: 100, LastSeen: 200,
+	}))
+	for i := 0; i < 8; i++ {
+		u := fmt.Sprintf("https://tenor.com/view/single-use-%d", i)
+		unpopular[u] = true
+		require.NoError(t, repo.UpsertImport(ctx, Entry{
+			GuildID: gID.String(), URL: u, Kind: "gif", Uses: 1, FirstSeen: 100, LastSeen: 200,
+		}))
+	}
+
+	cfg := defaultEnabledConfig()
+	cfg.RandomGifFallback = true
+	cfg.RepeatWindow = 10
+	svc := NewService(repo, newFakeEmbedder(), cfg)
+
+	// With popular gifs (uses >= 2) eligible, fallback must always pick from popular ones.
+	for i := 0; i < 30; i++ {
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:  gID.String(),
+			RawReply: "[gif: togif]",
+		})
+		require.True(t, ok)
+		assert.True(t, popular[res.URL], "expected popular gif (uses >= 2), got %s", res.URL)
+	}
+
+	// Put both popular gifs in the channel's repeat window: fallback must now pick from uses == 1.
+	insertCachedMessage(t, conn, discord.Message{
+		ID:        snowflake.ID(5001),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+		Content:   "https://tenor.com/view/pop-1\nhttps://tenor.com/view/pop-2",
+		CreatedAt: baseTime,
+	})
+
+	for i := 0; i < 20; i++ {
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:   gID.String(),
+			ChannelID: chID.String(),
+			BotID:     botID.String(),
+			RawReply:  "[gif: togif]",
+		})
+		require.True(t, ok)
+		assert.True(t, unpopular[res.URL], "expected fallback to uses == 1 pool when popular gifs are excluded, got %s", res.URL)
+	}
+}
+
+func TestResolveRandomGifFallbackCDNAndRepeatWindowExclusions(t *testing.T) {
+	conn, repo := setupMediaTestDB(t)
+	ctx := context.Background()
+
+	gID := snowflake.ID(6100)
+	chID := snowflake.ID(6200)
+	botID := snowflake.ID(6900)
+	baseTime := time.Unix(1700020000, 0)
+
+	// Insert more Discord CDN rows and more repeat-window rows than lookupCandidateLimit (5),
+	// all with uses >= 2, plus one non-gif youtube link and one eligible Tenor gif (uses = 1).
+	for i := 0; i < 8; i++ {
+		host := "https://cdn.discordapp.com"
+		if i%2 == 1 {
+			host = "https://media.discordapp.net"
+		}
+		require.NoError(t, repo.UpsertImport(ctx, Entry{
+			GuildID: gID.String(), URL: fmt.Sprintf("%s/attachments/1/2/cdn-%d.gif", host, i),
+			Kind: "gif", Uses: 50, FirstSeen: 100, LastSeen: 500,
+		}))
+	}
+	for i := 0; i < 8; i++ {
+		recentURL := fmt.Sprintf("https://tenor.com/view/recent-%d", i)
+		require.NoError(t, repo.UpsertImport(ctx, Entry{
+			GuildID: gID.String(), URL: recentURL,
+			Kind: "gif", Uses: 40, FirstSeen: 100, LastSeen: 400,
+		}))
+		insertCachedMessage(t, conn, discord.Message{
+			ID:        snowflake.ID(6300 + i),
+			GuildID:   &gID,
+			ChannelID: chID,
+			Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+			Content:   recentURL,
+			CreatedAt: baseTime.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID: gID.String(), URL: "https://www.youtube.com/watch?v=notgif",
+		Kind: "youtube", Uses: 99, FirstSeen: 100, LastSeen: 900,
+	}))
+	eligibleURL := "https://tenor.com/view/only-eligible-1"
+	require.NoError(t, repo.UpsertImport(ctx, Entry{
+		GuildID: gID.String(), URL: eligibleURL,
+		Kind: "gif", Uses: 1, FirstSeen: 100, LastSeen: 100,
+	}))
+
+	cfg := defaultEnabledConfig()
+	cfg.RandomGifFallback = true
+	cfg.AllowDiscordCDN = false
+	cfg.RepeatWindow = 20
+	svc := NewService(repo, newFakeEmbedder(), cfg)
+
+	// SQL pre-LIMIT filtering must skip all 16 ineligible rows and return the sole eligible gif.
+	res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:   gID.String(),
+		ChannelID: chID.String(),
+		BotID:     botID.String(),
+		RawReply:  "[gif: togif]",
+	})
+	require.True(t, ok)
+	assert.Equal(t, eligibleURL, res.URL)
+
+	// Also exclude the sole eligible gif via repeat window -> fallback returns false.
+	insertCachedMessage(t, conn, discord.Message{
+		ID:        snowflake.ID(6400),
+		GuildID:   &gID,
+		ChannelID: chID,
+		Author:    discord.User{ID: botID, Username: "bot", Bot: true},
+		Content:   eligibleURL,
+		CreatedAt: baseTime.Add(30 * time.Minute),
+	})
+	_, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:   gID.String(),
+		ChannelID: chID.String(),
+		BotID:     botID.String(),
+		RawReply:  "[gif: togif]",
+	})
+	assert.False(t, ok)
+
+	// Enabling AllowDiscordCDN makes the popular CDN gifs eligible.
+	cfgAllowCDN := cfg
+	cfgAllowCDN.AllowDiscordCDN = true
+	allowSvc := NewService(repo, newFakeEmbedder(), cfgAllowCDN)
+	res, ok = allowSvc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:   gID.String(),
+		ChannelID: chID.String(),
+		BotID:     botID.String(),
+		RawReply:  "[gif: togif]",
+	})
+	require.True(t, ok)
+	assert.True(t, ai.IsDiscordCDNURL(res.URL), "expected CDN gif when AllowDiscordCDN is true, got %s", res.URL)
+}
+
