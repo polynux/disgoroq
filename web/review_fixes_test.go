@@ -249,3 +249,19 @@ func TestGuildRouteDBErrorIs500NotFound(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+knownGuildID, nil))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
+
+func TestGuildTextareasKeepLeadingNewline(t *testing.T) {
+	srv, repo := newKnownGuildServer(t, nil)
+	ctx := context.Background()
+	require.NoError(t, repo.SetGuildSetting(ctx, knownGuildID, "reengage_message", "\n\nLe chat est calme"))
+	require.NoError(t, repo.SetGuildSetting(ctx, knownGuildID, "prompt", "\nprompt body"))
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+knownGuildID, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// HTML parsers drop exactly one newline after <textarea>, so the template
+	// must emit one before the value for the value's own newlines to survive.
+	assert.Contains(t, body, ">\n\n\nLe chat est calme</textarea>")
+	assert.Contains(t, body, ">\n\nprompt body</textarea>")
+}

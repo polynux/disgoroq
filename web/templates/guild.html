@@ -191,7 +191,8 @@
         <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"prompt","section":"prompts"}' hx-target="#section-prompts" hx-swap="outerHTML">Reset</button>
         {{end}}
       </div>
-      <textarea id="prompt" name="prompt" class="prompt-textarea" placeholder="Leave empty to use the default prompt from config">{{.Prompt}}</textarea>
+      <textarea id="prompt" name="prompt" class="prompt-textarea" placeholder="Leave empty to use the default prompt from config">
+{{.Prompt}}</textarea>
       <details>
         <summary>View default prompt from config</summary>
         <pre class="default-preview">{{.PromptDefault}}</pre>
@@ -208,7 +209,8 @@
         <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"voice_prompt","section":"prompts"}' hx-target="#section-prompts" hx-swap="outerHTML">Reset</button>
         {{end}}
       </div>
-      <textarea id="voice_prompt" name="voice_prompt" placeholder="Leave empty to use the default voice prompt from config">{{.VoicePrompt}}</textarea>
+      <textarea id="voice_prompt" name="voice_prompt" placeholder="Leave empty to use the default voice prompt from config">
+{{.VoicePrompt}}</textarea>
       <details>
         <summary>View default voice prompt from config</summary>
         <pre class="default-preview">{{.VoicePromptDefault}}</pre>
@@ -386,7 +388,8 @@
         <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"reengage_message","section":"reengage"}' hx-target="#section-reengage" hx-swap="outerHTML">Reset</button>
         {{end}}
       </div>
-      <textarea id="reengage_message" name="reengage_message" maxlength="500" placeholder="Leave empty to use default reengage message (max 500 chars)">{{.Message}}</textarea>
+      <textarea id="reengage_message" name="reengage_message" maxlength="500" placeholder="Leave empty to use default reengage message (max 500 chars)">
+{{.Message}}</textarea>
       <details>
         <summary>View default reengage message from config</summary>
         <pre class="default-preview">{{.MessageDefault}}</pre>
