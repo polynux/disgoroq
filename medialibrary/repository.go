@@ -168,11 +168,68 @@ func (r *Repository) UpsertLive(ctx context.Context, entry Entry) error {
 	})
 }
 
-// DeleteEntry deletes a single media_library row identified by canonical URL and guild ID.
-func (r *Repository) DeleteEntry(ctx context.Context, rawURL, guildID string) error {
+// DeleteEntry deletes a single media_library row identified by canonical URL and
+// guild ID, reporting how many rows were removed.
+func (r *Repository) DeleteEntry(ctx context.Context, rawURL, guildID string) (int64, error) {
 	return r.queries.DeleteMediaLibraryEntry(ctx, db.DeleteMediaLibraryEntryParams{
 		Url:     rawURL,
 		GuildID: guildID,
+	})
+}
+
+// ListFilter narrows media_library browsing queries.
+type ListFilter struct {
+	GuildID string
+	Kind    string
+	Text    string // case-insensitive substring of description or trigger_text
+}
+
+// ListEntries pages through media_library rows, newest last_seen first.
+// Embedding blobs are not selected. hasMore reports whether another page exists.
+func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, offset int) ([]Entry, bool, error) {
+	rows, err := r.queries.ListMediaLibrary(ctx, db.ListMediaLibraryParams{
+		GuildID:    filter.GuildID,
+		Kind:       filter.Kind,
+		TextFilter: filter.Text,
+		RowLimit:   int64(limit + 1),
+		RowOffset:  int64(offset),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(rows) > limit
+	if hasMore {
+		rows = rows[:limit]
+	}
+
+	out := make([]Entry, len(rows))
+	for i, row := range rows {
+		out[i] = Entry{
+			ID:          row.ID,
+			GuildID:     row.GuildID,
+			URL:         row.Url,
+			Kind:        row.Kind,
+			Description: row.Description,
+			Uses:        row.Uses,
+			FirstSeen:   row.FirstSeen,
+			LastSeen:    row.LastSeen,
+			TriggerText: row.TriggerText,
+		}
+	}
+	return out, hasMore, nil
+}
+
+// UpdateText writes description, trigger_text and both embeddings in one statement.
+// Embeddings must already be computed by the caller; nil leaves the column NULL.
+func (r *Repository) UpdateText(ctx context.Context, guildID, rawURL, description, triggerText string, descriptionEmbedding, triggerEmbedding []byte) (int64, error) {
+	return r.queries.UpdateMediaLibraryText(ctx, db.UpdateMediaLibraryTextParams{
+		GuildID:              guildID,
+		Url:                  rawURL,
+		Description:          description,
+		TriggerText:          triggerText,
+		DescriptionEmbedding: nullableBlob(descriptionEmbedding),
+		TriggerEmbedding:     nullableBlob(triggerEmbedding),
 	})
 }
 

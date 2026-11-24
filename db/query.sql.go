@@ -10,6 +10,19 @@ import (
 	"database/sql"
 )
 
+const deleteAttachmentCacheByID = `-- name: DeleteAttachmentCacheByID :execrows
+DELETE FROM attachment_cache
+WHERE id = ?
+`
+
+func (q *Queries) DeleteAttachmentCacheByID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAttachmentCacheByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteAttachmentCacheOlderThan = `-- name: DeleteAttachmentCacheOlderThan :execrows
 DELETE FROM attachment_cache
 WHERE created_at < ?
@@ -17,6 +30,37 @@ WHERE created_at < ?
 
 func (q *Queries) DeleteAttachmentCacheOlderThan(ctx context.Context, createdAt int64) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteAttachmentCacheOlderThan, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteConversationSummariesForUser = `-- name: DeleteConversationSummariesForUser :execrows
+DELETE FROM conversation_summaries
+WHERE guild_id = ? AND user_id = ?
+`
+
+type DeleteConversationSummariesForUserParams struct {
+	GuildID string
+	UserID  string
+}
+
+func (q *Queries) DeleteConversationSummariesForUser(ctx context.Context, arg DeleteConversationSummariesForUserParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteConversationSummariesForUser, arg.GuildID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteConversationSummaryByID = `-- name: DeleteConversationSummaryByID :execrows
+DELETE FROM conversation_summaries
+WHERE id = ?
+`
+
+func (q *Queries) DeleteConversationSummaryByID(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteConversationSummaryByID, id)
 	if err != nil {
 		return 0, err
 	}
@@ -50,7 +94,7 @@ func (q *Queries) DeleteGuildSetting(ctx context.Context, arg DeleteGuildSetting
 	return err
 }
 
-const deleteMediaLibraryEntry = `-- name: DeleteMediaLibraryEntry :exec
+const deleteMediaLibraryEntry = `-- name: DeleteMediaLibraryEntry :execrows
 DELETE FROM media_library
 WHERE url = ? AND guild_id = ?
 `
@@ -60,9 +104,12 @@ type DeleteMediaLibraryEntryParams struct {
 	GuildID string
 }
 
-func (q *Queries) DeleteMediaLibraryEntry(ctx context.Context, arg DeleteMediaLibraryEntryParams) error {
-	_, err := q.db.ExecContext(ctx, deleteMediaLibraryEntry, arg.Url, arg.GuildID)
-	return err
+func (q *Queries) DeleteMediaLibraryEntry(ctx context.Context, arg DeleteMediaLibraryEntryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteMediaLibraryEntry, arg.Url, arg.GuildID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteMessageBufferEntry = `-- name: DeleteMessageBufferEntry :exec
@@ -1345,6 +1392,661 @@ func (q *Queries) InsertSummary(ctx context.Context, arg InsertSummaryParams) er
 	return err
 }
 
+const listAttachmentCache = `-- name: ListAttachmentCache :many
+SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+       provider, model, instruction_version, content, created_at, updated_at
+FROM attachment_cache
+WHERE (CAST(?1 AS TEXT) = '' OR cache_kind = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR provider = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR model = CAST(?3 AS TEXT))
+ORDER BY created_at DESC, id DESC
+LIMIT ?5 OFFSET ?4
+`
+
+type ListAttachmentCacheParams struct {
+	CacheKind string
+	Provider  string
+	Model     string
+	RowOffset int64
+	RowLimit  int64
+}
+
+func (q *Queries) ListAttachmentCache(ctx context.Context, arg ListAttachmentCacheParams) ([]AttachmentCache, error) {
+	rows, err := q.db.QueryContext(ctx, listAttachmentCache,
+		arg.CacheKind,
+		arg.Provider,
+		arg.Model,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AttachmentCache
+	for rows.Next() {
+		var i AttachmentCache
+		if err := rows.Scan(
+			&i.ID,
+			&i.CacheKind,
+			&i.AttachmentKey,
+			&i.SourceUrl,
+			&i.Filename,
+			&i.ContentType,
+			&i.SizeBytes,
+			&i.Provider,
+			&i.Model,
+			&i.InstructionVersion,
+			&i.Content,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBotEventTypes = `-- name: ListBotEventTypes :many
+SELECT DISTINCT event_type
+FROM bot_events
+ORDER BY event_type
+LIMIT 500
+`
+
+func (q *Queries) ListBotEventTypes(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listBotEventTypes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var event_type string
+		if err := rows.Scan(&event_type); err != nil {
+			return nil, err
+		}
+		items = append(items, event_type)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listBotEvents = `-- name: ListBotEvents :many
+SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
+FROM bot_events
+WHERE timestamp >= ?1
+  AND timestamp <= ?2
+  AND (CAST(?3 AS TEXT) = '' OR event_type = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = '' OR guild_id = CAST(?4 AS TEXT))
+  AND (CAST(?5 AS INTEGER) = 0 OR (error IS NOT NULL AND error != ''))
+ORDER BY timestamp DESC
+LIMIT ?7 OFFSET ?6
+`
+
+type ListBotEventsParams struct {
+	TsFrom    int64
+	TsTo      int64
+	EventType string
+	GuildID   string
+	HasError  int64
+	RowOffset int64
+	RowLimit  int64
+}
+
+type ListBotEventsRow struct {
+	Timestamp  int64
+	EventType  string
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	MessageID  sql.NullString
+	UserID     sql.NullString
+	Details    sql.NullString
+	DurationMs sql.NullInt64
+	Error      sql.NullString
+}
+
+func (q *Queries) ListBotEvents(ctx context.Context, arg ListBotEventsParams) ([]ListBotEventsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listBotEvents,
+		arg.TsFrom,
+		arg.TsTo,
+		arg.EventType,
+		arg.GuildID,
+		arg.HasError,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListBotEventsRow
+	for rows.Next() {
+		var i ListBotEventsRow
+		if err := rows.Scan(
+			&i.Timestamp,
+			&i.EventType,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.Details,
+			&i.DurationMs,
+			&i.Error,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationSummaries = `-- name: ListConversationSummaries :many
+
+SELECT cs.id,
+       cs.guild_id,
+       cs.user_id,
+       cs.summary_text,
+       cs.message_count,
+       cs.start_message_id,
+       cs.end_message_id,
+       cs.created_at,
+       cs.updated_at,
+       CAST(COALESCE(
+           (SELECT mb.author_nick
+            FROM message_buffer mb
+            WHERE mb.guild_id = cs.guild_id
+              AND mb.user_id = cs.user_id
+              AND mb.author_nick != ''
+            ORDER BY mb.timestamp DESC
+            LIMIT 1),
+           (SELECT dm.author_username
+            FROM discord_messages dm
+            WHERE dm.guild_id = cs.guild_id
+              AND dm.author_id = cs.user_id
+              AND dm.author_username != ''
+            ORDER BY dm.created_at DESC
+            LIMIT 1),
+           ''
+       ) AS TEXT) AS author_name
+FROM conversation_summaries cs
+WHERE (CAST(?1 AS TEXT) = '' OR cs.guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR cs.user_id = CAST(?2 AS TEXT))
+ORDER BY cs.updated_at DESC, cs.id DESC
+LIMIT ?4 OFFSET ?3
+`
+
+type ListConversationSummariesParams struct {
+	GuildID   string
+	UserID    string
+	RowOffset int64
+	RowLimit  int64
+}
+
+type ListConversationSummariesRow struct {
+	ID             int64
+	GuildID        string
+	UserID         string
+	SummaryText    string
+	MessageCount   int64
+	StartMessageID sql.NullString
+	EndMessageID   sql.NullString
+	CreatedAt      int64
+	UpdatedAt      int64
+	AuthorName     string
+}
+
+// Web admin data views
+// These queries never select embedding blobs (conversation_summaries.embedding,
+// media_library.description_embedding/trigger_embedding) so no vector data is
+// loaded for the browser. Every list query is bounded by LIMIT/OFFSET.
+func (q *Queries) ListConversationSummaries(ctx context.Context, arg ListConversationSummariesParams) ([]ListConversationSummariesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationSummaries,
+		arg.GuildID,
+		arg.UserID,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConversationSummariesRow
+	for rows.Next() {
+		var i ListConversationSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.UserID,
+			&i.SummaryText,
+			&i.MessageCount,
+			&i.StartMessageID,
+			&i.EndMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AuthorName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDiscordMessages = `-- name: ListDiscordMessages :many
+SELECT message_id, channel_id, guild_id, author_id, author_username, content,
+       referenced_message_id, message_json, created_at, edited_at, deleted_at
+FROM discord_messages
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR channel_id = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR author_id = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS TEXT) = ''
+       OR INSTR(LOWER(content), LOWER(CAST(?4 AS TEXT))) > 0)
+  AND (CAST(?5 AS INTEGER) = 1 OR deleted_at IS NULL)
+ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
+LIMIT ?7 OFFSET ?6
+`
+
+type ListDiscordMessagesParams struct {
+	GuildID        string
+	ChannelID      string
+	AuthorID       string
+	ContentFilter  string
+	IncludeDeleted int64
+	RowOffset      int64
+	RowLimit       int64
+}
+
+func (q *Queries) ListDiscordMessages(ctx context.Context, arg ListDiscordMessagesParams) ([]DiscordMessage, error) {
+	rows, err := q.db.QueryContext(ctx, listDiscordMessages,
+		arg.GuildID,
+		arg.ChannelID,
+		arg.AuthorID,
+		arg.ContentFilter,
+		arg.IncludeDeleted,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DiscordMessage
+	for rows.Next() {
+		var i DiscordMessage
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.ChannelID,
+			&i.GuildID,
+			&i.AuthorID,
+			&i.AuthorUsername,
+			&i.Content,
+			&i.ReferencedMessageID,
+			&i.MessageJson,
+			&i.CreatedAt,
+			&i.EditedAt,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMediaLibrary = `-- name: ListMediaLibrary :many
+SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+FROM media_library
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR kind = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = ''
+       OR INSTR(LOWER(description), LOWER(?3)) > 0
+       OR INSTR(LOWER(trigger_text), LOWER(?3)) > 0)
+ORDER BY last_seen DESC, id DESC
+LIMIT ?5 OFFSET ?4
+`
+
+type ListMediaLibraryParams struct {
+	GuildID    string
+	Kind       string
+	TextFilter string
+	RowOffset  int64
+	RowLimit   int64
+}
+
+type ListMediaLibraryRow struct {
+	ID          int64
+	GuildID     string
+	Url         string
+	Kind        string
+	Description string
+	Uses        int64
+	FirstSeen   int64
+	LastSeen    int64
+	TriggerText string
+}
+
+func (q *Queries) ListMediaLibrary(ctx context.Context, arg ListMediaLibraryParams) ([]ListMediaLibraryRow, error) {
+	rows, err := q.db.QueryContext(ctx, listMediaLibrary,
+		arg.GuildID,
+		arg.Kind,
+		arg.TextFilter,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMediaLibraryRow
+	for rows.Next() {
+		var i ListMediaLibraryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.Url,
+			&i.Kind,
+			&i.Description,
+			&i.Uses,
+			&i.FirstSeen,
+			&i.LastSeen,
+			&i.TriggerText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageBuffer = `-- name: ListMessageBuffer :many
+SELECT id, guild_id, channel_id, message_id, user_id, author_nick, content,
+       has_image, image_description, timestamp, processed
+FROM message_buffer
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS TEXT) = '' OR channel_id = CAST(?2 AS TEXT))
+  AND (CAST(?3 AS TEXT) = '' OR user_id = CAST(?3 AS TEXT))
+  AND (CAST(?4 AS INTEGER) = -1 OR COALESCE(processed, 0) = CAST(?4 AS INTEGER))
+ORDER BY timestamp DESC, id DESC
+LIMIT ?6 OFFSET ?5
+`
+
+type ListMessageBufferParams struct {
+	GuildID         string
+	ChannelID       string
+	UserID          string
+	ProcessedFilter int64
+	RowOffset       int64
+	RowLimit        int64
+}
+
+func (q *Queries) ListMessageBuffer(ctx context.Context, arg ListMessageBufferParams) ([]MessageBuffer, error) {
+	rows, err := q.db.QueryContext(ctx, listMessageBuffer,
+		arg.GuildID,
+		arg.ChannelID,
+		arg.UserID,
+		arg.ProcessedFilter,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageBuffer
+	for rows.Next() {
+		var i MessageBuffer
+		if err := rows.Scan(
+			&i.ID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.MessageID,
+			&i.UserID,
+			&i.AuthorNick,
+			&i.Content,
+			&i.HasImage,
+			&i.ImageDescription,
+			&i.Timestamp,
+			&i.Processed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageVotesBest = `-- name: ListMessageVotesBest :many
+SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+       content, reply_to_message_id, reply_to_content, provider, model, good_count,
+       bad_count, message_created_at, created_at, updated_at
+FROM message_votes
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS INTEGER) = 0 OR is_bot_reply = 1)
+ORDER BY good_count DESC, bad_count DESC, created_at DESC, message_id
+LIMIT ?4 OFFSET ?3
+`
+
+type ListMessageVotesBestParams struct {
+	GuildID   string
+	BotOnly   int64
+	RowOffset int64
+	RowLimit  int64
+}
+
+func (q *Queries) ListMessageVotesBest(ctx context.Context, arg ListMessageVotesBestParams) ([]MessageVote, error) {
+	rows, err := q.db.QueryContext(ctx, listMessageVotesBest,
+		arg.GuildID,
+		arg.BotOnly,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageVote
+	for rows.Next() {
+		var i MessageVote
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.AuthorID,
+			&i.AuthorName,
+			&i.IsBotReply,
+			&i.Content,
+			&i.ReplyToMessageID,
+			&i.ReplyToContent,
+			&i.Provider,
+			&i.Model,
+			&i.GoodCount,
+			&i.BadCount,
+			&i.MessageCreatedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageVotesNewest = `-- name: ListMessageVotesNewest :many
+SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+       content, reply_to_message_id, reply_to_content, provider, model, good_count,
+       bad_count, message_created_at, created_at, updated_at
+FROM message_votes
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS INTEGER) = 0 OR is_bot_reply = 1)
+ORDER BY created_at DESC, message_id
+LIMIT ?4 OFFSET ?3
+`
+
+type ListMessageVotesNewestParams struct {
+	GuildID   string
+	BotOnly   int64
+	RowOffset int64
+	RowLimit  int64
+}
+
+func (q *Queries) ListMessageVotesNewest(ctx context.Context, arg ListMessageVotesNewestParams) ([]MessageVote, error) {
+	rows, err := q.db.QueryContext(ctx, listMessageVotesNewest,
+		arg.GuildID,
+		arg.BotOnly,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageVote
+	for rows.Next() {
+		var i MessageVote
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.AuthorID,
+			&i.AuthorName,
+			&i.IsBotReply,
+			&i.Content,
+			&i.ReplyToMessageID,
+			&i.ReplyToContent,
+			&i.Provider,
+			&i.Model,
+			&i.GoodCount,
+			&i.BadCount,
+			&i.MessageCreatedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessageVotesWorst = `-- name: ListMessageVotesWorst :many
+SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+       content, reply_to_message_id, reply_to_content, provider, model, good_count,
+       bad_count, message_created_at, created_at, updated_at
+FROM message_votes
+WHERE (CAST(?1 AS TEXT) = '' OR guild_id = CAST(?1 AS TEXT))
+  AND (CAST(?2 AS INTEGER) = 0 OR is_bot_reply = 1)
+ORDER BY bad_count DESC, good_count DESC, created_at DESC, message_id
+LIMIT ?4 OFFSET ?3
+`
+
+type ListMessageVotesWorstParams struct {
+	GuildID   string
+	BotOnly   int64
+	RowOffset int64
+	RowLimit  int64
+}
+
+func (q *Queries) ListMessageVotesWorst(ctx context.Context, arg ListMessageVotesWorstParams) ([]MessageVote, error) {
+	rows, err := q.db.QueryContext(ctx, listMessageVotesWorst,
+		arg.GuildID,
+		arg.BotOnly,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MessageVote
+	for rows.Next() {
+		var i MessageVote
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.AuthorID,
+			&i.AuthorName,
+			&i.IsBotReply,
+			&i.Content,
+			&i.ReplyToMessageID,
+			&i.ReplyToContent,
+			&i.Provider,
+			&i.Model,
+			&i.GoodCount,
+			&i.BadCount,
+			&i.MessageCreatedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markDiscordMessageDeleted = `-- name: MarkDiscordMessageDeleted :exec
 INSERT INTO discord_messages (message_id, channel_id, guild_id, created_at, deleted_at)
 VALUES (?, ?, ?, ?, ?)
@@ -1945,6 +2647,39 @@ func (q *Queries) SetVoiceSettings(ctx context.Context, arg SetVoiceSettingsPara
 		arg.VoiceEnabled,
 	)
 	return err
+}
+
+const updateMediaLibraryText = `-- name: UpdateMediaLibraryText :execrows
+UPDATE media_library
+SET description = ?,
+    trigger_text = ?,
+    description_embedding = ?,
+    trigger_embedding = ?
+WHERE url = ? AND guild_id = ?
+`
+
+type UpdateMediaLibraryTextParams struct {
+	Description          string
+	TriggerText          string
+	DescriptionEmbedding interface{}
+	TriggerEmbedding     interface{}
+	Url                  string
+	GuildID              string
+}
+
+func (q *Queries) UpdateMediaLibraryText(ctx context.Context, arg UpdateMediaLibraryTextParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateMediaLibraryText,
+		arg.Description,
+		arg.TriggerText,
+		arg.DescriptionEmbedding,
+		arg.TriggerEmbedding,
+		arg.Url,
+		arg.GuildID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const updateMessageVoteCounts = `-- name: UpdateMessageVoteCounts :exec
