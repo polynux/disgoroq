@@ -257,6 +257,11 @@
             <div class="mono muted">{{.AuthorID}}</div>
           </td>
           <td>
+            {{if .MediaThumb}}
+            <a class="media-preview" href="{{.MediaHref}}" target="_blank" rel="noopener noreferrer" title="{{.MediaLabel}}">
+              <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.MediaThumb}}" alt="">
+            </a>
+            {{end}}
             <div class="cell-content">{{.Content}}</div>
             <div class="mono muted">{{.MessageID}}</div>
             {{if .ReferencedMessageID}}<div class="muted">reply to <span class="mono">{{.ReferencedMessageID}}</span></div>{{end}}
@@ -342,9 +347,24 @@
             <div class="mono muted">{{.AttachmentKey}}</div>
           </td>
           <td>
-            <div>{{.Filename}}</div>
-            <div class="muted">{{.ContentType}}</div>
-            {{if .SourceURL}}<div class="mono cell-url">{{.SourceURL}}</div>{{end}}
+            <div class="file-cell">
+              {{if .ThumbURL}}
+              <a class="media-preview" href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer" title="{{.Filename}}">
+                <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
+              </a>
+              {{end}}
+              <div class="file-meta">
+                <div>{{if .Filename}}{{.Filename}}{{else}}<span class="muted">no filename</span>{{end}}</div>
+                <div class="muted">{{.ContentType}}</div>
+                {{if .SourceURL}}
+                  {{if .Linkable}}
+                  <a class="cell-url mono" href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer" title="{{.SourceURL}}">{{.ShortURL}}</a>
+                  {{else}}
+                  <span class="cell-url mono" title="{{.SourceURL}}">{{.ShortURL}}</span>
+                  {{end}}
+                {{end}}
+              </div>
+            </div>
           </td>
           <td class="mono">{{.Size}}</td>
           <td>
@@ -616,7 +636,20 @@
             <td class="cell-content">{{.Description}}</td>
             <td class="cell-content">{{.TriggerText}}</td>
             <td class="mono">{{.Uses}}</td>
-            <td class="mono cell-url">{{.URL}}</td>
+            <td class="cell-preview">
+              {{if .ThumbURL}}
+              <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+                <img class="thumb thumb-sm" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
+              </a>
+              {{else if .Linkable}}
+              <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+              {{end}}
+              {{if .Linkable}}
+              <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
+              {{else}}
+              <span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>
+              {{end}}
+            </td>
           </tr>
           {{end}}
         </tbody>
@@ -644,15 +677,21 @@
       <tbody>
         {{range .Media}}
         <tr>
-          <td>
-            {{if .IsImage}}
-              {{if .Linkable}}<img class="thumb" loading="lazy" referrerpolicy="no-referrer" src="{{.URL}}" alt="">{{else}}<span class="muted">unsafe URL</span>{{end}}
+          <td class="cell-preview">
+            {{if .ThumbURL}}
+            <a class="media-preview" href="{{.URL}}" target="_blank" rel="noopener noreferrer">
+              <img class="thumb" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()" src="{{.ThumbURL}}" alt="">
+            </a>
             {{else if .Linkable}}
-              <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+            <a class="media-open" href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
             {{else}}
-              <span class="muted">no preview</span>
+            <span class="muted">unsafe URL</span>
             {{end}}
-            <div class="mono cell-url">{{.URL}}</div>
+            {{if .Linkable}}
+            <a class="cell-url mono" href="{{.URL}}" target="_blank" rel="noopener noreferrer" title="{{.URL}}">{{.ShortURL}}</a>
+            {{else}}
+            <span class="cell-url mono" title="{{.URL}}">{{.ShortURL}}</span>
+            {{end}}
           </td>
           <td>{{.Kind}}</td>
           <td class="cell-content">{{.Description}}</td>

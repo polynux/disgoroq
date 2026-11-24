@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -165,6 +166,9 @@ type messageRowView struct {
 	HasJSON             bool
 	IsEdited            bool
 	IsDeleted           bool
+	MediaThumb          string
+	MediaHref           string
+	MediaLabel          string
 }
 
 type attachmentRowView struct {
@@ -182,6 +186,9 @@ type attachmentRowView struct {
 	Content       string
 	Truncated     bool
 	DeleteURL     string
+	ThumbURL      string
+	ShortURL      string
+	Linkable      bool
 }
 
 type voteRowView struct {
@@ -225,7 +232,8 @@ type mediaRowView struct {
 	Uses        int64
 	FirstSeen   string
 	LastSeen    string
-	IsImage     bool
+	ThumbURL    string
+	ShortURL    string
 	Linkable    bool
 }
 
@@ -238,6 +246,9 @@ type mediaSearchRowView struct {
 	TriggerText string
 	Similarity  string
 	Uses        int64
+	ThumbURL    string
+	ShortURL    string
+	Linkable    bool
 }
 
 func normalizeDataTab(raw string) string {
@@ -363,6 +374,143 @@ func isSafeHTTPURL(raw string) bool {
 	default:
 		return false
 	}
+}
+
+// directImageURL returns raw when a browser can render it straight from the
+// address: an image file extension, or a Twitter image with a format query.
+func directImageURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || !isSafeHTTPURL(raw) {
+		return ""
+	}
+	switch strings.ToLower(path.Ext(parsed.Path)) {
+	case ".gif", ".png", ".jpg", ".jpeg", ".webp", ".avif":
+		return parsed.String()
+	}
+	if strings.EqualFold(parsed.Host, "pbs.twimg.com") {
+		switch strings.ToLower(parsed.Query().Get("format")) {
+		case "gif", "jpg", "jpeg", "png", "webp":
+			return parsed.String()
+		}
+	}
+	return ""
+}
+
+// youtubeThumbnail builds a stable poster frame for a YouTube page URL.
+func youtubeThumbnail(parsed *url.URL) string {
+	host := strings.ToLower(strings.TrimPrefix(parsed.Host, "www."))
+	var id string
+	switch host {
+	case "youtube.com", "m.youtube.com", "music.youtube.com":
+		switch {
+		case parsed.Path == "/watch":
+			id = parsed.Query().Get("v")
+		case strings.HasPrefix(parsed.Path, "/shorts/"):
+			id = strings.TrimPrefix(parsed.Path, "/shorts/")
+		case strings.HasPrefix(parsed.Path, "/embed/"):
+			id = strings.TrimPrefix(parsed.Path, "/embed/")
+		}
+	case "youtu.be":
+		id = strings.TrimPrefix(parsed.Path, "/")
+	}
+	id = strings.TrimSpace(strings.Split(id, "/")[0])
+	if len(id) < 6 || len(id) > 32 {
+		return ""
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return ""
+		}
+	}
+	return "https://i.ytimg.com/vi/" + url.PathEscape(id) + "/mqdefault.jpg"
+}
+
+// mediaThumbnail returns the image to show for a media library entry, or "".
+func mediaThumbnail(raw, kind string) string {
+	if thumb := directImageURL(raw); thumb != "" {
+		return thumb
+	}
+	if !strings.EqualFold(kind, "youtube") {
+		return ""
+	}
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return youtubeThumbnail(parsed)
+}
+
+const dataShortURLRunes = 52
+
+// shortDisplayURL drops the scheme and query string so long signed CDN links
+// stay one line, keeping the host and path that identify the file.
+func shortDisplayURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return truncateDisplayRunes(trimmed, dataShortURLRunes)
+	}
+	display := strings.TrimPrefix(parsed.Host, "www.") + parsed.Path
+	if parsed.Path == "" || parsed.Path == "/" {
+		display = strings.TrimPrefix(parsed.Host, "www.")
+	}
+	return truncateDisplayRunes(display, dataShortURLRunes)
+}
+
+func truncateDisplayRunes(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+const dataMessageJSONDecodeMax = 4 << 20
+
+type cachedAttachmentJSON struct {
+	URL         string `json:"url"`
+	ProxyURL    string `json:"proxy_url"`
+	ContentType string `json:"content_type"`
+	Filename    string `json:"filename"`
+}
+
+// messageMedia pulls the first image attachment out of a cached Discord
+// message payload so the row can show the picture instead of just text.
+func messageMedia(raw string) (thumb, href, label string) {
+	if raw == "" || len(raw) > dataMessageJSONDecodeMax {
+		return "", "", ""
+	}
+	var payload struct {
+		Attachments []cachedAttachmentJSON `json:"attachments"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", "", ""
+	}
+	for _, attachment := range payload.Attachments {
+		link := strings.TrimSpace(attachment.URL)
+		if !isSafeHTTPURL(link) {
+			continue
+		}
+		source := strings.TrimSpace(attachment.ProxyURL)
+		if !isSafeHTTPURL(source) {
+			source = link
+		}
+		image := directImageURL(source)
+		if image == "" {
+			continue
+		}
+		name := strings.TrimSpace(attachment.Filename)
+		if name == "" {
+			name = "attachment"
+		}
+		return image, link, name
+	}
+	return "", "", ""
 }
 
 func parseFlexibleTime(raw string) (time.Time, bool) {
@@ -586,6 +734,7 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 		data.Pagination.HasNext = hasNext
 		for _, row := range rows {
 			pretty, hasJSON := prettyJSON(row.MessageJSON)
+			mediaThumb, mediaHref, mediaLabel := messageMedia(row.MessageJSON)
 			data.Messages = append(data.Messages, messageRowView{
 				MessageID:           row.MessageID,
 				ChannelID:           row.ChannelID,
@@ -602,6 +751,9 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				HasJSON:             hasJSON,
 				IsEdited:            row.EditedAt > 0,
 				IsDeleted:           row.DeletedAt > 0,
+				MediaThumb:          mediaThumb,
+				MediaHref:           mediaHref,
+				MediaLabel:          mediaLabel,
 			})
 		}
 
@@ -628,6 +780,9 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				Content:       row.Content,
 				Truncated:     truncated,
 				DeleteURL:     dataActionURL(r, fmt.Sprintf("/data/attachments/%d/delete", row.ID)),
+				ThumbURL:      directImageURL(row.SourceURL),
+				ShortURL:      shortDisplayURL(row.SourceURL),
+				Linkable:      isSafeHTTPURL(row.SourceURL),
 			})
 		}
 
@@ -733,7 +888,8 @@ func (s *Server) buildDataPage(r *http.Request, notice, errMsg string) (dataPage
 				Uses:        row.Uses,
 				FirstSeen:   formatUnixUTC(row.FirstSeen),
 				LastSeen:    formatUnixUTC(row.LastSeen),
-				IsImage:     row.Kind == "image" || row.Kind == "gif",
+				ThumbURL:    mediaThumbnail(row.URL, row.Kind),
+				ShortURL:    shortDisplayURL(row.URL),
 				Linkable:    isSafeHTTPURL(row.URL),
 			})
 		}
@@ -787,6 +943,9 @@ func (s *Server) fillMediaSearch(ctx context.Context, data *dataPageData, filter
 			TriggerText: hit.Entry.TriggerText,
 			Similarity:  strconv.FormatFloat(hit.Similarity, 'f', 3, 64),
 			Uses:        hit.Entry.Uses,
+			ThumbURL:    mediaThumbnail(hit.Entry.URL, hit.Entry.Kind),
+			ShortURL:    shortDisplayURL(hit.Entry.URL),
+			Linkable:    isSafeHTTPURL(hit.Entry.URL),
 		})
 	}
 }

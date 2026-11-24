@@ -439,6 +439,7 @@ th, td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
+  vertical-align: top;
 }
 
 th {
@@ -579,7 +580,7 @@ th {
 }
 
 .cell-content {
-  max-width: 420px;
+  max-width: 360px;
   max-height: 8em;
   overflow: auto;
   white-space: pre-wrap;
@@ -587,9 +588,37 @@ th {
 }
 
 .cell-url {
-  max-width: 420px;
-  overflow-wrap: anywhere;
+  display: block;
+  max-width: 230px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
   font-size: 11px;
+}
+
+.cell-preview {
+  width: 150px;
+}
+
+.cell-preview .cell-url {
+  max-width: 150px;
+}
+
+.media-preview {
+  display: inline-block;
+  line-height: 0;
+}
+
+.media-open {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  font-size: 12px;
 }
 
 .pre-wrap {
@@ -608,9 +637,26 @@ th {
 
 .thumb {
   display: block;
-  max-width: 96px;
-  max-height: 96px;
+  width: 88px;
+  height: 88px;
   border-radius: 6px;
   border: 1px solid var(--border);
+  background: var(--surface-subtle);
   object-fit: cover;
+}
+
+.thumb-sm {
+  width: 52px;
+  height: 52px;
+}
+
+.file-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.file-meta {
+  min-width: 0;
 }
