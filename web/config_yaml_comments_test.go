@@ -22,6 +22,28 @@ func TestPatchKeepsCommentsAroundBlockScalarsAndLists(t *testing.T) {
 			want:  "bot:\n  default_prompt: new\n    # note\n  trigger_words: []\n",
 		},
 		{
+			name:  "multi-line replacement of a block scalar keeps the comment below it a comment",
+			src:   "bot:\n  default_prompt: |\n      old\n    # note\n  trigger_words: []\n",
+			patch: yamlPatch{Path: "bot.default_prompt", Kind: fieldKindText, Val: "line1\nline2"},
+			want:  "bot:\n  default_prompt: |-\n    line1\n    line2\n  # note\n  trigger_words: []\n",
+		},
+		{
+			name:  "multi-line replacement of a plain scalar keeps a deeper comment below it a comment",
+			src:   "bot:\n  default_prompt: short\n    # note\n  trigger_words: []\n",
+			patch: yamlPatch{Path: "bot.default_prompt", Kind: fieldKindText, Val: "line1\nline2"},
+			want:  "bot:\n  default_prompt: |-\n    line1\n    line2\n  # note\n  trigger_words: []\n",
+		},
+		{
+			name: "mixed content indents under an explicit indicator",
+			// keyIndent 2 + indicator 2 = content indent 4: lines at 7 and 5 are
+			// content, the comment at 3 is not. Ignoring the indicator (first line
+			// sets indent 7) would end the block at "b"; the old "> keyIndent"
+			// rule would swallow the comment.
+			src:   "bot:\n  default_prompt: |2\n       a\n     b\n   # note\n  trigger_words: []\n",
+			patch: yamlPatch{Path: "bot.default_prompt", Kind: fieldKindText, Val: "new"},
+			want:  "bot:\n  default_prompt: new\n   # note\n  trigger_words: []\n",
+		},
+		{
 			name:  "explicit indentation indicator is honoured",
 			src:   "bot:\n  default_prompt: |2\n      indented text\n  trigger_words: []\n",
 			patch: yamlPatch{Path: "bot.default_prompt", Kind: fieldKindText, Val: "new"},

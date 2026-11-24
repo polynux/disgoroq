@@ -557,13 +557,17 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 			if isBlockReplacement {
 				comment := string(bytes.TrimRight(src[commentStart:lineEnd], " \t"))
 				replacement := " " + attachBlockHeaderComment(emitted, comment, eol)
-				return spliceBytes(src, insertPos, lineEnd, []byte(replacement)), nil
+				return keepFollowingCommentsOutOfBlock(spliceBytes(src, insertPos, lineEnd, []byte(replacement)), insertPos+len(replacement), keyIndent, eol), nil
 			}
 			replacement := " " + emitted + " "
 			return spliceBytes(src, insertPos, commentStart, []byte(replacement)), nil
 		}
 		replacement := " " + emitted
-		return spliceBytes(src, insertPos, lineEnd, []byte(replacement)), nil
+		out := spliceBytes(src, insertPos, lineEnd, []byte(replacement))
+		if isBlockReplacement {
+			out = keepFollowingCommentsOutOfBlock(out, insertPos+len(replacement), keyIndent, eol)
+		}
+		return out, nil
 	}
 
 	start, end, err := valueByteSpan(src, li, keyNode, valNode)
@@ -583,7 +587,11 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 				emitted = emitted + " " + comment
 			}
 		}
-		return spliceBytes(src, start, end, []byte(emitted)), nil
+		out := spliceBytes(src, start, end, []byte(emitted))
+		if isBlockReplacement {
+			out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent, eol)
+		}
+		return out, nil
 	}
 
 	// If replacing a non-block scalar with a block scalar ("|-"), move any trailing
@@ -599,7 +607,50 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 		}
 	}
 
-	return spliceBytes(src, start, end, []byte(emitted)), nil
+	out := spliceBytes(src, start, end, []byte(emitted))
+	if isBlockReplacement {
+		out = keepFollowingCommentsOutOfBlock(out, start+len(emitted), keyIndent, eol)
+	}
+	return out, nil
+}
+
+// keepFollowingCommentsOutOfBlock re-indents the comment lines directly after a
+// newly emitted "|-" block (written at keyIndent+2) to keyIndent. A comment
+// indented at or past the block's content indent would otherwise be read as
+// block text. Blank lines are skipped; the run ends at the first other line.
+func keepFollowingCommentsOutOfBlock(out []byte, after, keyIndent int, eol string) []byte {
+	contentIndent := keyIndent + 2
+	pos := after
+	if i := bytes.IndexByte(out[pos:], '\n'); i >= 0 {
+		pos += i + 1
+	} else {
+		return out
+	}
+	var b bytes.Buffer
+	b.Write(out[:pos])
+	for pos < len(out) {
+		next := len(out)
+		if i := bytes.IndexByte(out[pos:], '\n'); i >= 0 {
+			next = pos + i + 1
+		}
+		line := out[pos:next]
+		body := bytes.TrimRight(line, "\r\n")
+		trimmed := bytes.TrimLeft(body, " ")
+		if len(bytes.TrimSpace(body)) == 0 {
+			b.Write(line)
+			pos = next
+			continue
+		}
+		if trimmed[0] != '#' || len(body)-len(trimmed) < contentIndent {
+			break
+		}
+		b.WriteString(strings.Repeat(" ", keyIndent))
+		b.Write(trimmed)
+		b.Write(line[len(body):])
+		pos = next
+	}
+	b.Write(out[pos:])
+	return b.Bytes()
 }
 
 // attachBlockHeaderComment inserts " <comment>" immediately after the "|-" indicator
