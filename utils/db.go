@@ -3,6 +3,8 @@ package utils
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,21 +77,85 @@ func ConnectLocal() *sql.DB {
 		os.Mkdir(dir, 0755)
 	}
 
-	dbPath := filepath.Join(dir, dbName)
-
-	// Open with WAL mode for better concurrency
-	db, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := openLocalDB(filepath.Join(dir, dbName))
 	if err != nil {
 		dbLogger.Fatal("Error opening local database", zap.Error(err))
 		os.Exit(1)
 	}
 
-	// SQLite handles concurrent writes more reliably with a single shared connection.
+	return db
+}
+
+// localBusyTimeoutMS is how long a statement waits for a lock held by another
+// connection before failing with "database is locked".
+const localBusyTimeoutMS = 5000
+
+// openLocalDB opens a local libsql database file with one long-lived connection.
+//
+// go-libsql hands the file: URL to SQLite unchanged, so mattn-style query
+// parameters such as _busy_timeout are ignored. The pragmas therefore run on
+// every new connection through pragmaConnector instead.
+func openLocalDB(dbPath string) (*sql.DB, error) {
+	base, err := sql.Open("libsql", "file:"+dbPath)
+	if err != nil {
+		return nil, err
+	}
+	driverCtx, ok := base.Driver().(driver.DriverContext)
+	if !ok {
+		base.Close()
+		return nil, fmt.Errorf("libsql driver does not support connectors")
+	}
+	_ = base.Close()
+
+	connector, err := driverCtx.OpenConnector("file:" + dbPath)
+	if err != nil {
+		return nil, err
+	}
+
+	db := sql.OpenDB(pragmaConnector{
+		Connector: connector,
+		pragmas: []string{
+			fmt.Sprintf("PRAGMA busy_timeout = %d", localBusyTimeoutMS),
+			"PRAGMA journal_mode = WAL",
+		},
+	})
+
+	// SQLite handles concurrent writes more reliably with a single shared
+	// connection. Keep it open: recycling it makes the closing connection
+	// checkpoint the WAL while its replacement opens.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(time.Hour)
+	db.SetConnMaxLifetime(0)
+	db.SetConnMaxIdleTime(0)
 
-	return db
+	return db, nil
+}
+
+// pragmaConnector runs per-connection pragmas on every connection it opens.
+type pragmaConnector struct {
+	driver.Connector
+	pragmas []string
+}
+
+func (c pragmaConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	queryer, ok := conn.(driver.QueryerContext)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("libsql connection does not support queries")
+	}
+	for _, pragma := range c.pragmas {
+		rows, err := queryer.QueryContext(ctx, pragma, nil)
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("%s: %w", pragma, err)
+		}
+		rows.Close()
+	}
+	return conn, nil
 }
 
 // InitializeDB initializes the database connection.
