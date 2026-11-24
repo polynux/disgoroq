@@ -679,3 +679,286 @@ func TestConfigSaveIgnoresAbsentFieldsAndDistinguishesUncheckedCheckbox(t *testi
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.False(t, runtime.Current().Votes.Enabled)
 }
+
+func TestConfigPatchMultiLinePlainScalar(t *testing.T) {
+	yamlContent := `discord:
+  token: "${TEST_CFG_DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${TEST_CFG_GROQ_KEY}"
+memory:
+  enabled: false
+bot:
+  default_prompt: You are a
+    helpful assistant
+logging:
+  level: "info"
+`
+	srv, runtime, cfgPath := newConfigTestServer(t, yamlContent)
+	origBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	// 1. Editing the multi-line plain scalar to "new" removes the continuation line cleanly.
+	form := url.Values{
+		"config_hash":              {computeFileHash(origBytes)},
+		"field:bot.default_prompt": {"new"},
+	}
+	rec := postConfigSection(t, srv, "bot", form, false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "new", runtime.Current().Bot.DefaultPrompt)
+
+	afterBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(afterBytes), "helpful assistant")
+	assert.Contains(t, string(afterBytes), "bot:\n  default_prompt: new\nlogging:\n  level: \"info\"\n")
+
+	// 2. Inserting a missing key after a multi-line plain scalar lands after the full scalar.
+	patched, err := patchYAMLBytes([]byte(yamlContent), []yamlPatch{
+		{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"alpha"}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, string(patched), "  default_prompt: You are a\n    helpful assistant\n  trigger_words:\n    - alpha\nlogging:\n")
+}
+
+func TestConfigPatchPreservesCommentsAroundReplacedSpans(t *testing.T) {
+	t.Run("trailing comment on scalar replaced by block scalar", func(t *testing.T) {
+		yamlContent := `discord:
+  token: "${TEST_CFG_DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${TEST_CFG_GROQ_KEY}"
+memory:
+  enabled: false
+bot:
+  default_prompt: "hello" # keep this comment
+logging:
+  level: "info"
+`
+		srv, runtime, cfgPath := newConfigTestServer(t, yamlContent)
+		origBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+
+		form := url.Values{
+			"config_hash":              {computeFileHash(origBytes)},
+			"field:bot.default_prompt": {"line1\nline2"},
+		}
+		rec := postConfigSection(t, srv, "bot", form, false)
+		require.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "line1\nline2", runtime.Current().Bot.DefaultPrompt)
+
+		afterBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		assert.Contains(t, string(afterBytes), "  default_prompt: |- # keep this comment\n    line1\n    line2\nlogging:\n  level: \"info\"\n")
+	})
+
+	t.Run("trailing comment on empty value replaced by block scalar", func(t *testing.T) {
+		yamlContent := "bot:\n  default_prompt: # keep empty comment\nlogging:\n  level: \"info\"\n"
+		out, err := patchYAMLBytes([]byte(yamlContent), []yamlPatch{
+			{Path: "bot.default_prompt", Kind: fieldKindText, Val: "line1\nline2"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "bot:\n  default_prompt: |- # keep empty comment\n    line1\n    line2\nlogging:\n  level: \"info\"\n", string(out))
+	})
+
+	t.Run("header comment on block scalar preserved on edit", func(t *testing.T) {
+		yamlContent := "bot:\n  default_prompt: |- # keep me\n    old1\n    old2\nlogging:\n  level: \"info\"\n"
+		out1, err := patchYAMLBytes([]byte(yamlContent), []yamlPatch{
+			{Path: "bot.default_prompt", Kind: fieldKindText, Val: "new"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "bot:\n  default_prompt: new # keep me\nlogging:\n  level: \"info\"\n", string(out1))
+
+		out2, err := patchYAMLBytes([]byte(yamlContent), []yamlPatch{
+			{Path: "bot.default_prompt", Kind: fieldKindText, Val: "new1\nnew2"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "bot:\n  default_prompt: |- # keep me\n    new1\n    new2\nlogging:\n  level: \"info\"\n", string(out2))
+	})
+
+	t.Run("flow sequence with interior comments returns 422 and leaves file untouched", func(t *testing.T) {
+		yamlContent := `discord:
+  token: "${TEST_CFG_DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${TEST_CFG_GROQ_KEY}"
+memory:
+  enabled: false
+bot:
+  trigger_words: [
+    "feun", # keep this interior comment
+    "feunboy"
+  ]
+`
+		srv, _, cfgPath := newConfigTestServer(t, yamlContent)
+		origBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+
+		form := url.Values{
+			"config_hash":             {computeFileHash(origBytes)},
+			"field:bot.trigger_words": {"alpha\nbeta"},
+		}
+		rec := postConfigSection(t, srv, "bot", form, false)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Contains(t, rec.Body.String(), "interior comments")
+
+		afterBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, origBytes, afterBytes)
+	})
+}
+
+func TestConfigPatchFlowStyleSections(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+	}{
+		{name: "empty flow mapping", line: "votes: {}"},
+		{name: "explicit null", line: "votes: null"},
+		{name: "tilde null", line: "votes: ~"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			yamlContent := "discord:\n  token: \"${TEST_CFG_DISCORD_TOKEN}\"\ndatabase:\n  local: true\nai:\n  groq:\n    api_key: \"${TEST_CFG_GROQ_KEY}\"\nmemory:\n  enabled: false\n" + tc.line + "\nlogging:\n  level: \"info\"\n"
+			srv, runtime, cfgPath := newConfigTestServer(t, yamlContent)
+			origBytes, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+
+			form := url.Values{
+				"config_hash":             {computeFileHash(origBytes)},
+				"field:votes.probability": {"0.5"},
+			}
+			rec := postConfigSection(t, srv, "votes", form, false)
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.InDelta(t, 0.5, runtime.Current().Votes.Probability, 1e-9)
+
+			afterBytes, err := os.ReadFile(cfgPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(afterBytes), "votes:\n  probability: 0.5\nlogging:\n  level: \"info\"\n")
+		})
+	}
+
+	t.Run("non-empty flow mapping returns 422 and leaves file untouched", func(t *testing.T) {
+		yamlContent := `discord:
+  token: "${TEST_CFG_DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${TEST_CFG_GROQ_KEY}"
+memory:
+  enabled: false
+reengage: {reengage_message: old}
+`
+		srv, _, cfgPath := newConfigTestServer(t, yamlContent)
+		origBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+
+		form := url.Values{
+			"config_hash":                     {computeFileHash(origBytes)},
+			"field:reengage.reengage_message": {"new"},
+		}
+		rec := postConfigSection(t, srv, "reengage", form, false)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Contains(t, rec.Body.String(), "flow style")
+
+		afterBytes, err := os.ReadFile(cfgPath)
+		require.NoError(t, err)
+		assert.Equal(t, origBytes, afterBytes)
+	})
+}
+
+func TestConfigPatchBlockScalarInsideSequence(t *testing.T) {
+	yamlContent := `discord:
+  token: "${TEST_CFG_DISCORD_TOKEN}"
+database:
+  local: true
+ai:
+  groq:
+    api_key: "${TEST_CFG_GROQ_KEY}"
+memory:
+  enabled: false
+bot:
+  trigger_words:
+    - "one"
+    - |-
+      two
+logging:
+  level: "info"
+`
+	srv, runtime, cfgPath := newConfigTestServer(t, yamlContent)
+	origBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	// 1. Inserting a missing key after the block-scalar sequence item lands after "two".
+	inserted, err := patchYAMLBytes(origBytes, []yamlPatch{
+		{Path: "bot.default_prompt", Kind: fieldKindText, Val: "hello"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, string(inserted), "    - |-\n      two\n  default_prompt: hello\nlogging:\n  level: \"info\"\n")
+
+	// 2. Editing trigger_words replaces the entire sequence cleanly including the block item.
+	form := url.Values{
+		"config_hash":             {computeFileHash(origBytes)},
+		"field:bot.trigger_words": {"alpha\nbeta"},
+	}
+	rec := postConfigSection(t, srv, "bot", form, false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []string{"alpha", "beta"}, runtime.Current().Bot.TriggerWords)
+
+	afterBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(afterBytes), "bot:\n  trigger_words:\n    - alpha\n    - beta\nlogging:\n  level: \"info\"\n")
+}
+
+func TestConfigPatchPreservesCRLFLineEndings(t *testing.T) {
+	crlfContent := strings.ReplaceAll(sampleConfigYAML, "\n", "\r\n")
+	srv, runtime, cfgPath := newConfigTestServer(t, crlfContent)
+	origBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	form := url.Values{
+		"config_hash":             {computeFileHash(origBytes)},
+		"field:votes.probability": {"0.5"},
+	}
+	rec := postConfigSection(t, srv, "votes", form, false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.InDelta(t, 0.5, runtime.Current().Votes.Probability, 1e-9)
+
+	afterBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	// Every line ending must remain CRLF (no bare LF).
+	strippedCRLF := strings.ReplaceAll(string(afterBytes), "\r\n", "")
+	assert.NotContains(t, strippedCRLF, "\n", "patched CRLF file must not introduce bare LF line endings")
+
+	beforeLines := strings.Split(string(origBytes), "\r\n")
+	afterLines := strings.Split(string(afterBytes), "\r\n")
+	require.Equal(t, len(beforeLines), len(afterLines))
+	diffs := 0
+	for i := range beforeLines {
+		if beforeLines[i] != afterLines[i] {
+			diffs++
+			assert.Equal(t, "  probability: 0.25", beforeLines[i])
+			assert.Equal(t, "  probability: 0.5", afterLines[i])
+		}
+	}
+	assert.Equal(t, 1, diffs)
+}
+
+func TestVerifyPatchedDocumentRejectsIntendedPathMismatch(t *testing.T) {
+	origDoc, err := parseYAMLDocument([]byte("bot:\n  default_prompt: old\n"))
+	require.NoError(t, err)
+	badPatchedDoc, err := parseYAMLDocument([]byte("bot:\n  default_prompt: \"new leftover\"\n"))
+	require.NoError(t, err)
+
+	err = verifyPatchedDocument(origDoc, badPatchedDoc, []yamlPatch{
+		{Path: "bot.default_prompt", Kind: fieldKindText, Val: "new"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not round-trip")
+}
