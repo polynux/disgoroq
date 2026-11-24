@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -255,6 +256,8 @@ func TestConfigSaveWritesBackupPreservesModeAndHotAppliesRuntime(t *testing.T) {
 	assert.Equal(t, []string{"gamma", "delta"}, runtime.Current().Bot.TriggerWords)
 
 	// Phase 1 guild page reads defaults from the runtime and reflects the live edit.
+	// The guild must be known to the route guard (no cache here), so seed a bookkeeping row.
+	require.NoError(t, srv.deps.Repo.SetLastMessage(context.Background(), "123456789012345678", 1))
 	guildReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/123456789012345678", nil)
 	guildRec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(guildRec, guildReq)
