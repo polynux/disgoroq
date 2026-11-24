@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ var (
 	refreshAttachmentURLsEndpoint = rest.NewEndpoint(http.MethodPost, "/attachments/refresh-urls")
 	defaultValidationHTTPClient   = newValidationHTTPClient()
 	errLinkBlocked                = errors.New("link check blocked by SSRF guard")
+	urlInErrorPattern             = regexp.MustCompile(`https?://[^\s"'<>]+`)
 
 	// IPv4 ranges not covered by netip.Addr.IsPrivate / IsLoopback / IsLinkLocal*:
 	// "this network", carrier-grade NAT, benchmarking, and reserved/broadcast.
@@ -46,6 +48,7 @@ var (
 		netip.MustParsePrefix("198.18.0.0/15"),
 		netip.MustParsePrefix("240.0.0.0/4"),
 	}
+	siteLocalV6    = netip.MustParsePrefix("fec0::/10")
 	nat64WellKnown = netip.MustParsePrefix("64:ff9b::/96")
 	nat64Local     = netip.MustParsePrefix("64:ff9b:1::/48")
 	sixToFour      = netip.MustParsePrefix("2002::/16")
@@ -55,9 +58,14 @@ var (
 // POST /attachments/refresh-urls with its own rate limiter (MaxRetries=0 so 429
 // responses fail fast) completely isolated from the main bot client.
 func NewDiscordRefreshClient(botToken string, opts ...rest.ClientConfigOpt) rest.Client {
+	slogLogger := logger.NewSlogLogger()
 	baseOpts := []rest.ClientConfigOpt{
+		rest.WithLogger(slogLogger),
 		rest.WithUserAgent(fmt.Sprintf("DiscordBot (%s, %s)", disgo.GitHub, disgo.Version)),
-		rest.WithRateLimiter(rest.NewRateLimiter(rest.WithMaxRetries(0))),
+		rest.WithRateLimiterConfigOpts(
+			rest.WithMaxRetries(0),
+			rest.WithRateLimiterLogger(slogLogger),
+		),
 	}
 	baseOpts = append(baseOpts, opts...)
 	return rest.NewClient(botToken, baseOpts...)
@@ -187,7 +195,7 @@ func CheckURL(ctx context.Context, rawURL string, restClient DiscordRestClient, 
 				report.RefreshStatus = "error"
 			}
 			if err != nil {
-				report.Error = err.Error()
+				report.Error = sanitizeCheckError(err)
 			}
 			return report
 		}
@@ -198,7 +206,7 @@ func CheckURL(ctx context.Context, rawURL string, restClient DiscordRestClient, 
 	report.GetStatus = getStatus
 	report.Verdict = outcome.String()
 	if err != nil {
-		report.Error = err.Error()
+		report.Error = sanitizeCheckError(err)
 	}
 	return report
 }
@@ -209,6 +217,33 @@ func sanitizeURLHostPath(raw string) string {
 		return ""
 	}
 	return u.Host + u.Path
+}
+
+func stripURLQuery(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		if idx := strings.IndexAny(raw, "?#"); idx >= 0 {
+			return raw[:idx]
+		}
+		return raw
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
+func sanitizeCheckError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	var urlErr *url.Error
+	for cur := err; errors.As(cur, &urlErr); cur = urlErr.Err {
+		if urlErr.URL != "" {
+			msg = strings.ReplaceAll(msg, urlErr.URL, stripURLQuery(urlErr.URL))
+		}
+	}
+	return urlInErrorPattern.ReplaceAllStringFunc(msg, stripURLQuery)
 }
 
 // SetDiscordRestClient configures the Discord REST client used to refresh
@@ -408,7 +443,8 @@ func refreshDiscordCDNURL(ctx context.Context, restClient DiscordRestClient, raw
 }
 
 func checkLink(ctx context.Context, client *http.Client, targetURL string) (linkCheckOutcome, int, int, error) {
-	parsed, err := url.Parse(strings.TrimSpace(targetURL))
+	trimmed := strings.TrimSpace(targetURL)
+	parsed, err := url.Parse(trimmed)
 	if err != nil || parsed.Host == "" || !isAllowedLinkScheme(parsed.Scheme) {
 		scheme := ""
 		if parsed != nil {
@@ -417,7 +453,7 @@ func checkLink(ctx context.Context, client *http.Client, targetURL string) (link
 		return linkBlocked, 0, 0, fmt.Errorf("%w: unsupported URL scheme %q", errLinkBlocked, scheme)
 	}
 
-	headStatus, err := doLinkCheckRequest(ctx, client, http.MethodHead, targetURL, false)
+	headStatus, err := doLinkCheckRequest(ctx, client, http.MethodHead, trimmed, false)
 	if err != nil {
 		if errors.Is(err, errLinkBlocked) {
 			return linkBlocked, 0, 0, err
@@ -429,7 +465,7 @@ func checkLink(ctx context.Context, client *http.Client, targetURL string) (link
 	}
 	if headStatus == http.StatusNotFound || headStatus == http.StatusGone ||
 		headStatus == http.StatusMethodNotAllowed || headStatus == http.StatusNotImplemented {
-		getStatus, err := doLinkCheckRequest(ctx, client, http.MethodGet, targetURL, true)
+		getStatus, err := doLinkCheckRequest(ctx, client, http.MethodGet, trimmed, true)
 		if err != nil {
 			if errors.Is(err, errLinkBlocked) {
 				return linkBlocked, headStatus, 0, err
@@ -582,14 +618,19 @@ func isBlockedLinkIP(addr netip.Addr) bool {
 			}
 		}
 	}
-	bytes := addr.As16()
-	if addr.Is6() && (nat64WellKnown.Contains(addr) || nat64Local.Contains(addr)) &&
-		isBlockedLinkIP(netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})) {
-		return true
-	}
-	if addr.Is6() && sixToFour.Contains(addr) &&
-		isBlockedLinkIP(netip.AddrFrom4([4]byte{bytes[2], bytes[3], bytes[4], bytes[5]})) {
-		return true
+	if addr.Is6() {
+		if siteLocalV6.Contains(addr) || nat64Local.Contains(addr) {
+			return true
+		}
+		bytes := addr.As16()
+		if nat64WellKnown.Contains(addr) &&
+			isBlockedLinkIP(netip.AddrFrom4([4]byte{bytes[12], bytes[13], bytes[14], bytes[15]})) {
+			return true
+		}
+		if sixToFour.Contains(addr) &&
+			isBlockedLinkIP(netip.AddrFrom4([4]byte{bytes[2], bytes[3], bytes[4], bytes[5]})) {
+			return true
+		}
 	}
 	return addr.IsLoopback() ||
 		addr.IsPrivate() ||
@@ -599,6 +640,9 @@ func isBlockedLinkIP(addr netip.Addr) bool {
 		addr.IsUnspecified()
 }
 
+// enqueueDeadDelete schedules an asynchronous dead-link deletion on the live
+// worker queue. Deletes are best-effort: if the queue is full the job is
+// dropped and the dead row will be retried on a later lookup.
 func (s *Service) enqueueDeadDelete(entry Entry, status int) {
 	s.enqueue(liveJob{
 		deleteOnly:    true,

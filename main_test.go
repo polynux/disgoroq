@@ -262,6 +262,65 @@ func TestMediaCheckCLI(t *testing.T) {
 			t.Fatalf("output leaked bot token:\n%s", out)
 		}
 	})
+
+	t.Run("strips signed query from refreshed URL in error output", func(t *testing.T) {
+		closedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		closedURL := closedServer.URL
+		closedClient := closedServer.Client()
+		closedServer.Close()
+
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"refreshed_urls": []map[string]string{
+					{
+						"original":  "https://cdn.discordapp.com/attachments/1/2/broken.gif",
+						"refreshed": closedURL + "/attachments/1/2/broken.gif?ex=111&is=222&hm=secret-sig",
+					},
+				},
+			})
+		}))
+		defer apiServer.Close()
+
+		restClient := medialibrary.NewDiscordRefreshClient(
+			secretToken,
+			rest.WithURL(apiServer.URL),
+			rest.WithHTTPClient(apiServer.Client()),
+		)
+		cfg := config.DefaultConfig()
+		cfg.Discord.Token = secretToken
+
+		var buf bytes.Buffer
+		err := runMediaCheckWithClients(
+			context.Background(),
+			cfg,
+			"https://cdn.discordapp.com/attachments/1/2/broken.gif",
+			restClient,
+			closedClient,
+			&buf,
+		)
+		if err != nil {
+			t.Fatalf("runMediaCheckWithClients() error = %v", err)
+		}
+
+		out := buf.String()
+		for _, want := range []string{
+			"is_attachment: true",
+			"refresh_status: ok",
+			"verdict: unknown",
+			"error:",
+			"/attachments/1/2/broken.gif",
+		} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("output missing %q:\n%s", want, out)
+			}
+		}
+		for _, forbidden := range []string{"secret-sig", "ex=111", "is=222", "hm=", secretToken} {
+			if strings.Contains(out, forbidden) {
+				t.Fatalf("output leaked %q:\n%s", forbidden, out)
+			}
+		}
+	})
 }
 
 

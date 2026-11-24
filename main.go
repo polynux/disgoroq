@@ -225,6 +225,7 @@ func main() {
 		mediaRefreshClient := medialibrary.NewDiscordRefreshClient(
 			cfg.Discord.Token,
 			rest.WithLogger(slogLogger),
+			rest.WithRateLimiterConfigOpts(rest.WithRateLimiterLogger(slogLogger)),
 		)
 		mediaLibraryService.SetDiscordRestClient(mediaRefreshClient)
 		defer func() {
@@ -728,9 +729,11 @@ func formatMediaSearchResults(hits []medialibrary.SearchHit) string {
 func runMediaCheck(ctx context.Context, cfg *config.Config, rawURL string, out io.Writer) error {
 	var restClient rest.Client
 	if cfg != nil && strings.TrimSpace(cfg.Discord.Token) != "" {
+		slogLogger := logger.NewSlogLogger()
 		restClient = medialibrary.NewDiscordRefreshClient(
 			cfg.Discord.Token,
-			rest.WithLogger(logger.NewSlogLogger()),
+			rest.WithLogger(slogLogger),
+			rest.WithRateLimiterConfigOpts(rest.WithRateLimiterLogger(slogLogger)),
 		)
 		defer func() {
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -1277,9 +1277,11 @@ func TestDedicatedRefreshClient429Isolation(t *testing.T) {
 		case "/attachments/refresh-urls":
 			refreshHits.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "30")
+			w.Header().Set("X-RateLimit-Bucket", "refresh-urls-bucket")
+			w.Header().Set("X-RateLimit-Remaining", "0")
 			w.Header().Set("X-RateLimit-Global", "true")
 			w.Header().Set("X-RateLimit-Reset-After", "30")
+			w.Header().Set("Retry-After", "30")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"message":"You are being rate limited.","retry_after":30,"global":true}`))
 		case "/channels/123/messages":
@@ -1341,11 +1343,24 @@ func TestDedicatedRefreshClient429Isolation(t *testing.T) {
 	assert.Equal(t, int32(1), refreshHits.Load(), "dedicated refresh client must fail fast without retrying 429")
 	assert.Less(t, refreshElapsed, 500*time.Millisecond, "429 on refresh must fail fast, took %v", refreshElapsed)
 
+	// A second refresh on the same client must fail fast against the recorded
+	// bucket/global limit without sending another HTTP request.
+	startSecondRefresh := time.Now()
+	res2, ok2 := svc.Resolve(ctx, ai.MediaResolveRequest{
+		GuildID:  "g1",
+		RawReply: "[gif: rl]",
+	})
+	secondRefreshElapsed := time.Since(startSecondRefresh)
+	require.True(t, ok2)
+	assert.Equal(t, cdnURL, res2.URL, "second refresh under active limit must still keep and post canonical URL")
+	assert.Equal(t, int32(1), refreshHits.Load(), "second refresh must fail fast from recorded rate limit without hitting server again")
+	assert.Less(t, secondRefreshElapsed, 500*time.Millisecond, "second refresh under active limit must fail fast, took %v", secondRefreshElapsed)
+
 	row, err := repo.GetEntry(ctx, cdnURL, "g1")
 	require.NoError(t, err)
 	require.NotNil(t, row, "row must be kept on refresh 429")
 
-	// Second independent "send" client must NOT be delayed by refresh client's global 429.
+	// Second independent "send" client must NOT be delayed by refresh client's recorded 429.
 	sendEndpoint := rest.NewEndpoint(http.MethodPost, "/channels/123/messages")
 	var sendResp map[string]any
 	startSend := time.Now()
@@ -1359,16 +1374,18 @@ func TestDedicatedRefreshClient429Isolation(t *testing.T) {
 func TestLinkValidationSSRFGuard(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("isBlockedLinkIP classifies private, loopback, link-local, multicast, unspecified, and public IPs", func(t *testing.T) {
+	t.Run("isBlockedLinkIP classifies private, loopback, link-local, site-local, NAT64, multicast, unspecified, and public IPs", func(t *testing.T) {
 		blocked := []string{
 			"127.0.0.1", "::1",
 			"10.0.0.1", "172.16.0.1", "192.168.1.1", "fc00::1", "fd12:3456::1",
 			"169.254.169.254", "fe80::1",
+			"fec0::1", "feff::1",
 			"0.0.0.0", "::",
 			"224.0.0.1", "ff02::1",
 			"100.64.0.1", "198.18.0.1", "240.0.0.1",
 			"::ffff:127.0.0.1", "::ffff:10.0.0.1",
 			"64:ff9b::127.0.0.1", "2002:7f00:0001::1",
+			"64:ff9b:1::1.1.1.1", "64:ff9b:1::8.8.8.8", "64:ff9b:1::127.0.0.1",
 		}
 		for _, raw := range blocked {
 			assert.True(t, isBlockedLinkIP(netip.MustParseAddr(raw)), "expected %s to be blocked", raw)
@@ -1377,6 +1394,7 @@ func TestLinkValidationSSRFGuard(t *testing.T) {
 			"93.184.216.34",
 			"1.1.1.1",
 			"2606:2800:220:1:248:1893:25c8:1946",
+			"64:ff9b::1.1.1.1",
 		}
 		for _, raw := range allowed {
 			assert.False(t, isBlockedLinkIP(netip.MustParseAddr(raw)), "expected %s to be allowed", raw)
@@ -1701,6 +1719,56 @@ func TestCheckURLDryRun(t *testing.T) {
 		assert.False(t, report.IsAttachment)
 		assert.Equal(t, "skipped", report.RefreshStatus)
 		assert.Equal(t, "blocked", report.Verdict)
+	})
+
+	t.Run("refreshed URL error strips signed query from report.Error", func(t *testing.T) {
+		closedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		closedURL := closedServer.URL
+		closedClient := closedServer.Client()
+		closedServer.Close()
+
+		signedURL := closedURL + "/attachments/1/2/err.gif?ex=deadbeef&is=123456&hm=supersecret"
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(refreshAttachmentURLsResponse{
+				RefreshedURLs: []refreshedAttachmentURL{
+					{Original: "https://cdn.discordapp.com/attachments/1/2/err.gif", Refreshed: signedURL},
+				},
+			})
+		}))
+		defer apiServer.Close()
+
+		report := CheckURL(
+			ctx,
+			"https://cdn.discordapp.com/attachments/1/2/err.gif",
+			newTestDiscordRestClient(t, apiServer, "secret-token", nil),
+			closedClient,
+		)
+		assert.True(t, report.IsAttachment)
+		assert.Equal(t, "ok", report.RefreshStatus)
+		assert.Equal(t, "unknown", report.Verdict)
+		assert.NotEmpty(t, report.Error)
+		assert.Contains(t, report.Error, "/attachments/1/2/err.gif")
+		for _, forbidden := range []string{"ex=", "deadbeef", "is=", "hm=", "supersecret"} {
+			assert.NotContains(t, report.Error, forbidden)
+		}
+	})
+
+	t.Run("checkLink trims leading and trailing whitespace for HEAD and GET requests", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		outcome, headStatus, getStatus, err := checkLink(ctx, server.Client(), "  "+server.URL+"/trimmed.gif\t\n")
+		require.NoError(t, err)
+		assert.Equal(t, linkAlive, outcome)
+		assert.Equal(t, http.StatusMethodNotAllowed, headStatus)
+		assert.Equal(t, http.StatusOK, getStatus)
 	})
 }
 

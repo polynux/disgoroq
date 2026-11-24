@@ -49,8 +49,9 @@ media_library:
   random_gif_fallback: false
   gif_on_request: false
   # Check chosen URLs with SSRF-guarded HEAD (confirming 404/410 and handling 405/501 via
-  # GET Range: bytes=0-0) before posting. Confirmed dead rows are deleted asynchronously and
-  # up to 3 candidates are tried; blocked private/loopback URLs are skipped without deleting.
+  # GET Range: bytes=0-0) before posting. Confirmed dead rows are deleted asynchronously on a
+  # best-effort basis (dropped if the live queue is full and retried on a later lookup) while
+  # trying up to 3 candidates; blocked private/loopback URLs are skipped without deleting.
   validate_links: false
 
 ai:
