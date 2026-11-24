@@ -37,17 +37,20 @@ media_library:
   min_similarity: 0.80
   min_trigger_similarity: 0.80
   cross_guild: false
-  # Allow cdn.discordapp.com / media.discordapp.net links; chosen URLs are refreshed via
-  # Discord's /attachments/refresh-urls endpoint before posting while canonical URLs stay in DB.
+  # Allow cdn.discordapp.com / media.discordapp.net links. When true, real Discord attachment
+  # URLs (/attachments/ and /ephemeral-attachments/) are refreshed via Discord's
+  # /attachments/refresh-urls endpoint before posting even when validate_links is false,
+  # while canonical URLs stay in DB.
   allow_discord_cdn: false
   repeat_window: 20
-  # Per-lookup timeout in ms (code default: 3000). Raise to ~6000 when validate_links is true
-  # to cover embedding, optional Discord CDN refresh, and up to 3 link checks (~1.5s each).
+  # Per-lookup timeout in ms (code default: 3000). Recommended: 5000 when validate_links is true
+  # so embedding, attachment refresh, up to 3 checks (sliced within budget), and fallback all fit.
   lookup_timeout_ms: 3000
   random_gif_fallback: false
   gif_on_request: false
-  # Check chosen URLs (HEAD with GET Range fallback; Discord CDN refreshed first) before posting,
-  # deleting confirmed dead (404/410 or unrefreshable CDN) rows and trying up to 3 candidates.
+  # Check chosen URLs with SSRF-guarded HEAD (confirming 404/410 and handling 405/501 via
+  # GET Range: bytes=0-0) before posting. Confirmed dead rows are deleted asynchronously and
+  # up to 3 candidates are tried; blocked private/loopback URLs are skipped without deleting.
   validate_links: false
 
 ai:
