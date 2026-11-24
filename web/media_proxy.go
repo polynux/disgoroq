@@ -132,12 +132,47 @@ func (p *mediaProxy) resolve(ctx context.Context, raw string) (string, error) {
 
 	switch strings.ToLower(strings.TrimPrefix(parsed.Hostname(), "www.")) {
 	case "tenor.com", "giphy.com":
-		return p.resolveOpenGraphImage(ctx, parsed.String())
+		return p.cachedPage(ctx, parsed.String(), func() (string, error) {
+			return p.resolveOpenGraphImage(ctx, parsed.String())
+		})
 	case "klipy.com":
-		return p.resolveKlipy(ctx, parsed)
+		return p.cachedPage(ctx, parsed.String(), func() (string, error) {
+			return p.resolveKlipy(ctx, parsed)
+		})
 	default:
 		return "", errUnsupportedMediaURL
 	}
+}
+
+// cachedPage remembers resolved GIF page links for an hour; the underlying
+// media URLs are stable, and this keeps repeated page views off Tenor/Giphy.
+func (p *mediaProxy) cachedPage(ctx context.Context, raw string, resolve func() (string, error)) (string, error) {
+	key := "page:" + raw
+	if target, ok := p.cached(key); ok {
+		return target, nil
+	}
+	target, err := resolve()
+	if err != nil {
+		return "", err
+	}
+	p.store(key, target, time.Now().Add(time.Hour))
+	return target, nil
+}
+
+func (p *mediaProxy) cached(key string) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry, found := p.cache[key]
+	if !found || !entry.expires.After(time.Now().Add(time.Minute)) {
+		return "", false
+	}
+	return entry.url, true
+}
+
+func (p *mediaProxy) store(key, target string, expires time.Time) {
+	p.mu.Lock()
+	p.cache[key] = refreshedMedia{url: target, expires: expires}
+	p.mu.Unlock()
 }
 
 func (p *mediaProxy) refreshDiscord(ctx context.Context, parsed *url.URL) (string, error) {
@@ -145,12 +180,9 @@ func (p *mediaProxy) refreshDiscord(ctx context.Context, parsed *url.URL) (strin
 		return parsed.String(), nil
 	}
 
-	cacheKey := parsed.Host + parsed.Path
-	p.mu.Lock()
-	cached, found := p.cache[cacheKey]
-	p.mu.Unlock()
-	if found && cached.expires.After(time.Now().Add(time.Minute)) {
-		return cached.url, nil
+	cacheKey := "discord:" + parsed.Host + parsed.Path
+	if target, ok := p.cached(cacheKey); ok {
+		return target, nil
 	}
 
 	if p.token == "" {
@@ -201,9 +233,7 @@ func (p *mediaProxy) refreshDiscord(ctx context.Context, parsed *url.URL) (strin
 	if !ok {
 		expires = time.Now().Add(30 * time.Minute)
 	}
-	p.mu.Lock()
-	p.cache[cacheKey] = refreshedMedia{url: target.String(), expires: expires}
-	p.mu.Unlock()
+	p.store(cacheKey, target.String(), expires)
 	return target.String(), nil
 }
 

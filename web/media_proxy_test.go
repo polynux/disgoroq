@@ -157,3 +157,18 @@ func TestMediaThumbHandlerRedirectsAndValidates(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Contains(t, rec.Body.String(), "preview unavailable")
 }
+
+func TestMediaProxyCachesPageResolutions(t *testing.T) {
+	proxy := newMediaProxy("")
+	calls := 0
+	resolve := func() (string, error) {
+		calls++
+		return "https://media.tenor.com/m/abc/cat.gif", nil
+	}
+	first, err := proxy.cachedPage(context.Background(), "https://tenor.com/view/cat", resolve)
+	require.NoError(t, err)
+	second, err := proxy.cachedPage(context.Background(), "https://tenor.com/view/cat", resolve)
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, 1, calls)
+}
