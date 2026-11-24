@@ -69,6 +69,17 @@ func TestParseLinkPreview(t *testing.T) {
 	assert.Equal(t, "Example", preview.Site)
 	assert.Equal(t, "https://example.com/media/card.png", preview.Image)
 
+	// XHTML-style self-closing meta tags (as served by x.com) are read too.
+	page = []byte(`<html><head>
+		<meta property="og:title" content="Self closing"/>
+		<meta property="og:description" content="Still parsed"/>
+		<meta property="og:image" content="https://example.com/card.png"/>
+	</head></html>`)
+	preview = parseLinkPreview(page, base)
+	assert.Equal(t, "Self closing", preview.Title)
+	assert.Equal(t, "Still parsed", preview.Description)
+	assert.Equal(t, "https://example.com/card.png", preview.Image)
+
 	// A private image URL is not turned into a card image.
 	page = []byte(`<meta property="og:image" content="http://127.0.0.1/secret.png">`)
 	assert.Equal(t, "", parseLinkPreview(page, base).Image)

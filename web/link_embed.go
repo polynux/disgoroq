@@ -172,7 +172,7 @@ func parseLinkPreview(document []byte, base *url.URL) linkPreview {
 			preview.Description = truncateDisplayRunes(strings.TrimSpace(preview.Description), linkPreviewDescMax)
 			preview.Image = pickLinkImage(images, base)
 			return preview
-		case html.StartTagToken:
+		case html.StartTagToken, html.SelfClosingTagToken:
 			name, _ := tokenizer.TagName()
 			switch string(name) {
 			case "title":
