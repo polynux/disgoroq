@@ -632,7 +632,12 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 		if valNode.Kind == yaml.SequenceNode && len(valNode.Content) > 0 {
 			lastLine := maxNodeLine(src, li, valNode)
 			end := li.lineEnd(lastLine)
-			return spliceBytes(src, colonPos+1, end, []byte(" []")), nil
+			return spliceBytes(src, colonPos+1, end, []byte(" []"+keyLineComment(src, li, keyNode, colonPos))), nil
+		}
+		if valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" && valNode.Value == "" && valNode.Style == 0 {
+			// Implicit null ("key:" or "key: # comment"): yaml.v3 positions it
+			// past the end of the key line, so don't derive a span from it.
+			return spliceBytes(src, colonPos+1, li.lineEnd(keyNode.Line), []byte(" []"+keyLineComment(src, li, keyNode, colonPos))), nil
 		}
 		// Null or scalar previously -> put " []" right after colon.
 		start, end, err := valueByteSpan(src, li, keyNode, valNode)
@@ -680,7 +685,19 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 
 	// Replacing a non-block node (e.g. empty/null) with a block sequence.
 	lineEnd := li.lineEnd(keyNode.Line)
-	return spliceBytes(src, colonPos+1, lineEnd, []byte(block)), nil
+	return spliceBytes(src, colonPos+1, lineEnd, []byte(keyLineComment(src, li, keyNode, colonPos)+block)), nil
+}
+
+// keyLineComment returns " # comment" when the rest of the key's line after the
+// colon holds only a comment (no inline value), so it survives a replacement
+// that rewrites that line. Otherwise it returns "".
+func keyLineComment(src []byte, li lineIndex, keyNode *yaml.Node, colonPos int) string {
+	rest := src[colonPos+1 : li.lineEnd(keyNode.Line)]
+	idx := findInlineCommentStart(rest)
+	if idx < 0 || len(bytes.TrimSpace(rest[:idx])) != 0 {
+		return ""
+	}
+	return " " + string(bytes.TrimRight(rest[idx:], " \t\r"))
 }
 
 func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySectionKey, emptySectionVal *yaml.Node, remaining []string, patch yamlPatch, eol string) ([]byte, error) {
@@ -1011,9 +1028,24 @@ func scanFlowEnd(src []byte, start int, openCh, closeCh byte) (int, bool) {
 	return 0, false
 }
 
+// blockIndentIndicatorRe matches a block scalar header ("|", ">-", "|2",
+// "|+2", ...) and captures an explicit indentation indicator digit.
+var blockIndentIndicatorRe = regexp.MustCompile(`(?:^|[\s:-])[|>][+-]?([1-9]?)[+-]?(?:\s|$)`)
+
 // scanBlockScalarEndLine returns the 1-based line number of the last non-blank
 // content line belonging to a block scalar starting on headerLine.
+//
+// The scalar ends at the first non-blank line indented less than its content
+// indentation (the explicit indicator, or the first content line's indent). A
+// comment indented between the key and the content is therefore outside the
+// scalar, as YAML parses it, and is not swallowed by an edit.
 func scanBlockScalarEndLine(src []byte, li lineIndex, headerLine, keyIndent int) int {
+	contentIndent := -1
+	header := src[li.lineStart(headerLine):li.lineEnd(headerLine)]
+	if m := blockIndentIndicatorRe.FindSubmatch(header); m != nil && len(m[1]) == 1 {
+		contentIndent = keyIndent + int(m[1][0]-'0')
+	}
+
 	lastContentLine := headerLine
 	for line := headerLine + 1; line <= li.lineCount(); line++ {
 		lineBytes := src[li.lineStart(line):li.lineEnd(line)]
@@ -1021,7 +1053,13 @@ func scanBlockScalarEndLine(src []byte, li lineIndex, headerLine, keyIndent int)
 			continue
 		}
 		indent := countLeadingSpaces(lineBytes)
-		if indent > keyIndent {
+		if contentIndent < 0 {
+			if indent <= keyIndent {
+				break // empty block scalar
+			}
+			contentIndent = indent
+		}
+		if indent >= contentIndent {
 			lastContentLine = line
 			continue
 		}
