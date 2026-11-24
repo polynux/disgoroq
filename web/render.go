@@ -21,7 +21,9 @@ type templateStore struct {
 // pageTemplates maps a logical page name to the template files parsed alongside layout.html.
 // Phase 2 pages can register new entries here without modifying existing templates.
 var pageTemplates = map[string][]string{
-	"stub": {"templates/layout.html", "templates/stub.html"},
+	"stub":   {"templates/layout.html", "templates/stub.html"},
+	"guilds": {"templates/layout.html", "templates/guilds.html"},
+	"guild":  {"templates/layout.html", "templates/guild.html"},
 }
 
 func templateFuncs() template.FuncMap {

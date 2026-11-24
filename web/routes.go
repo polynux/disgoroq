@@ -20,7 +20,17 @@ func (s *Server) registerRoutes() {
 	})
 
 	// Phase 1: Guilds
-	s.mux.HandleFunc("GET /guilds", s.handleStub("Guilds", "guilds", "Guild settings management is being wired up."))
+	s.mux.HandleFunc("GET /guilds", s.handleGuildList)
+	s.mux.HandleFunc("GET /guilds/{id}", s.handleGuildDetail)
+	s.mux.HandleFunc("POST /guilds/{id}/general", s.handleGuildGeneralSave)
+	s.mux.HandleFunc("POST /guilds/{id}/prompts", s.handleGuildPromptsSave)
+	s.mux.HandleFunc("POST /guilds/{id}/channels", s.handleGuildChannelsSave)
+	s.mux.HandleFunc("POST /guilds/{id}/voice", s.handleGuildVoiceSave)
+	s.mux.HandleFunc("POST /guilds/{id}/voice/reset", s.handleGuildVoiceReset)
+	s.mux.HandleFunc("POST /guilds/{id}/reengage/message", s.handleGuildReengageMessageSave)
+	s.mux.HandleFunc("POST /guilds/{id}/reengage/channel", s.handleGuildReengageChannelSave)
+	s.mux.HandleFunc("POST /guilds/{id}/reengage/channel/{channelID}/reset", s.handleGuildReengageChannelReset)
+	s.mux.HandleFunc("POST /guilds/{id}/reset", s.handleGuildSettingReset)
 
 	// Phase 2a: Global config.yaml editor (stub)
 	s.mux.HandleFunc("GET /config", s.handleStub("Config", "config", "Global config.yaml editor — coming soon."))

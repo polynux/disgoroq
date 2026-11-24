@@ -1,0 +1,482 @@
+{{define "content"}}
+<div class="page-header">
+  <div class="guild-header-id">
+    {{if .Guild.IconURL}}
+      <img class="guild-icon" src="{{.Guild.IconURL}}" alt="">
+    {{else}}
+      <span class="guild-icon-placeholder" aria-hidden="true">#</span>
+    {{end}}
+    <div>
+      <h1>{{.Guild.Name}}</h1>
+      <div class="mono muted">
+        {{.Guild.ID}}
+        {{if not .Guild.InCache}}
+          <span class="badge badge-warn">Not in cache (DB only)</span>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  <a class="btn" href="/guilds">&larr; All guilds</a>
+</div>
+
+{{template "guild_section_general" .General}}
+{{template "guild_section_prompts" .Prompts}}
+{{template "guild_section_channels" .Channels}}
+{{template "guild_section_voice" .Voice}}
+{{template "guild_section_reengage" .Reengage}}
+
+{{if .Bookkeeping}}
+<section class="card" id="section-bookkeeping">
+  <details>
+    <summary><strong>Bookkeeping timestamps (read-only)</strong> — {{len .Bookkeeping}} entries</summary>
+    <table>
+      <thead>
+        <tr>
+          <th>Key</th>
+          <th>Target</th>
+          <th>Timestamp (UTC)</th>
+          <th>Raw</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Bookkeeping}}
+        <tr>
+          <td class="mono">{{.Key}}</td>
+          <td>{{.Label}}</td>
+          <td class="mono">{{.Formatted}}</td>
+          <td class="mono muted">{{.RawValue}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </details>
+</section>
+{{end}}
+{{end}}
+
+{{define "guild_section_general"}}
+<section class="card" id="section-general">
+  <h2>General &amp; AI Behavior</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <form method="post" action="/guilds/{{.GuildID}}/general" hx-post="/guilds/{{.GuildID}}/general" hx-target="#section-general" hx-swap="outerHTML">
+    <div class="field-grid">
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="state">
+            Bot State
+            {{if .StateOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </label>
+          {{if .StateOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"state","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <select id="state" name="state">
+          <option value="on"{{if eq .State "on"}} selected{{end}}>on</option>
+          <option value="off"{{if eq .State "off"}} selected{{end}}>off</option>
+        </select>
+        <div class="field-hint">Default: on</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="threshold">
+            Threshold (0.0–1.0)
+            {{if .ThresholdOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </label>
+          {{if .ThresholdOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"threshold","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <input id="threshold" name="threshold" type="number" step="0.01" min="0" max="1" value="{{.Threshold}}">
+        <div class="field-hint">Default: {{.ThresholdDefault}}</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="thresholdSexe">
+            Threshold Sexe (0.0–1.0)
+            {{if .ThresholdSexeOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </label>
+          {{if .ThresholdSexeOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"thresholdSexe","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <input id="thresholdSexe" name="thresholdSexe" type="number" step="0.01" min="0" max="1" value="{{.ThresholdSexe}}">
+        <div class="field-hint">Default: {{.ThresholdSexeDefault}}</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="temperature">
+            Temperature (0.0–1.0)
+            {{if .TemperatureOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </label>
+          {{if .TemperatureOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"temperature","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <input id="temperature" name="temperature" type="number" step="0.05" min="0" max="1" value="{{.Temperature}}">
+        <div class="field-hint">Default: {{.TemperatureDefault}}</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="messagescount">
+            Messages Count (1–100)
+            {{if .MessagesCountOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </label>
+          {{if .MessagesCountOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"messagescount","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <input id="messagescount" name="messagescount" type="number" step="1" min="1" max="100" value="{{.MessagesCount}}">
+        <div class="field-hint">Default: {{.MessagesCountDefault}}</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <span class="field-label">
+            Conversation Memory
+            {{if .MemoryEnabledOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </span>
+          {{if .MemoryEnabledOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"memory_enabled","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" name="memory_enabled"{{if .MemoryEnabled}} checked{{end}}>
+          <span>Memory enabled for this guild</span>
+        </label>
+        <div class="field-hint">Default: enabled</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <div class="field-header">
+        <label class="field-label" for="trigger_words">
+          Trigger Words
+          {{if .TriggerWordsOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </label>
+        {{if .TriggerWordsOverride}}
+        <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"trigger_words","section":"general"}' hx-target="#section-general" hx-swap="outerHTML">Reset</button>
+        {{end}}
+      </div>
+      <input id="trigger_words" name="trigger_words" type="text" value="{{.TriggerWords}}" placeholder="Comma-separated trigger words">
+      <div class="field-hint">Comma-separated; letters, numbers, underscores, or dashes only. Default: <span class="mono">{{if .TriggerWordsDefault}}{{.TriggerWordsDefault}}{{else}}(none){{end}}</span></div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save General Settings</button>
+    </div>
+  </form>
+</section>
+{{end}}
+
+{{define "guild_section_prompts"}}
+<section class="card" id="section-prompts">
+  <h2>Prompts</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <form method="post" action="/guilds/{{.GuildID}}/prompts" hx-post="/guilds/{{.GuildID}}/prompts" hx-target="#section-prompts" hx-swap="outerHTML">
+    <div class="field">
+      <div class="field-header">
+        <label class="field-label" for="prompt">
+          System Prompt
+          {{if .PromptOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </label>
+        {{if .PromptOverride}}
+        <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"prompt","section":"prompts"}' hx-target="#section-prompts" hx-swap="outerHTML">Reset</button>
+        {{end}}
+      </div>
+      <textarea id="prompt" name="prompt" class="prompt-textarea" placeholder="Leave empty to use the default prompt from config">{{.Prompt}}</textarea>
+      <details>
+        <summary>View default prompt from config</summary>
+        <pre class="default-preview">{{.PromptDefault}}</pre>
+      </details>
+    </div>
+
+    <div class="field">
+      <div class="field-header">
+        <label class="field-label" for="voice_prompt">
+          Voice System Prompt
+          {{if .VoicePromptOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </label>
+        {{if .VoicePromptOverride}}
+        <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"voice_prompt","section":"prompts"}' hx-target="#section-prompts" hx-swap="outerHTML">Reset</button>
+        {{end}}
+      </div>
+      <textarea id="voice_prompt" name="voice_prompt" placeholder="Leave empty to use the default voice prompt from config">{{.VoicePrompt}}</textarea>
+      <details>
+        <summary>View default voice prompt from config</summary>
+        <pre class="default-preview">{{.VoicePromptDefault}}</pre>
+      </details>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save Prompts</button>
+    </div>
+  </form>
+</section>
+{{end}}
+
+{{define "guild_section_channels"}}
+<section class="card" id="section-channels">
+  <h2>Scheduled Channels</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <form method="post" action="/guilds/{{.GuildID}}/channels" hx-post="/guilds/{{.GuildID}}/channels" hx-target="#section-channels" hx-swap="outerHTML">
+    <div class="field-grid">
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="horoscope_channel">
+            Horoscope Channel
+            {{if .HoroscopeChannelOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default (unset)</span>{{end}}
+          </label>
+          {{if .HoroscopeChannelOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"horoscope_channel","section":"channels"}' hx-target="#section-channels" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        {{if .TextChannels}}
+        <select id="horoscope_channel" name="horoscope_channel">
+          <option value="">(unset)</option>
+          {{if and .HoroscopeChannel (not .HoroscopeInCache)}}
+          <option value="{{.HoroscopeChannel}}" selected>{{.HoroscopeChannel}} (not in cache)</option>
+          {{end}}
+          {{range .TextChannels}}
+          <option value="{{.ID}}"{{if eq $.HoroscopeChannel .ID}} selected{{end}}>#{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+        {{else}}
+        <input id="horoscope_channel" name="horoscope_channel" type="text" value="{{.HoroscopeChannel}}" placeholder="Channel snowflake ID (empty to unset)">
+        <div class="field-hint">Discord channel cache unavailable; enter a raw channel ID.</div>
+        {{end}}
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="farting_friday_channel">
+            Farting Friday Channel
+            {{if .FartingFridayChannelOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default (unset)</span>{{end}}
+          </label>
+          {{if .FartingFridayChannelOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"farting_friday_channel","section":"channels"}' hx-target="#section-channels" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        {{if .TextChannels}}
+        <select id="farting_friday_channel" name="farting_friday_channel">
+          <option value="">(unset)</option>
+          {{if and .FartingFridayChannel (not .FartingFridayInCache)}}
+          <option value="{{.FartingFridayChannel}}" selected>{{.FartingFridayChannel}} (not in cache)</option>
+          {{end}}
+          {{range .TextChannels}}
+          <option value="{{.ID}}"{{if eq $.FartingFridayChannel .ID}} selected{{end}}>#{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+        {{else}}
+        <input id="farting_friday_channel" name="farting_friday_channel" type="text" value="{{.FartingFridayChannel}}" placeholder="Channel snowflake ID (empty to unset)">
+        <div class="field-hint">Discord channel cache unavailable; enter a raw channel ID.</div>
+        {{end}}
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save Channels</button>
+    </div>
+  </form>
+</section>
+{{end}}
+
+{{define "guild_section_voice"}}
+<section class="card" id="section-voice">
+  <h2>Voice Settings</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <form method="post" action="/guilds/{{.GuildID}}/voice" hx-post="/guilds/{{.GuildID}}/voice" hx-target="#section-voice" hx-swap="outerHTML">
+    <div class="field-grid">
+      <div class="field">
+        <div class="field-header">
+          <span class="field-label">
+            Voice Enabled
+            {{if .VoiceEnabledOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </span>
+          {{if .VoiceEnabledOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"voice_enabled","section":"voice"}' hx-target="#section-voice" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" name="voice_enabled"{{if .VoiceEnabled}} checked{{end}}>
+          <span>Allow voice chat in this guild</span>
+        </label>
+        <div class="field-hint">Default: enabled</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <span class="field-label">
+            Auto-Join
+            {{if .AutoJoinOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+          </span>
+          {{if .AutoJoinOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"voice_auto_join","section":"voice"}' hx-target="#section-voice" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" name="voice_auto_join"{{if .AutoJoin}} checked{{end}}>
+          <span>Automatically join configured voice channel</span>
+        </label>
+        <div class="field-hint">Default: disabled</div>
+      </div>
+
+      <div class="field">
+        <div class="field-header">
+          <label class="field-label" for="voice_auto_join_channel">
+            Auto-Join Channel
+            {{if .AutoJoinChannelOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default (unset)</span>{{end}}
+          </label>
+          {{if .AutoJoinChannelOverride}}
+          <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"voice_auto_join_channel","section":"voice"}' hx-target="#section-voice" hx-swap="outerHTML">Reset</button>
+          {{end}}
+        </div>
+        {{if .VoiceChannels}}
+        <select id="voice_auto_join_channel" name="voice_auto_join_channel">
+          <option value="">(unset)</option>
+          {{if and .AutoJoinChannel (not .AutoJoinChannelInCache)}}
+          <option value="{{.AutoJoinChannel}}" selected>{{.AutoJoinChannel}} (not in cache)</option>
+          {{end}}
+          {{range .VoiceChannels}}
+          <option value="{{.ID}}"{{if eq $.AutoJoinChannel .ID}} selected{{end}}>{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+        {{else}}
+        <input id="voice_auto_join_channel" name="voice_auto_join_channel" type="text" value="{{.AutoJoinChannel}}" placeholder="Voice channel snowflake ID">
+        <div class="field-hint">Discord voice channel cache unavailable; enter a raw channel ID.</div>
+        {{end}}
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save Voice Settings</button>
+      {{if or .VoiceEnabledOverride .AutoJoinOverride .AutoJoinChannelOverride}}
+      <button type="button" class="btn btn-danger" hx-post="/guilds/{{.GuildID}}/voice/reset" hx-target="#section-voice" hx-swap="outerHTML">Reset All Voice Settings</button>
+      {{end}}
+    </div>
+  </form>
+</section>
+{{end}}
+
+{{define "guild_section_reengage"}}
+<section class="card" id="section-reengage">
+  <h2>Reengage</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <form method="post" action="/guilds/{{.GuildID}}/reengage/message" hx-post="/guilds/{{.GuildID}}/reengage/message" hx-target="#section-reengage" hx-swap="outerHTML">
+    <div class="field">
+      <div class="field-header">
+        <label class="field-label" for="reengage_message">
+          Reengage Message Prompt
+          {{if .MessageOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </label>
+        {{if .MessageOverride}}
+        <button type="button" class="btn btn-sm" hx-post="/guilds/{{.GuildID}}/reset" hx-vals='{"key":"reengage_message","section":"reengage"}' hx-target="#section-reengage" hx-swap="outerHTML">Reset</button>
+        {{end}}
+      </div>
+      <textarea id="reengage_message" name="reengage_message" maxlength="500" placeholder="Leave empty to use default reengage message (max 500 chars)">{{.Message}}</textarea>
+      <details>
+        <summary>View default reengage message from config</summary>
+        <pre class="default-preview">{{.MessageDefault}}</pre>
+      </details>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save Reengage Message</button>
+    </div>
+  </form>
+
+  <h3>Per-Channel Reengage Settings</h3>
+  {{if .Channels}}
+  <table>
+    <thead>
+      <tr>
+        <th>Channel</th>
+        <th>Enabled</th>
+        <th>Chance (default {{.DefaultChance}})</th>
+        <th>Threshold min (default {{.DefaultThreshold}})</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Channels}}
+      <tr>
+        <td>
+          {{if .ChannelName}}#{{.ChannelName}} {{end}}<span class="mono muted">{{.ChannelID}}</span>
+        </td>
+        <td>
+          {{if .Enabled}}on{{else}}off{{end}}
+          {{if .EnabledOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </td>
+        <td>
+          <span class="mono">{{.Chance}}</span>
+          {{if .ChanceOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </td>
+        <td>
+          <span class="mono">{{.Threshold}}</span>
+          {{if .ThresholdOverride}}<span class="badge badge-override">Overridden</span>{{else}}<span class="badge badge-default">Default</span>{{end}}
+        </td>
+        <td>
+          <button type="button" class="btn btn-sm btn-danger" hx-post="/guilds/{{$.GuildID}}/reengage/channel/{{.ChannelID}}/reset" hx-target="#section-reengage" hx-swap="outerHTML">Reset</button>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No channels have reengage overrides configured.</p>
+  {{end}}
+
+  <h3>Add or Update Channel Reengage</h3>
+  <form method="post" action="/guilds/{{.GuildID}}/reengage/channel" hx-post="/guilds/{{.GuildID}}/reengage/channel" hx-target="#section-reengage" hx-swap="outerHTML">
+    <div class="field-grid">
+      <div class="field">
+        <label class="field-label" for="reengage_channel_id">Channel</label>
+        {{if .TextChannels}}
+        <select id="reengage_channel_id" name="channel_id" required>
+          <option value="">Select a text channel...</option>
+          {{range .TextChannels}}
+          <option value="{{.ID}}"{{if eq $.FormChannelID .ID}} selected{{end}}>#{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+        {{else}}
+        <input id="reengage_channel_id" name="channel_id" type="text" value="{{.FormChannelID}}" placeholder="Channel snowflake ID" required>
+        {{end}}
+      </div>
+
+      <div class="field">
+        <span class="field-label">Enabled</span>
+        <label class="checkbox-row">
+          <input type="checkbox" name="enabled"{{if .FormEnabled}} checked{{end}}>
+          <span>Enable reengage for this channel</span>
+        </label>
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="reengage_chance">Chance (0.0–1.0)</label>
+        <input id="reengage_chance" name="chance" type="number" step="0.001" min="0" max="1" value="{{.FormChance}}" placeholder="Default: {{.DefaultChance}}">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="reengage_threshold">Inactivity Threshold (minutes)</label>
+        <input id="reengage_threshold" name="threshold" type="number" step="1" min="1" value="{{.FormThreshold}}" placeholder="Default: {{.DefaultThreshold}}">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save Channel Reengage</button>
+    </div>
+  </form>
+</section>
+{{end}}
