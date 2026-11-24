@@ -124,11 +124,12 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 	otherNames := otherSectionNames(schema, sectionName)
 
 	// Optimistic concurrency check.
+	// Do not refresh other sections' hashes on conflict, otherwise a stale section
+	// could overwrite the external edit on disk.
 	submittedHash := strings.TrimSpace(r.FormValue("config_hash"))
 	if submittedHash != currentHash {
 		secView := buildSectionView(secSpec, doc, currentHash)
 		secView.Error = "config.yaml changed on disk, reload"
-		secView.OtherSectionNames = otherNames
 		s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusConflict)
 		return
 	}
@@ -258,6 +259,10 @@ func (s *Server) renderConfigSectionResponse(
 		s.renderFragment(w, "config_section", http.StatusOK, secView)
 		return
 	}
+
+	// Full-page render already outputs fresh hashes for every section; omit OOB
+	// inputs so config-hash-<name> element IDs are never duplicated.
+	secView.OtherSectionNames = nil
 
 	sections := make([]configSectionView, 0, len(schema))
 	for _, spec := range schema {

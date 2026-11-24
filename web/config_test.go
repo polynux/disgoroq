@@ -481,6 +481,45 @@ func TestConfigSaveDetectsHashConflict(t *testing.T) {
 	afterBytes, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	assert.Equal(t, modifiedOnDisk, afterBytes)
+
+	// HTMX conflict must not OOB-refresh other sections' hashes, so another section
+	// with its original stale hash is still rejected.
+	htmxRec := postConfigSection(t, srv, "votes", form, true)
+	require.Equal(t, http.StatusOK, htmxRec.Code)
+	assert.Contains(t, htmxRec.Body.String(), "config.yaml changed on disk, reload")
+	assert.NotContains(t, htmxRec.Body.String(), "hx-swap-oob")
+
+	otherForm := url.Values{
+		"config_hash":              {staleHash},
+		"field:bot.default_prompt": {"stale overwrite attempt"},
+		"field:bot.trigger_words":  {"feun\nfeunboy"},
+	}
+	otherRec := postConfigSection(t, srv, "bot", otherForm, false)
+	assert.Equal(t, http.StatusConflict, otherRec.Code)
+	assert.Contains(t, otherRec.Body.String(), "config.yaml changed on disk, reload")
+
+	afterBytes2, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, modifiedOnDisk, afterBytes2)
+}
+
+func TestConfigNonHTMXSaveDoesNotEmitDuplicateHashIDs(t *testing.T) {
+	srv, _, cfgPath := newConfigTestServer(t, sampleConfigYAML)
+	origBytes, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	form := url.Values{
+		"config_hash":             {computeFileHash(origBytes)},
+		"field:votes.enabled":     {"on"},
+		"field:votes.probability": {"0.4"},
+		"field:votes.good_emoji":  {"😂"},
+		"field:votes.bad_emoji":   {"🗑️"},
+	}
+	rec := postConfigSection(t, srv, "votes", form, false)
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.NotContains(t, body, "hx-swap-oob")
+	assert.Equal(t, 1, strings.Count(body, `id="config-hash-bot"`))
 }
 
 func TestConfigSaveWritesBackupPreservesModeAndHotAppliesRuntime(t *testing.T) {
