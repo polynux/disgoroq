@@ -88,6 +88,7 @@ func main() {
 	if configErr != nil {
 		logger.Fatal("Failed to load configuration", zap.Error(configErr))
 	}
+	cfgRuntime := config.NewRuntime(cfg)
 
 	// Initialize logger with configuration
 	logger.InitFromConfig(&cfg.Logging)
@@ -229,6 +230,9 @@ func main() {
 		logger.Info("Media library disabled by configuration")
 	}
 	if mediaLibraryService != nil {
+		mediaLibraryService.SetConfigSource(func() config.MediaLibraryConfig {
+			return cfgRuntime.Current().MediaLibrary
+		})
 		mediaRefreshClient := medialibrary.NewDiscordRefreshClient(
 			cfg.Discord.Token,
 			rest.WithLogger(slogLogger),
@@ -408,11 +412,11 @@ func main() {
 	emojiManager := emoji.NewManager(client, cfg.Emoji)
 	logger.Info("Emoji manager initialized")
 
-	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Votes)
+	messageHandler := handlers.NewMessageHandler(client, aiService, repo, memoryService, emojiManager, cfgRuntime)
 	if mediaLibraryService != nil {
 		messageHandler.SetMediaLibrary(mediaLibraryService)
 	}
-	voteHandler := handlers.NewVoteHandler(client, repo, cfg.Votes)
+	voteHandler := handlers.NewVoteHandler(client, repo, cfgRuntime)
 	client.AddEventListeners(
 		bot.NewListenerFunc(messageHandler.HandleMessageCreate),
 		bot.NewListenerFunc(messageHandler.HandleMessageUpdate),
@@ -449,6 +453,7 @@ func main() {
 			MemoryService:     memoryService,
 			Client:            client,
 			Repository:        repo,
+			ConfigRuntime:     cfgRuntime,
 			DefaultPrompt:     cfg.Bot.DefaultPrompt,
 			VoiceConfig:       cfg.Voice,
 			VoiceSystemPrompt: cfg.Voice.VoiceSystemPrompt,
@@ -472,7 +477,7 @@ func main() {
 	if err != nil {
 		logger.Fatal("Invalid command registry configuration", zap.Error(err))
 	}
-	commands.RegisterAll(registry, repo, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Bot.TriggerWords, cfg.Voice.VoiceSystemPrompt, voiceOrchestrator, client)
+	commands.RegisterAll(registry, repo, memoryService, cfgRuntime, voiceOrchestrator, client)
 	client.AddEventListeners(bot.NewListenerFunc(func(e *events.ApplicationCommandInteractionCreate) {
 		go func() {
 			// disgo only recovers panics in inline listeners.
@@ -505,17 +510,19 @@ func main() {
 	}
 	logger.Info("Commands registered successfully")
 
-	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfg.Reengage, cfg.Bot.DefaultPrompt, cfg.Memory)
+	sched := scheduler.New(client, aiService, repo, emojiManager, cfg.Horoscope, memoryService, cfgRuntime, cfg.Memory)
 	sched.Start()
 	defer sched.Shutdown()
 
 	var webServer *web.Server
 	if cfg.Web.Enabled {
 		webServer = web.New(web.Deps{
-			Client: client,
-			Repo:   repo,
-			Config: cfg,
-			Memory: memoryService,
+			Client:        client,
+			Repo:          repo,
+			Config:        cfg,
+			ConfigRuntime: cfgRuntime,
+			ConfigPath:    config.DefaultConfigPath,
+			Memory:        memoryService,
 		}, cfg.Web)
 		if err := webServer.Start(); err != nil {
 			webServer = nil

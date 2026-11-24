@@ -1288,8 +1288,8 @@ func (s *Server) buildBookkeeping(guildID string, settings map[string]string) []
 }
 
 func (s *Server) defaultPrompt() string {
-	if s.deps.Config != nil && s.deps.Config.Bot.DefaultPrompt != "" {
-		return s.deps.Config.Bot.DefaultPrompt
+	if cfg := s.currentConfig(); cfg != nil && cfg.Bot.DefaultPrompt != "" {
+		return cfg.Bot.DefaultPrompt
 	}
 	return config.DefaultConfig().Bot.DefaultPrompt
 }
@@ -1297,9 +1297,9 @@ func (s *Server) defaultPrompt() string {
 // defaultVoicePrompt mirrors voice.NewOrchestrator: an empty
 // voice.voice_system_prompt falls back to the bot's default prompt.
 func (s *Server) defaultVoicePrompt() string {
-	if s.deps.Config != nil {
-		if s.deps.Config.Voice.VoiceSystemPrompt != "" {
-			return s.deps.Config.Voice.VoiceSystemPrompt
+	if cfg := s.currentConfig(); cfg != nil {
+		if cfg.Voice.VoiceSystemPrompt != "" {
+			return cfg.Voice.VoiceSystemPrompt
 		}
 		return s.defaultPrompt()
 	}
@@ -1309,19 +1309,19 @@ func (s *Server) defaultVoicePrompt() string {
 // defaultTriggerWords returns the configured list as the bot uses it; an
 // explicit empty list (trigger words disabled) stays empty.
 func (s *Server) defaultTriggerWords() []string {
-	if s.deps.Config != nil {
-		return triggerwords.NormalizeAll(s.deps.Config.Bot.TriggerWords)
+	if cfg := s.currentConfig(); cfg != nil {
+		return triggerwords.NormalizeAll(cfg.Bot.TriggerWords)
 	}
 	return triggerwords.NormalizeAll(config.DefaultConfig().Bot.TriggerWords)
 }
 
 func (s *Server) reengageConfig() config.ReengageConfig {
-	if s.deps.Config != nil {
-		cfg := s.deps.Config.Reengage
-		if cfg.DefaultInactivityMinutes <= 0 {
-			cfg.DefaultInactivityMinutes = database.DefaultReengageThreshold
+	if cfg := s.currentConfig(); cfg != nil {
+		rcfg := cfg.Reengage
+		if rcfg.DefaultInactivityMinutes <= 0 {
+			rcfg.DefaultInactivityMinutes = database.DefaultReengageThreshold
 		}
-		return cfg
+		return rcfg
 	}
 	return config.DefaultConfig().Reengage
 }

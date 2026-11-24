@@ -1,0 +1,104 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Global Configuration</h1>
+    <div class="mono muted">{{.ConfigPath}}</div>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">{{.Error}}</div>
+{{else}}
+<nav class="config-toc" aria-label="Config sections">
+  {{range .Sections}}
+    <a class="btn btn-sm" href="#section-{{.Name}}">{{.Label}}</a>
+  {{end}}
+</nav>
+
+{{range .Sections}}
+  {{template "config_section" .}}
+{{end}}
+{{end}}
+{{end}}
+
+{{define "config_section"}}
+<section class="card" id="section-{{.Name}}">
+  <h2>{{.Label}} <span class="mono muted">({{.Name}})</span></h2>
+
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+  {{if .RestartRequired}}
+  <div class="alert alert-warn">
+    <strong>Restart required</strong> for these updated settings to take effect:
+    <span class="mono">{{range $i, $p := .RestartRequired}}{{if $i}}, {{end}}{{$p}}{{end}}</span>
+  </div>
+  {{end}}
+
+  <form method="post" action="/config/{{.Name}}" hx-post="/config/{{.Name}}" hx-target="#section-{{.Name}}" hx-swap="outerHTML">
+    <input type="hidden" id="config-hash-{{.Name}}" name="config_hash" value="{{.FileHash}}">
+
+    {{range .Groups}}
+      {{if .Name}}
+        <h3 class="config-subgroup-title mono">{{.Name}}</h3>
+      {{end}}
+      <div class="config-fields">
+        {{range .Fields}}
+        <div class="field{{if or (eq .Kind "text") (eq .Kind "string_slice")}} field-full{{end}}">
+          <div class="field-header">
+            <label class="field-label" for="{{.InputID}}">
+              <span class="mono">{{.Path}}</span>
+              {{if .HotApply}}
+                <span class="badge badge-live">Live</span>
+              {{else}}
+                <span class="badge badge-restart">Restart required</span>
+              {{end}}
+              {{if .IsDefault}}
+                <span class="badge badge-default">Default</span>
+              {{end}}
+              {{if .ReadOnly}}
+                <span class="badge badge-readonly">{{.ReadOnlyReason}}</span>
+              {{end}}
+            </label>
+          </div>
+
+          {{if .ReadOnly}}
+            <div class="config-readonly-value mono">{{if .Value}}{{.Value}}{{else}}<span class="muted">(not set)</span>{{end}}</div>
+          {{else if eq .Kind "bool"}}
+            <input type="hidden" name="{{.InputName}}" value="false">
+            <label class="checkbox-row">
+              <input id="{{.InputID}}" type="checkbox" name="{{.InputName}}" value="true"{{if .BoolValue}} checked{{end}}>
+              <span>Enabled</span>
+            </label>
+          {{else if eq .Kind "text"}}
+            <textarea id="{{.InputID}}" name="{{.InputName}}" class="prompt-textarea">
+{{.Value}}</textarea>
+          {{else if eq .Kind "string_slice"}}
+            <textarea id="{{.InputID}}" name="{{.InputName}}" placeholder="One entry per line">
+{{.Value}}</textarea>
+            <div class="field-hint">One item per line. Default: <span class="mono">{{.DefaultDisplay}}</span></div>
+          {{else if eq .Kind "int"}}
+            <input id="{{.InputID}}" name="{{.InputName}}" type="number" step="1" value="{{.Value}}">
+            <div class="field-hint">Default: <span class="mono">{{.DefaultDisplay}}</span></div>
+          {{else if eq .Kind "float"}}
+            <input id="{{.InputID}}" name="{{.InputName}}" type="number" step="any" value="{{.Value}}">
+            <div class="field-hint">Default: <span class="mono">{{.DefaultDisplay}}</span></div>
+          {{else}}
+            <input id="{{.InputID}}" name="{{.InputName}}" type="text" value="{{.Value}}">
+            <div class="field-hint">Default: <span class="mono">{{.DefaultDisplay}}</span></div>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
+    {{end}}
+
+    {{if .HasEditableFields}}
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Save {{.Label}}</button>
+    </div>
+    {{end}}
+  </form>
+</section>
+{{range .OtherSectionNames}}
+<input type="hidden" id="config-hash-{{.}}" name="config_hash" value="{{$.FileHash}}" hx-swap-oob="true">
+{{end}}
+{{end}}

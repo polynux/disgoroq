@@ -41,10 +41,12 @@ func TestResolveReengageSettings_UsesConfigDefaults(t *testing.T) {
 
 	service := &Service{
 		repo: repo,
-		config: config.ReengageConfig{
-			DefaultInactivityMinutes: 42,
-			DefaultChance:            0.42,
-		},
+		runtime: config.NewRuntime(&config.Config{
+			Reengage: config.ReengageConfig{
+				DefaultInactivityMinutes: 42,
+				DefaultChance:            0.42,
+			},
+		}),
 	}
 
 	enabled, threshold, chance := service.resolveReengageSettings(ctx, "guild-defaults", "channel-defaults")
@@ -76,10 +78,12 @@ func TestResolveReengageSettings_UsesStoredOverrides(t *testing.T) {
 
 	service := &Service{
 		repo: repo,
-		config: config.ReengageConfig{
-			DefaultInactivityMinutes: 42,
-			DefaultChance:            0.42,
-		},
+		runtime: config.NewRuntime(&config.Config{
+			Reengage: config.ReengageConfig{
+				DefaultInactivityMinutes: 42,
+				DefaultChance:            0.42,
+			},
+		}),
 	}
 
 	enabled, threshold, chance := service.resolveReengageSettings(ctx, "guild-overrides", "channel-overrides")
@@ -140,9 +144,11 @@ func TestCheckAllChannels_SkipsGuildsMissingFromGatewayCache(t *testing.T) {
 	client.Caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: snowflake.MustParse("600000000000000001")}})
 
 	service := &Service{
-		client:        client,
-		repo:          repo,
-		config:        config.ReengageConfig{DefaultInactivityMinutes: 30, DefaultChance: 1},
+		client: client,
+		repo:   repo,
+		runtime: config.NewRuntime(&config.Config{
+			Reengage: config.ReengageConfig{DefaultInactivityMinutes: 30, DefaultChance: 1},
+		}),
 		skippedGuilds: make(map[string]struct{}),
 	}
 
@@ -289,9 +295,11 @@ func TestCheckAllChannels_EvictsStaleCachedGuildOnUnknownGuild(t *testing.T) {
 	client.Caches.AddGuild(discord.CacheGuild{Guild: discord.Guild{ID: snowflake.MustParse("600000000000000001")}})
 
 	service := &Service{
-		client:        client,
-		repo:          repo,
-		config:        config.ReengageConfig{DefaultInactivityMinutes: 30, DefaultChance: 1},
+		client: client,
+		repo:   repo,
+		runtime: config.NewRuntime(&config.Config{
+			Reengage: config.ReengageConfig{DefaultInactivityMinutes: 30, DefaultChance: 1},
+		}),
 		skippedGuilds: make(map[string]struct{}),
 	}
 
@@ -407,9 +415,14 @@ func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
 		t.Fatalf("failed to create disgo client: %v", err)
 	}
 
-	svc := NewService(client, aiSvc, repo, nil, nil, config.ReengageConfig{
-		ReengageMessage: "\nRelance le chat.",
-	}, "tu es {{.BotNick}}")
+	svc := NewService(client, aiSvc, repo, nil, nil, config.NewRuntime(&config.Config{
+		Reengage: config.ReengageConfig{
+			ReengageMessage: "\nRelance le chat.",
+		},
+		Bot: config.BotConfig{
+			DefaultPrompt: "tu es {{.BotNick}}",
+		},
+	}))
 
 	// 1. No per-guild temperature configured -> falls back to database.DefaultTemperature.
 	if err := svc.GenerateAndSend(ctx, guildID, channelID); err != nil {

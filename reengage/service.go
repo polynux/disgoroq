@@ -31,22 +31,30 @@ type Service struct {
 	contextBuilder *ai.ContextBuilder
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
-	config         config.ReengageConfig
-	defaultPrompt  string
+	runtime        *config.Runtime
 	skippedMu      sync.Mutex
 	skippedGuilds  map[string]struct{}
 }
 
+func (s *Service) reengageConfig() config.ReengageConfig {
+	return s.runtime.Current().Reengage
+}
+
+func (s *Service) currentDefaultPrompt() string {
+	return s.runtime.Current().Bot.DefaultPrompt
+}
+
 func (s *Service) resolveReengageSettings(ctx context.Context, guildID, channelID string) (bool, int, float64) {
+	cfg := s.reengageConfig()
 	enabled := s.repo.GetReengageEnabled(ctx, guildID, channelID)
 	thresholdMinutes, ok := s.repo.GetReengageThreshold(ctx, guildID, channelID)
 	if !ok {
-		thresholdMinutes = s.config.DefaultInactivityMinutes
+		thresholdMinutes = cfg.DefaultInactivityMinutes
 	}
 
 	chance, ok := s.repo.GetReengageChance(ctx, guildID, channelID)
 	if !ok {
-		chance = s.config.DefaultChance
+		chance = cfg.DefaultChance
 	}
 
 	return enabled, thresholdMinutes, chance
@@ -65,7 +73,7 @@ func (s *Service) shouldReengage(lastMessageTimestamp int64, thresholdMinutes in
 	return roll < chance
 }
 
-func NewService(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfg config.ReengageConfig, defaultPrompt string) *Service {
+func NewService(client *bot.Client, aiService *ai.Service, repo *database.Repository, memoryService memory.Service, emojiManager *emoji.Manager, cfgRuntime *config.Runtime) *Service {
 	return &Service{
 		client:         client,
 		aiService:      aiService,
@@ -73,8 +81,7 @@ func NewService(client *bot.Client, aiService *ai.Service, repo *database.Reposi
 		contextBuilder: ai.NewContextBuilder(client, aiService),
 		memoryService:  memoryService,
 		emojiManager:   emojiManager,
-		config:         cfg,
-		defaultPrompt:  defaultPrompt,
+		runtime:        cfgRuntime,
 		skippedGuilds:  make(map[string]struct{}),
 	}
 }
@@ -247,7 +254,7 @@ func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string
 		return fmt.Errorf("failed to build context: %w", err)
 	}
 
-	reengageMessage := s.config.ReengageMessage
+	reengageMessage := s.reengageConfig().ReengageMessage
 	if msg, ok := s.repo.GetReengageMessage(ctx, guildID); ok {
 		reengageMessage = msg
 	}
@@ -380,7 +387,7 @@ func (s *Service) getRecentMessages(ctx context.Context, guildID string, channel
 }
 
 func (s *Service) getDefaultPrompt(botNick string) string {
-	tmpl, err := template.New("prompt").Parse(s.defaultPrompt)
+	tmpl, err := template.New("prompt").Parse(s.currentDefaultPrompt())
 	if err != nil {
 		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
 	}

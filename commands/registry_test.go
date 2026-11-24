@@ -101,7 +101,12 @@ func TestRegisterAll_PromptCommandSupportsLongInputAndFileUpload(t *testing.T) {
 	registry, err := NewRegistry(client, false, nil)
 	require.NoError(t, err)
 
-	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", []string{"feun", "feunboy"}, "", nil, client)
+	RegisterAll(registry, nil, nil, config.NewRuntime(&config.Config{
+		Bot: config.BotConfig{
+			DefaultPrompt: "default prompt",
+			TriggerWords:  []string{"feun", "feunboy"},
+		},
+	}), nil, client)
 
 	command := findSlashCommand(t, registry.commands, "prompt")
 	appendOption := findSubCommandOption(t, command.Options, "append")
@@ -129,7 +134,12 @@ func TestRegisterAll_TriggerCommandRegistered(t *testing.T) {
 	registry, err := NewRegistry(client, false, nil)
 	require.NoError(t, err)
 
-	RegisterAll(registry, nil, nil, config.ReengageConfig{}, "default prompt", []string{"feun", "feunboy"}, "", nil, client)
+	RegisterAll(registry, nil, nil, config.NewRuntime(&config.Config{
+		Bot: config.BotConfig{
+			DefaultPrompt: "default prompt",
+			TriggerWords:  []string{"feun", "feunboy"},
+		},
+	}), nil, client)
 
 	command := findSlashCommand(t, registry.commands, "triggers")
 	assert.Len(t, command.Options, 5)
@@ -145,7 +155,9 @@ func TestRegisterVoiceCommands_PromptCommandSupportsLongInputAndFileUpload(t *te
 	registry, err := NewRegistry(client, false, nil)
 	require.NoError(t, err)
 
-	RegisterVoiceCommands(registry, NewVoiceCommands(nil, nil, client, "voice prompt"))
+	RegisterVoiceCommands(registry, NewVoiceCommands(nil, nil, client, config.NewRuntime(&config.Config{
+		Voice: config.VoiceConfig{VoiceSystemPrompt: "voice prompt"},
+	})))
 
 	command := findSlashCommand(t, registry.commands, "voice")
 	promptGroup := findSubCommandGroupOption(t, command.Options, "prompt")

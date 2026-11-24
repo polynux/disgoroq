@@ -27,18 +27,24 @@ import (
 
 var defaultMemberPermissions = discord.PermissionManageMessages
 
-var defaultPrompt string
-var defaultTriggerWords []string
+var configRuntime *config.Runtime
+
+func currentDefaultPrompt() string {
+	return configRuntime.Current().Bot.DefaultPrompt
+}
+
+func currentDefaultTriggerWords() []string {
+	return triggerwords.NormalizeAll(configRuntime.Current().Bot.TriggerWords)
+}
 
 // RegisterAll registers all bot commands.
 // If voiceOrchestrator is nil, voice commands will not be registered.
-func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, reengageCfg config.ReengageConfig, cfgDefaultPrompt string, cfgDefaultTriggerWords []string, cfgDefaultVoicePrompt string, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
-	defaultPrompt = cfgDefaultPrompt
-	defaultTriggerWords = triggerwords.NormalizeAll(cfgDefaultTriggerWords)
+func RegisterAll(registry *Registry, repo *database.Repository, memoryService memory.Service, cfgRuntime *config.Runtime, voiceOrchestrator *voice.Orchestrator, client *bot.Client) {
+	configRuntime = cfgRuntime
 
 	// Register voice commands if orchestrator is available
 	if voiceOrchestrator != nil {
-		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator, client, cfgDefaultVoicePrompt)
+		voiceCmds := NewVoiceCommands(repo, voiceOrchestrator, client, cfgRuntime)
 		RegisterVoiceCommands(registry, voiceCmds)
 	}
 
@@ -350,7 +356,7 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 				},
 			},
 		},
-		reengageHandler(repo, reengageCfg),
+		reengageHandler(repo, cfgRuntime),
 	)
 
 	registry.AddCommand(
@@ -766,7 +772,7 @@ func forceSummaryHandler(memoryService memory.Service) func(e *events.Applicatio
 	}
 }
 
-func reengageHandler(repo *database.Repository, cfg config.ReengageConfig) func(e *events.ApplicationCommandInteractionCreate) {
+func reengageHandler(repo *database.Repository, cfgRuntime *config.Runtime) func(e *events.ApplicationCommandInteractionCreate) {
 	return func(e *events.ApplicationCommandInteractionCreate) {
 		data := e.SlashCommandInteractionData()
 		subcommandName := ""
@@ -784,7 +790,7 @@ func reengageHandler(repo *database.Repository, cfg config.ReengageConfig) func(
 		case "message":
 			handleReengageMessage(e, repo)
 		case "status":
-			handleReengageStatus(e, repo, cfg)
+			handleReengageStatus(e, repo, cfgRuntime.Current().Reengage)
 		default:
 			_ = e.CreateMessage(discord.MessageCreate{Content: "Unknown subcommand!"})
 		}
@@ -900,7 +906,7 @@ func handleReengageStatus(e *events.ApplicationCommandInteractionCreate, repo *d
 }
 
 func getDefaultPrompt(botNick string) string {
-	tmpl, err := template.New("prompt").Parse(defaultPrompt)
+	tmpl, err := template.New("prompt").Parse(currentDefaultPrompt())
 	if err != nil {
 		return fmt.Sprintf("yo, t'es %s, un pur bg du brainrot!", botNick)
 	}

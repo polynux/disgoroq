@@ -24,7 +24,7 @@ import (
 type VoteHandler struct {
 	client       *bot.Client
 	repo         *database.Repository
-	config       config.VotesConfig
+	runtime      *config.Runtime
 	recountMu    sync.Mutex
 	recounts     map[snowflake.ID]*recountState
 	recountSlots chan struct{}
@@ -46,14 +46,18 @@ const (
 	recountSlotTimeout    = 10 * time.Second
 )
 
-func NewVoteHandler(client *bot.Client, repo *database.Repository, cfg config.VotesConfig) *VoteHandler {
+func NewVoteHandler(client *bot.Client, repo *database.Repository, cfgRuntime *config.Runtime) *VoteHandler {
 	return &VoteHandler{
 		client:       client,
 		repo:         repo,
-		config:       cfg,
+		runtime:      cfgRuntime,
 		recounts:     make(map[snowflake.ID]*recountState),
 		recountSlots: make(chan struct{}, maxConcurrentRecounts),
 	}
+}
+
+func (h *VoteHandler) votesConfig() config.VotesConfig {
+	return h.runtime.Current().Votes
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionAdd(e *events.GuildMessageReactionAdd) {
@@ -80,15 +84,16 @@ func (h *VoteHandler) HandleGuildMessageReactionRemoveAll(e *events.GuildMessage
 }
 
 func (h *VoteHandler) isVoteEmoji(emoji string) bool {
-	return normalizeVoteEmoji(emoji) == normalizeVoteEmoji(h.config.GoodEmoji) ||
-		normalizeVoteEmoji(emoji) == normalizeVoteEmoji(h.config.BadEmoji)
+	cfg := h.votesConfig()
+	return normalizeVoteEmoji(emoji) == normalizeVoteEmoji(cfg.GoodEmoji) ||
+		normalizeVoteEmoji(emoji) == normalizeVoteEmoji(cfg.BadEmoji)
 }
 
 // recount runs off the gateway goroutine: disgo dispatches listeners inline,
 // so a slow REST call here would delay every other event.
 // When adopt is set, an untracked eligible message is recorded on its first vote.
 func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt bool) {
-	if !h.config.Enabled {
+	if !h.votesConfig().Enabled {
 		return
 	}
 	h.recountMu.Lock()
@@ -205,7 +210,8 @@ func (h *VoteHandler) recountNow(guildID, channelID, messageID snowflake.ID, ado
 			return
 		}
 	}
-	goodCount, badCount := ReplyVoteCounts(message.Reactions, h.config.GoodEmoji, h.config.BadEmoji)
+	votesCfg := h.votesConfig()
+	goodCount, badCount := ReplyVoteCounts(message.Reactions, votesCfg.GoodEmoji, votesCfg.BadEmoji)
 	if err := h.repo.UpdateMessageVoteCounts(ctx, messageID.String(), goodCount, badCount); err != nil {
 		logger.Warn("Failed to update message vote counts",
 			zap.String("message_id", messageID.String()), zap.Error(err))
@@ -312,7 +318,8 @@ func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source dis
 			zap.String("message_id", reply.ID.String()), zap.Error(err))
 		return
 	}
-	for _, emoji := range []string{h.votesConfig.GoodEmoji, h.votesConfig.BadEmoji} {
+	votesCfg := h.currentVotesConfig()
+	for _, emoji := range []string{votesCfg.GoodEmoji, votesCfg.BadEmoji} {
 		if err := h.client.Rest.AddReaction(reply.ChannelID, reply.ID, strings.TrimSpace(emoji), rest.WithCtx(ctx)); err != nil {
 			logger.Warn("Failed to add reply vote reaction",
 				zap.String("message_id", reply.ID.String()), zap.String("emoji", emoji), zap.Error(err))
