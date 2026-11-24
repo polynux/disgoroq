@@ -1,0 +1,704 @@
+{{define "content"}}
+<div class="page-header">
+  <div>
+    <h1>Data</h1>
+    <p class="muted">Browse conversation memory, cached messages, media, and runtime events.</p>
+  </div>
+</div>
+
+<nav class="tabs" aria-label="Data views">
+  {{range .Tabs}}
+  <a class="tab{{if eq .ID $.Tab}} active{{end}}" href="/data?tab={{.ID}}">{{.Label}}</a>
+  {{end}}
+</nav>
+
+{{template "data_panel" .}}
+{{end}}
+
+{{define "data_panel"}}
+<div class="data-panel" id="data-panel">
+  {{if .Notice}}<div class="alert alert-success">{{.Notice}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  <datalist id="data-guilds">
+    {{range .Guilds}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+  </datalist>
+
+  {{if eq .Tab "summaries"}}{{template "data_summaries" .}}{{end}}
+  {{if eq .Tab "buffer"}}{{template "data_buffer" .}}{{end}}
+  {{if eq .Tab "messages"}}{{template "data_messages" .}}{{end}}
+  {{if eq .Tab "attachments"}}{{template "data_attachments" .}}{{end}}
+  {{if eq .Tab "votes"}}{{template "data_votes" .}}{{end}}
+  {{if eq .Tab "events"}}{{template "data_events" .}}{{end}}
+  {{if eq .Tab "media"}}{{template "data_media" .}}{{end}}
+
+  {{template "data_pagination" .}}
+</div>
+{{end}}
+
+{{define "data_guild_cell"}}{{if .GuildID}}{{if .GuildName}}<span>{{.GuildName}}</span> {{end}}<span class="mono muted">{{.GuildID}}</span>{{else}}<span class="muted">—</span>{{end}}{{end}}
+
+{{define "data_pagination"}}
+<div class="pagination">
+  {{if .Pagination.HasPrev}}<a class="btn btn-sm" href="{{.Pagination.PrevURL}}">&larr; Previous page</a>{{else}}<span class="btn btn-sm" aria-disabled="true">&larr; Previous page</span>{{end}}
+  <span class="muted">Page {{.Pagination.Page}} · {{.Pagination.Limit}} per page</span>
+  {{if .Pagination.HasNext}}<a class="btn btn-sm" href="{{.Pagination.NextURL}}">Next page &rarr;</a>{{else}}<span class="btn btn-sm" aria-disabled="true">Next page &rarr;</span>{{end}}
+</div>
+{{end}}
+
+{{define "data_summaries"}}
+<section class="card">
+  <h2>Conversation summaries</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="summaries">
+    <div class="field">
+      <label class="field-label" for="summaries-guild">Guild</label>
+      <input id="summaries-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="summaries-user">User</label>
+      <input id="summaries-user" name="user_id" type="text" value="{{.Filters.UserID}}" placeholder="User ID">
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=summaries">Reset</a>
+    </div>
+  </form>
+
+  <h3>Forget user</h3>
+  <p class="muted">Deletes every summary for one user in one guild. This cannot be undone.</p>
+  <form method="post" action="/data/summaries/forget?{{.Query}}" hx-post="/data/summaries/forget?{{.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete ALL summaries for this user in this guild?" class="filter-grid">
+    <div class="field">
+      <label class="field-label" for="forget-guild">Guild</label>
+      <input id="forget-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID" required>
+    </div>
+    <div class="field">
+      <label class="field-label" for="forget-user">User</label>
+      <input id="forget-user" name="user_id" type="text" value="{{.Filters.UserID}}" placeholder="User ID" required>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-danger btn-sm">Forget user</button>
+    </div>
+  </form>
+
+  {{if .Summaries}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>User</th>
+          <th>Messages</th>
+          <th>Created</th>
+          <th>Updated</th>
+          <th>Summary</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Summaries}}
+        <tr>
+          <td>
+            <div>{{.AuthorName}}</div>
+            <div class="mono muted">{{.UserID}}</div>
+            {{template "data_guild_cell" .}}
+          </td>
+          <td class="mono">{{.MessageCount}}</td>
+          <td class="mono muted">{{.CreatedAt}}</td>
+          <td class="mono muted">{{.UpdatedAt}}</td>
+          <td>
+            <details>
+              <summary>View summary</summary>
+              <pre class="pre-wrap">{{.SummaryText}}</pre>
+            </details>
+          </td>
+          <td>
+            <form method="post" action="/data/summaries/{{.ID}}/delete?{{$.Query}}" hx-post="/data/summaries/{{.ID}}/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete summary #{{.ID}} for good?" class="inline-form">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No summaries match these filters.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_buffer"}}
+<section class="card">
+  <h2>Message buffer</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="buffer">
+    <div class="field">
+      <label class="field-label" for="buffer-guild">Guild</label>
+      <input id="buffer-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="buffer-channel">Channel</label>
+      <input id="buffer-channel" name="channel_id" type="text" value="{{.Filters.ChannelID}}" placeholder="Channel ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="buffer-user">User</label>
+      <input id="buffer-user" name="user_id" type="text" value="{{.Filters.UserID}}" placeholder="User ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="buffer-processed">Processed</label>
+      <select id="buffer-processed" name="processed">
+        <option value="all"{{if eq .Filters.Processed "all"}} selected{{end}}>all</option>
+        <option value="yes"{{if eq .Filters.Processed "yes"}} selected{{end}}>yes</option>
+        <option value="no"{{if eq .Filters.Processed "no"}} selected{{end}}>no</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=buffer">Reset</a>
+    </div>
+  </form>
+
+  {{if .Buffer}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Guild</th>
+          <th>Channel</th>
+          <th>Author</th>
+          <th>Processed</th>
+          <th>Content</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Buffer}}
+        <tr>
+          <td class="mono muted">{{.Timestamp}}</td>
+          <td>{{template "data_guild_cell" .}}</td>
+          <td class="mono">{{.ChannelID}}</td>
+          <td>
+            <div>{{.AuthorNick}}</div>
+            <div class="mono muted">{{.UserID}}</div>
+          </td>
+          <td>{{if .Processed}}<span class="badge badge-default">yes</span>{{else}}<span class="badge badge-warn">no</span>{{end}}</td>
+          <td>
+            <div class="cell-content">{{.Content}}</div>
+            {{if .HasImage}}<div class="muted">image{{if .ImageDescription}}: {{.ImageDescription}}{{end}}</div>{{end}}
+            <div class="mono muted">{{.MessageID}}</div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No buffered messages match these filters.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_messages"}}
+<section class="card">
+  <h2>Cached Discord messages</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="messages">
+    <div class="field">
+      <label class="field-label" for="messages-guild">Guild</label>
+      <input id="messages-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="messages-channel">Channel</label>
+      <input id="messages-channel" name="channel_id" type="text" value="{{.Filters.ChannelID}}" placeholder="Channel ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="messages-author">Author</label>
+      <input id="messages-author" name="author_id" type="text" value="{{.Filters.AuthorID}}" placeholder="Author ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="messages-text">Text contains</label>
+      <input id="messages-text" name="text" type="text" value="{{.Filters.Text}}" placeholder="Substring">
+    </div>
+    <div class="field">
+      <span class="field-label">Deleted</span>
+      <label class="checkbox-row">
+        <input type="checkbox" name="include_deleted" value="1"{{if eq .Filters.IncludeDeleted "1"}} checked{{end}}>
+        <span>Include deleted messages</span>
+      </label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=messages">Reset</a>
+    </div>
+  </form>
+
+  {{if .Messages}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Guild</th>
+          <th>Channel</th>
+          <th>Author</th>
+          <th>Content</th>
+          <th>Flags</th>
+          <th>JSON</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Messages}}
+        <tr>
+          <td class="mono muted">{{.CreatedAt}}</td>
+          <td>{{template "data_guild_cell" .}}</td>
+          <td class="mono">{{.ChannelID}}</td>
+          <td>
+            <div>{{.AuthorUsername}}</div>
+            <div class="mono muted">{{.AuthorID}}</div>
+          </td>
+          <td>
+            <div class="cell-content">{{.Content}}</div>
+            <div class="mono muted">{{.MessageID}}</div>
+            {{if .ReferencedMessageID}}<div class="muted">reply to <span class="mono">{{.ReferencedMessageID}}</span></div>{{end}}
+          </td>
+          <td>
+            {{if .IsEdited}}<div class="badge badge-warn">edited {{.EditedAt}}</div>{{end}}
+            {{if .IsDeleted}}<div class="badge badge-warn">deleted {{.DeletedAt}}</div>{{end}}
+            {{if and (not .IsEdited) (not .IsDeleted)}}<span class="muted">—</span>{{end}}
+          </td>
+          <td>
+            {{if .HasJSON}}
+            <details>
+              <summary>message_json</summary>
+              <pre class="pre-wrap">{{.PrettyJSON}}</pre>
+            </details>
+            {{else}}<span class="muted">—</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No cached messages match these filters.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_attachments"}}
+<section class="card">
+  <h2>Attachment cache</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="attachments">
+    <div class="field">
+      <label class="field-label" for="attachments-kind">Cache kind</label>
+      <input id="attachments-kind" name="cache_kind" type="text" value="{{.Filters.CacheKind}}" placeholder="e.g. image_description">
+    </div>
+    <div class="field">
+      <label class="field-label" for="attachments-provider">Provider</label>
+      <input id="attachments-provider" name="provider" type="text" value="{{.Filters.Provider}}" placeholder="e.g. groq">
+    </div>
+    <div class="field">
+      <label class="field-label" for="attachments-model">Model</label>
+      <input id="attachments-model" name="model" type="text" value="{{.Filters.Model}}" placeholder="Model name">
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=attachments">Reset</a>
+    </div>
+  </form>
+
+  <h3>Purge older than</h3>
+  <form method="post" action="/data/attachments/purge?{{.Query}}" hx-post="/data/attachments/purge?{{.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache rows older than this many days?" class="filter-grid">
+    <div class="field">
+      <label class="field-label" for="attachments-days">Days</label>
+      <input id="attachments-days" name="days" type="number" min="1" max="36500" value="30" required>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-danger btn-sm">Purge</button>
+    </div>
+  </form>
+
+  {{if .Attachments}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Kind / key</th>
+          <th>File</th>
+          <th>Size</th>
+          <th>Provider / model</th>
+          <th>Content</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Attachments}}
+        <tr>
+          <td class="mono muted">{{.CreatedAt}}</td>
+          <td>
+            <div>{{.CacheKind}}</div>
+            <div class="mono muted">{{.AttachmentKey}}</div>
+          </td>
+          <td>
+            <div>{{.Filename}}</div>
+            <div class="muted">{{.ContentType}}</div>
+            {{if .SourceURL}}<div class="mono cell-url">{{.SourceURL}}</div>{{end}}
+          </td>
+          <td class="mono">{{.Size}}</td>
+          <td>
+            <div>{{.Provider}}</div>
+            <div class="muted">{{.Model}}</div>
+          </td>
+          <td>
+            <div class="cell-content">{{.Preview}}</div>
+            {{if .Truncated}}
+            <details>
+              <summary>Full content</summary>
+              <pre class="pre-wrap">{{.Content}}</pre>
+            </details>
+            {{end}}
+          </td>
+          <td>
+            <form method="post" action="/data/attachments/{{.ID}}/delete?{{$.Query}}" hx-post="/data/attachments/{{.ID}}/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete attachment cache row #{{.ID}}?" class="inline-form">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No attachment cache rows match these filters.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_votes"}}
+<section class="card">
+  <h2>Message votes</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="votes">
+    <div class="field">
+      <label class="field-label" for="votes-guild">Guild</label>
+      <input id="votes-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <span class="field-label">Replies</span>
+      <label class="checkbox-row">
+        <input type="checkbox" name="bot_only" value="1"{{if eq .Filters.BotOnly "1"}} checked{{end}}>
+        <span>Bot replies only</span>
+      </label>
+    </div>
+    <div class="field">
+      <label class="field-label" for="votes-sort">Sort</label>
+      <select id="votes-sort" name="sort">
+        <option value="newest"{{if eq .Filters.Sort "newest"}} selected{{end}}>newest</option>
+        <option value="good"{{if eq .Filters.Sort "good"}} selected{{end}}>most good</option>
+        <option value="bad"{{if eq .Filters.Sort "bad"}} selected{{end}}>most bad</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=votes">Reset</a>
+    </div>
+  </form>
+
+  {{if .Votes}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Created</th>
+          <th>Guild</th>
+          <th>Author</th>
+          <th>Votes</th>
+          <th>Content</th>
+          <th>Provider / model</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Votes}}
+        <tr>
+          <td class="mono muted">{{.CreatedAt}}</td>
+          <td>{{template "data_guild_cell" .}}</td>
+          <td>
+            <div>{{.AuthorName}}</div>
+            <div class="mono muted">{{.AuthorID}}</div>
+            {{if .IsBotReply}}<span class="badge badge-default">bot reply</span>{{end}}
+          </td>
+          <td>
+            <div class="mono">👍 {{.GoodCount}} · 👎 {{.BadCount}}</div>
+          </td>
+          <td>
+            <div class="cell-content">{{.Content}}</div>
+            {{if .ReplyToContent}}<div class="muted">reply to: {{.ReplyToContent}}</div>{{end}}
+          </td>
+          <td>
+            <div>{{.Provider}}</div>
+            <div class="muted">{{.Model}}</div>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No votes match these filters.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_events"}}
+<section class="card">
+  <h2>Bot events</h2>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="events">
+    <div class="field">
+      <label class="field-label" for="events-type">Event type</label>
+      <select id="events-type" name="event_type">
+        <option value="">all</option>
+        {{range .EventTypes}}
+        <option value="{{.}}"{{if eq . $.Filters.EventType}} selected{{end}}>{{.}}</option>
+        {{end}}
+      </select>
+    </div>
+    <div class="field">
+      <label class="field-label" for="events-guild">Guild</label>
+      <input id="events-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="events-from">From</label>
+      <input id="events-from" name="from" type="datetime-local" value="{{.Filters.From}}">
+    </div>
+    <div class="field">
+      <label class="field-label" for="events-to">To</label>
+      <input id="events-to" name="to" type="datetime-local" value="{{.Filters.To}}">
+    </div>
+    <div class="field">
+      <span class="field-label">Errors</span>
+      <label class="checkbox-row">
+        <input type="checkbox" name="has_error" value="1"{{if eq .Filters.HasError "1"}} checked{{end}}>
+        <span>Only events with an error</span>
+      </label>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=events">Reset</a>
+    </div>
+  </form>
+
+  {{if .Events}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Type</th>
+          <th>Guild</th>
+          <th>Channel / message</th>
+          <th>User</th>
+          <th>Duration</th>
+          <th>Error / details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Events}}
+        <tr>
+          <td class="mono muted">{{.Timestamp}}</td>
+          <td class="mono">{{.EventType}}</td>
+          <td>{{template "data_guild_cell" .}}</td>
+          <td>
+            {{if .ChannelID}}<div class="mono">{{.ChannelID}}</div>{{end}}
+            {{if .MessageID}}<div class="mono muted">{{.MessageID}}</div>{{end}}
+          </td>
+          <td class="mono">{{if .UserID}}{{.UserID}}{{else}}<span class="muted">—</span>{{end}}</td>
+          <td class="mono">{{if .DurationMS}}{{.DurationMS}} ms{{else}}<span class="muted">—</span>{{end}}</td>
+          <td>
+            {{if .HasError}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+            {{if .Details}}
+            <details>
+              <summary>Details</summary>
+              <pre class="pre-wrap">{{.Details}}</pre>
+            </details>
+            {{end}}
+            {{if and (not .HasError) (not .Details)}}<span class="muted">—</span>{{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No events match these filters and time range.</p>
+  {{end}}
+</section>
+{{end}}
+
+{{define "data_media"}}
+<section class="card">
+  <h2>Media library</h2>
+  {{if .MediaDisabled}}
+  <div class="alert alert-error">Media library is disabled: browsing and deletion still work, but editing and search are unavailable.</div>
+  {{end}}
+
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="media">
+    <div class="field">
+      <label class="field-label" for="media-guild">Guild</label>
+      <input id="media-guild" name="guild_id" type="text" list="data-guilds" value="{{.Filters.GuildID}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="media-kind">Kind</label>
+      <select id="media-kind" name="media_kind">
+        <option value=""{{if eq .Filters.MediaKind ""}} selected{{end}}>all</option>
+        <option value="gif"{{if eq .Filters.MediaKind "gif"}} selected{{end}}>gif</option>
+        <option value="image"{{if eq .Filters.MediaKind "image"}} selected{{end}}>image</option>
+        <option value="video"{{if eq .Filters.MediaKind "video"}} selected{{end}}>video</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="field-label" for="media-text">Text contains</label>
+      <input id="media-text" name="media_text" type="text" value="{{.Filters.MediaText}}" placeholder="description or trigger text">
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Filter</button>
+      <a class="btn btn-sm" href="/data?tab=media">Reset</a>
+    </div>
+  </form>
+
+  <h3>Search (tune min_similarity)</h3>
+  <form method="get" action="/data" class="filter-grid">
+    <input type="hidden" name="tab" value="media">
+    <div class="field">
+      <label class="field-label" for="media-search-guild">Guild</label>
+      <input id="media-search-guild" name="search_guild" type="text" list="data-guilds" value="{{.Filters.SearchGuild}}" placeholder="Guild ID">
+    </div>
+    <div class="field">
+      <label class="field-label" for="media-search-query">Query</label>
+      <input id="media-search-query" name="search_query" type="text" value="{{.Filters.SearchQuery}}" placeholder="e.g. cat reaction">
+    </div>
+    <div class="field">
+      <label class="field-label" for="media-search-mode">Match</label>
+      <select id="media-search-mode" name="search_mode">
+        <option value="desc"{{if eq .Filters.SearchMode "desc"}} selected{{end}}>description</option>
+        <option value="trigger"{{if eq .Filters.SearchMode "trigger"}} selected{{end}}>trigger text</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Search</button>
+    </div>
+  </form>
+
+  {{if .SearchActive}}
+    {{if .SearchHits}}
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Similarity</th>
+            <th>Guild</th>
+            <th>Kind</th>
+            <th>Description</th>
+            <th>Trigger text</th>
+            <th>Uses</th>
+            <th>URL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .SearchHits}}
+          <tr>
+            <td class="mono">{{.Similarity}}</td>
+            <td>{{template "data_guild_cell" .}}</td>
+            <td>{{.Kind}}</td>
+            <td class="cell-content">{{.Description}}</td>
+            <td class="cell-content">{{.TriggerText}}</td>
+            <td class="mono">{{.Uses}}</td>
+            <td class="mono cell-url">{{.URL}}</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+    {{else}}
+    <p class="muted">No search results.</p>
+    {{end}}
+  {{end}}
+
+  {{if .Media}}
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Preview</th>
+          <th>Kind</th>
+          <th>Description</th>
+          <th>Trigger text</th>
+          <th>Uses</th>
+          <th>Seen</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Media}}
+        <tr>
+          <td>
+            {{if .IsImage}}
+              {{if .Linkable}}<img class="thumb" loading="lazy" referrerpolicy="no-referrer" src="{{.URL}}" alt="">{{else}}<span class="muted">unsafe URL</span>{{end}}
+            {{else if .Linkable}}
+              <a href="{{.URL}}" target="_blank" rel="noopener noreferrer">open</a>
+            {{else}}
+              <span class="muted">no preview</span>
+            {{end}}
+            <div class="mono cell-url">{{.URL}}</div>
+          </td>
+          <td>{{.Kind}}</td>
+          <td class="cell-content">{{.Description}}</td>
+          <td class="cell-content">{{.TriggerText}}</td>
+          <td class="mono">{{.Uses}}</td>
+          <td class="mono muted">
+            <div>first {{.FirstSeen}}</div>
+            <div>last {{.LastSeen}}</div>
+            {{template "data_guild_cell" .}}
+          </td>
+          <td>
+            <details>
+              <summary>Edit</summary>
+              {{if $.MediaDisabled}}
+              <p class="muted">Media library is disabled; editing is unavailable.</p>
+              {{else}}
+              <form method="post" action="/data/media/edit?{{$.Query}}" hx-post="/data/media/edit?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML">
+                <input type="hidden" name="guild_id" value="{{.GuildID}}">
+                <input type="hidden" name="url" value="{{.URL}}">
+                <div class="field">
+                  <label class="field-label" for="media-desc-{{.ID}}">Description</label>
+                  <textarea id="media-desc-{{.ID}}" name="description">{{.Description}}</textarea>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="media-trigger-{{.ID}}">Trigger text</label>
+                  <textarea id="media-trigger-{{.ID}}" name="trigger_text">{{.TriggerText}}</textarea>
+                </div>
+                <div class="actions">
+                  <button type="submit" class="btn btn-primary btn-sm">Save text</button>
+                </div>
+              </form>
+              {{end}}
+            </details>
+            <form method="post" action="/data/media/delete?{{$.Query}}" hx-post="/data/media/delete?{{$.Query}}" hx-target="#data-panel" hx-swap="outerHTML" hx-confirm="Delete this media library entry?" class="inline-form">
+              <input type="hidden" name="guild_id" value="{{.GuildID}}">
+              <input type="hidden" name="url" value="{{.URL}}">
+              <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="muted">No media library entries match these filters.</p>
+  {{end}}
+</section>
+{{end}}

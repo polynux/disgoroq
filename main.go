@@ -191,7 +191,10 @@ func main() {
 	logger.SetEventRepository(eventRepo)
 	repo := database.NewRepository()
 
-	// Initialize media library service if enabled.
+	// Initialize media library service if enabled. The repository is always
+	// available so the web admin can browse the media library while the
+	// service itself is disabled.
+	mediaRepo := medialibrary.NewRepository(utils.DB)
 	var mediaLibraryService *medialibrary.Service
 	if cfg.MediaLibrary.Enabled {
 		embURL, embModel := resolveMediaEmbeddingConfig(cfg)
@@ -201,9 +204,9 @@ func main() {
 				zap.String("ollama_url", embURL),
 				zap.String("embedding_model", embModel),
 				zap.Error(err))
-			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), nil, cfg.MediaLibrary)
+			mediaLibraryService = medialibrary.NewService(mediaRepo, nil, cfg.MediaLibrary)
 		} else {
-			mediaLibraryService = medialibrary.NewService(medialibrary.NewRepository(utils.DB), mediaEmbedder, cfg.MediaLibrary)
+			mediaLibraryService = medialibrary.NewService(mediaRepo, mediaEmbedder, cfg.MediaLibrary)
 			hcCtx, hcCancel := context.WithTimeout(context.Background(), 10*time.Second)
 			if hcErr := mediaEmbedder.HealthCheck(hcCtx); hcErr != nil {
 				logger.Warn("Media library embedding provider unavailable at startup; exact match active, vector search will retry",
@@ -512,10 +515,12 @@ func main() {
 	var webServer *web.Server
 	if cfg.Web.Enabled {
 		webServer = web.New(web.Deps{
-			Client: client,
-			Repo:   repo,
-			Config: cfg,
-			Memory: memoryService,
+			Client:    client,
+			Repo:      repo,
+			Config:    cfg,
+			Memory:    memoryService,
+			Media:     mediaLibraryService,
+			MediaRepo: mediaRepo,
 		}, cfg.Web)
 		if err := webServer.Start(); err != nil {
 			webServer = nil

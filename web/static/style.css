@@ -450,3 +450,106 @@ th {
 .inline-form {
   display: inline;
 }
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  padding: 8px 12px;
+  border-radius: 6px 6px 0 0;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.tab:hover {
+  background: var(--surface-subtle);
+  color: var(--text);
+}
+
+.tab.active {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-color: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: -1px;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin: 12px 0;
+}
+
+.filter-grid .actions {
+  margin-top: 0;
+  align-self: end;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  margin-top: 8px;
+}
+
+.table-scroll table {
+  min-width: 720px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.pagination .btn[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.cell-content {
+  max-width: 420px;
+  max-height: 8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cell-url {
+  max-width: 420px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.pre-wrap {
+  margin: 8px 0 0;
+  padding: 10px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.thumb {
+  display: block;
+  max-width: 96px;
+  max-height: 96px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  object-fit: cover;
+}
