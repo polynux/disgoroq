@@ -549,11 +549,15 @@ func TestConfigSaveWritesBackupPreservesModeAndHotAppliesRuntime(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o640), info.Mode().Perm())
 
-	// Comments and env placeholders still exist in the saved file.
+	// Comments, env placeholders, and normalized trigger words are written to disk.
 	newBytes, err := os.ReadFile(cfgPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(newBytes), "# Top-level comment that must survive edits")
 	assert.Contains(t, string(newBytes), "${TEST_CFG_DISCORD_TOKEN}")
+	assert.Contains(t, string(newBytes), "gamma")
+	assert.Contains(t, string(newBytes), "delta")
+	assert.NotContains(t, string(newBytes), "Gamma")
+	assert.NotContains(t, string(newBytes), "Delta")
 
 	// Hot-applied values are immediately visible through Runtime.Current().
 	assert.Equal(t, "updated live prompt for {{.BotNick}}", runtime.Current().Bot.DefaultPrompt)

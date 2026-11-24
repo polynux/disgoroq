@@ -14,6 +14,7 @@ import (
 
 	"polynux/disgoroq/config"
 	"polynux/disgoroq/logger"
+	"polynux/disgoroq/triggerwords"
 )
 
 type configFieldView struct {
@@ -532,6 +533,9 @@ func parseFormFieldValue(spec configFieldSpec, raw string) (any, error) {
 			if trimmed != "" {
 				out = append(out, trimmed)
 			}
+		}
+		if spec.Path == "bot.trigger_words" {
+			out = triggerwords.NormalizeAll(out)
 		}
 		return out, nil
 	default:
