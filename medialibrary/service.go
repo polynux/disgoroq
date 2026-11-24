@@ -1130,6 +1130,8 @@ func (s *Service) UpdateEntryText(ctx context.Context, guildID, rawURL, descript
 	if guildID == "" || rawURL == "" {
 		return fmt.Errorf("guild ID and media URL are required")
 	}
+	description = strings.TrimSpace(description)
+	triggerText = normalizeTriggerText(triggerText)
 	if s.embedder == nil {
 		return fmt.Errorf("media library embedding provider is not configured; refusing to edit without recomputed embeddings")
 	}
