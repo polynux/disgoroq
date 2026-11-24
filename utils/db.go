@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,7 @@ func ConnectLocal() *sql.DB {
 		os.Mkdir(dir, 0755)
 	}
 
-	db, err := openLocalDB(filepath.Join(dir, dbName))
+	db, err := OpenLocalDB(filepath.Join(dir, dbName))
 	if err != nil {
 		dbLogger.Fatal("Error opening local database", zap.Error(err))
 		os.Exit(1)
@@ -90,22 +91,23 @@ func ConnectLocal() *sql.DB {
 // connection before failing with "database is locked".
 const localBusyTimeoutMS = 5000
 
-// openLocalDB opens a local libsql database file with one long-lived connection.
+// OpenLocalDB opens a local libsql database file with one long-lived connection.
 //
 // go-libsql hands the file: URL to SQLite unchanged, so mattn-style query
 // parameters such as _busy_timeout are ignored. The pragmas therefore run on
 // every new connection through pragmaConnector instead.
-func openLocalDB(dbPath string) (*sql.DB, error) {
-	base, err := sql.Open("libsql", "file:"+dbPath)
+func OpenLocalDB(dbPath string) (*sql.DB, error) {
+	// go-libsql exports no driver value, so reach it through a throwaway
+	// in-memory handle instead of opening the target file twice.
+	base, err := sql.Open("libsql", ":memory:")
 	if err != nil {
 		return nil, err
 	}
 	driverCtx, ok := base.Driver().(driver.DriverContext)
+	_ = base.Close()
 	if !ok {
-		base.Close()
 		return nil, fmt.Errorf("libsql driver does not support connectors")
 	}
-	_ = base.Close()
 
 	connector, err := driverCtx.OpenConnector("file:" + dbPath)
 	if err != nil {
@@ -135,6 +137,16 @@ func openLocalDB(dbPath string) (*sql.DB, error) {
 type pragmaConnector struct {
 	driver.Connector
 	pragmas []string
+}
+
+// Close closes the wrapped connector. database/sql closes a connector on
+// DB.Close only when it implements io.Closer, and embedding the
+// driver.Connector interface does not promote libsql's Close.
+func (c pragmaConnector) Close() error {
+	if closer, ok := c.Connector.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
 func (c pragmaConnector) Connect(ctx context.Context) (driver.Conn, error) {

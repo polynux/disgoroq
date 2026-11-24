@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"polynux/disgoroq/utils"
 	"strings"
 	"testing"
 	"time"
@@ -30,10 +31,8 @@ func NewTestRepository(t *testing.T) *TestRepository {
 
 	// Use a real temp file so schema creation and prepared statements share the same DB.
 	dbPath := filepath.Join(t.TempDir(), "memory-test.db")
-	db, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := utils.OpenLocalDB(dbPath)
 	require.NoError(t, err)
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
 
 	// Enable foreign keys and other SQLite pragmas
 	_, err = db.Exec(`PRAGMA foreign_keys = ON`)
