@@ -32,24 +32,16 @@ type Service struct {
 	memoryService  memory.Service
 	emojiManager   *emoji.Manager
 	runtime        *config.Runtime
-	config         config.ReengageConfig
-	defaultPrompt  string
 	skippedMu      sync.Mutex
 	skippedGuilds  map[string]struct{}
 }
 
 func (s *Service) reengageConfig() config.ReengageConfig {
-	if s.runtime != nil {
-		return s.runtime.Current().Reengage
-	}
-	return s.config
+	return s.runtime.Current().Reengage
 }
 
 func (s *Service) currentDefaultPrompt() string {
-	if s.runtime != nil {
-		return s.runtime.Current().Bot.DefaultPrompt
-	}
-	return s.defaultPrompt
+	return s.runtime.Current().Bot.DefaultPrompt
 }
 
 func (s *Service) resolveReengageSettings(ctx context.Context, guildID, channelID string) (bool, int, float64) {

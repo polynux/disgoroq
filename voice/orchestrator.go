@@ -31,7 +31,6 @@ type Orchestrator struct {
 	client            *bot.Client
 	repo              Repository
 	configRuntime     *config.Runtime
-	defaultPrompt     string
 	voiceSystemPrompt string // Separate prompt for voice mode
 	config            config.VoiceConfig
 
@@ -112,7 +111,6 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 		client:            cfg.Client,
 		repo:              cfg.Repository,
 		configRuntime:     cfg.ConfigRuntime,
-		defaultPrompt:     cfg.DefaultPrompt,
 		voiceSystemPrompt: voicePrompt,
 		config:            cfg.VoiceConfig,
 		sessions:          make(map[string]*VoiceConversation),
@@ -127,10 +125,7 @@ func NewOrchestrator(cfg OrchestratorConfig) *Orchestrator {
 }
 
 func (o *Orchestrator) currentDefaultPrompt() string {
-	if o.configRuntime != nil {
-		return o.configRuntime.Current().Bot.DefaultPrompt
-	}
-	return o.defaultPrompt
+	return o.configRuntime.Current().Bot.DefaultPrompt
 }
 
 func (o *Orchestrator) currentVoiceSystemPrompt() string {
@@ -141,7 +136,10 @@ func (o *Orchestrator) currentVoiceSystemPrompt() string {
 		}
 		return cfg.Bot.DefaultPrompt
 	}
-	return o.voiceSystemPrompt
+	if o.voiceSystemPrompt != "" {
+		return o.voiceSystemPrompt
+	}
+	return o.configRuntime.Current().Bot.DefaultPrompt
 }
 
 // JoinVoice connects to a voice channel and starts listening.

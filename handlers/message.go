@@ -37,9 +37,6 @@ type MessageHandler struct {
 	mediaLibrary   *medialibrary.Service
 	emojiManager   *emoji.Manager
 	runtime        *config.Runtime
-	defaultPrompt  string
-	triggerWords   []string
-	votesConfig    config.VotesConfig
 	replySlots     chan struct{}
 	replyLocks     sync.Map // per channel: one reply generated at a time
 	rateLimitLocks sync.Map // per guild: the rate-limit check and update are atomic
@@ -61,24 +58,15 @@ func NewMessageHandler(client *bot.Client, aiService *ai.Service, repo *database
 }
 
 func (h *MessageHandler) currentDefaultPrompt() string {
-	if h.runtime != nil {
-		return h.runtime.Current().Bot.DefaultPrompt
-	}
-	return h.defaultPrompt
+	return h.runtime.Current().Bot.DefaultPrompt
 }
 
 func (h *MessageHandler) currentTriggerWords() []string {
-	if h.runtime != nil {
-		return triggerwords.NormalizeAll(h.runtime.Current().Bot.TriggerWords)
-	}
-	return h.triggerWords
+	return triggerwords.NormalizeAll(h.runtime.Current().Bot.TriggerWords)
 }
 
 func (h *MessageHandler) currentVotesConfig() config.VotesConfig {
-	if h.runtime != nil {
-		return h.runtime.Current().Votes
-	}
-	return h.votesConfig
+	return h.runtime.Current().Votes
 }
 
 // SetMediaLibrary attaches the media library service used for asynchronous live indexing.

@@ -25,7 +25,6 @@ type VoteHandler struct {
 	client       *bot.Client
 	repo         *database.Repository
 	runtime      *config.Runtime
-	config       config.VotesConfig
 	recountMu    sync.Mutex
 	recounts     map[snowflake.ID]*recountState
 	recountSlots chan struct{}
@@ -58,10 +57,7 @@ func NewVoteHandler(client *bot.Client, repo *database.Repository, cfgRuntime *c
 }
 
 func (h *VoteHandler) votesConfig() config.VotesConfig {
-	if h.runtime != nil {
-		return h.runtime.Current().Votes
-	}
-	return h.config
+	return h.runtime.Current().Votes
 }
 
 func (h *VoteHandler) HandleGuildMessageReactionAdd(e *events.GuildMessageReactionAdd) {

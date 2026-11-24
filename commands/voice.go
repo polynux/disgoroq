@@ -19,8 +19,6 @@ import (
 	"polynux/disgoroq/voice"
 )
 
-const fallbackVoicePrompt = "Tu es en conversation vocale. Réponds de manière concise et naturelle, comme dans une vraie conversation. Évite les réponses trop longues."
-
 // VoiceCommands contains the dependencies for voice commands.
 type VoiceCommands struct {
 	repo         *database.Repository
@@ -40,12 +38,11 @@ func NewVoiceCommands(repo *database.Repository, orchestrator *voice.Orchestrato
 }
 
 func (vc *VoiceCommands) defaultVoicePrompt() string {
-	if vc.runtime != nil {
-		if prompt := vc.runtime.Current().Voice.VoiceSystemPrompt; prompt != "" {
-			return prompt
-		}
+	cfg := vc.runtime.Current()
+	if cfg.Voice.VoiceSystemPrompt != "" {
+		return cfg.Voice.VoiceSystemPrompt
 	}
-	return fallbackVoicePrompt
+	return cfg.Bot.DefaultPrompt
 }
 
 // RegisterVoiceCommands registers all voice-related slash commands.
