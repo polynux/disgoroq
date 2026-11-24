@@ -685,7 +685,19 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 
 	// Replacing a non-block node (e.g. empty/null) with a block sequence.
 	lineEnd := li.lineEnd(keyNode.Line)
-	return spliceBytes(src, colonPos+1, lineEnd, []byte(keyLineComment(src, li, keyNode, colonPos)+block)), nil
+	comment := keyLineComment(src, li, keyNode, colonPos)
+	if comment == "" && valNode.Kind == yaml.ScalarNode && valNode.Line == keyNode.Line {
+		// Explicit value on the key line ("null # keep", "'' # keep"): keep a
+		// comment that follows the scalar's exact end, so a "#" inside quotes
+		// is never mistaken for one.
+		if _, end, err := valueByteSpan(src, li, keyNode, valNode); err == nil && end <= lineEnd {
+			after := src[end:lineEnd]
+			if trimmed := bytes.TrimSpace(after); len(trimmed) > 0 && trimmed[0] == '#' {
+				comment = " " + string(bytes.TrimRight(trimmed, " \t\r"))
+			}
+		}
+	}
+	return spliceBytes(src, colonPos+1, lineEnd, []byte(comment+block)), nil
 }
 
 // keyLineComment returns " # comment" when the rest of the key's line after the

@@ -46,6 +46,24 @@ func TestPatchKeepsCommentsAroundBlockScalarsAndLists(t *testing.T) {
 			want:  "bot:\n  trigger_words: [] # keep\nlogging:\n  level: info\n",
 		},
 		{
+			name:  "filling an explicit null list keeps the key line comment",
+			src:   "bot:\n  trigger_words: null # keep\nlogging:\n  level: info\n",
+			patch: yamlPatch{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"a"}},
+			want:  "bot:\n  trigger_words: # keep\n    - a\nlogging:\n  level: info\n",
+		},
+		{
+			name:  "filling a quoted empty list value keeps the comment, not a quoted hash",
+			src:   "bot:\n  trigger_words: '' # keep\nlogging:\n  level: info\n",
+			patch: yamlPatch{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"a"}},
+			want:  "bot:\n  trigger_words: # keep\n    - a\nlogging:\n  level: info\n",
+		},
+		{
+			name:  "a hash inside a quoted value is not turned into a comment",
+			src:   "bot:\n  trigger_words: \"a # b\"\nlogging:\n  level: info\n",
+			patch: yamlPatch{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"a"}},
+			want:  "bot:\n  trigger_words:\n    - a\nlogging:\n  level: info\n",
+		},
+		{
 			name:  "filling an implicit-null list keeps the key line comment",
 			src:   "bot:\n  trigger_words: # keep\nlogging:\n  level: info\n",
 			patch: yamlPatch{Path: "bot.trigger_words", Kind: fieldKindStringSlice, Val: []string{"a", "b"}},
