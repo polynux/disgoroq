@@ -1912,3 +1912,97 @@ web:
 		}
 	})
 }
+
+func TestParse(t *testing.T) {
+	t.Run("interpolates env vars, applies defaults, normalizes triggers, converts durations", func(t *testing.T) {
+		t.Setenv("PARSE_DISCORD_TOKEN", "tok-123")
+		t.Setenv("PARSE_GROQ_KEY", "groq-secret")
+
+		raw := []byte(`
+discord:
+  token: "${PARSE_DISCORD_TOKEN}"
+database:
+  local: true
+memory:
+  enabled: false
+  summary_interval_seconds: 120
+ai:
+  groq:
+    api_key: "${PARSE_GROQ_KEY}"
+  retry:
+    initial_delay_ms: 250
+    max_delay_ms: 2500
+  tools:
+    timeout_ms: 4500
+bot:
+  trigger_words:
+    - "  Feun "
+    - "FEUN"
+    - "Bot-One"
+`)
+
+		cfg, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		if cfg.Discord.Token != "tok-123" {
+			t.Errorf("Discord.Token = %q, want %q", cfg.Discord.Token, "tok-123")
+		}
+		if cfg.AI.Groq.APIKey != "groq-secret" {
+			t.Errorf("AI.Groq.APIKey = %q, want %q", cfg.AI.Groq.APIKey, "groq-secret")
+		}
+		if len(cfg.Bot.TriggerWords) != 2 || cfg.Bot.TriggerWords[0] != "feun" || cfg.Bot.TriggerWords[1] != "bot-one" {
+			t.Errorf("Bot.TriggerWords = %v, want [feun bot-one]", cfg.Bot.TriggerWords)
+		}
+		if cfg.AI.Retry.InitialDelay != 250*time.Millisecond {
+			t.Errorf("AI.Retry.InitialDelay = %v, want 250ms", cfg.AI.Retry.InitialDelay)
+		}
+		if cfg.AI.Retry.MaxDelay != 2500*time.Millisecond {
+			t.Errorf("AI.Retry.MaxDelay = %v, want 2500ms", cfg.AI.Retry.MaxDelay)
+		}
+		if cfg.AI.Tools.Timeout != 4500*time.Millisecond {
+			t.Errorf("AI.Tools.Timeout = %v, want 4500ms", cfg.AI.Tools.Timeout)
+		}
+		if cfg.Memory.SummaryInterval != 120*time.Second {
+			t.Errorf("Memory.SummaryInterval = %v, want 120s", cfg.Memory.SummaryInterval)
+		}
+		// Default applied for omitted field.
+		if cfg.Emoji.CacheTTLMinutes != DefaultConfig().Emoji.CacheTTLMinutes {
+			t.Errorf("Emoji.CacheTTLMinutes = %d, want default %d", cfg.Emoji.CacheTTLMinutes, DefaultConfig().Emoji.CacheTTLMinutes)
+		}
+	})
+
+	t.Run("fails on missing required env var", func(t *testing.T) {
+		raw := []byte(`
+discord:
+  token: "${UNSET_PARSE_VAR_FOR_TEST}"
+database:
+  local: true
+memory:
+  enabled: false
+`)
+		if _, err := Parse(raw); err == nil {
+			t.Fatal("Parse() expected error for unset env var, got nil")
+		}
+	})
+
+	t.Run("fails on validation error", func(t *testing.T) {
+		raw := []byte(`
+discord:
+  token: "tok"
+database:
+  local: true
+memory:
+  enabled: false
+ai:
+  groq:
+    api_key: "key"
+votes:
+  enabled: true
+  probability: 2.5
+`)
+		if _, err := Parse(raw); err == nil {
+			t.Fatal("Parse() expected validation error for invalid votes.probability, got nil")
+		}
+	})
+}

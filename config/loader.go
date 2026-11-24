@@ -30,6 +30,13 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	return Parse(data)
+}
+
+// Parse parses and validates YAML configuration bytes using the same pipeline as Load:
+// environment variable interpolation, defaults, YAML unmarshal, trigger word normalization,
+// duration conversion, and full validation.
+func Parse(data []byte) (*Config, error) {
 	// Interpolate environment variables
 	interpolated, err := interpolateEnvVars(data)
 	if err != nil {
