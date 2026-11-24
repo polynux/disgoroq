@@ -241,10 +241,10 @@ var (
 	gifRequestWordPattern        = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])gifs?(?:$|[^\p{L}\p{N}_])`)
 )
 
-// IsGifRequest reports whether text explicitly asks for a gif (standalone
+// isGifRequest reports whether text explicitly asks for a gif (standalone
 // case-insensitive word "gif" or "gifs"), ignoring media placeholder tags,
 // raw URLs, and Discord custom emoji markup.
-func IsGifRequest(text string) bool {
+func isGifRequest(text string) bool {
 	cleaned := gifRequestPlaceholderPattern.ReplaceAllString(text, " ")
 	cleaned = gifRequestURLPattern.ReplaceAllString(cleaned, " ")
 	cleaned = gifRequestEmojiPattern.ReplaceAllString(cleaned, " ")
@@ -260,7 +260,10 @@ func (s *Service) Resolve(ctx context.Context, req ai.MediaResolveRequest) (ai.M
 	}
 
 	tags := ai.ParseMediaTags(req.RawReply)
-	gifRequested := s.cfg.GifOnRequest && IsGifRequest(req.TargetText)
+	gifRequested := s.cfg.GifOnRequest &&
+		strings.TrimSpace(req.TargetMessageID) != "" &&
+		isGifRequest(req.TargetText) &&
+		len(ai.ExtractAllURLs(req.RawReply)) == 0
 	if len(tags) == 0 && !gifRequested {
 		return ai.MediaResolveResult{}, false
 	}

@@ -46,11 +46,12 @@ type ollamaGenerateResponse struct {
 // MediaResolveRequest carries the raw completion reply and context needed
 // to resolve media tags into real URLs from the media library.
 type MediaResolveRequest struct {
-	RawReply   string
-	GuildID    string
-	ChannelID  string
-	BotID      string
-	TargetText string // v1-rendered text of the message being answered
+	RawReply        string
+	GuildID         string
+	ChannelID       string
+	BotID           string
+	TargetText      string // v1-rendered text of the message being answered
+	TargetMessageID string // non-empty when answering a specific message (empty for reengage)
 }
 
 // MediaResolveResult holds the resolved media URL and match details.
@@ -129,11 +130,12 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		var mediaURL string
 		if o.mediaResolver != nil && (cleaned != "" || attempt == 1 || len(ParseMediaTags(generated.Response)) > 0) {
 			if resolved, ok := o.mediaResolver.Resolve(ctx, MediaResolveRequest{
-				RawReply:   generated.Response,
-				GuildID:    req.GuildID,
-				ChannelID:  req.ChannelID,
-				BotID:      req.BotID,
-				TargetText: targetV1Text,
+				RawReply:        generated.Response,
+				GuildID:         req.GuildID,
+				ChannelID:       req.ChannelID,
+				BotID:           req.BotID,
+				TargetText:      targetV1Text,
+				TargetMessageID: req.TargetMessageID,
 			}); ok {
 				mediaURL = resolved.URL
 			}

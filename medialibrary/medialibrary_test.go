@@ -1970,7 +1970,7 @@ func TestIsGifRequest(t *testing.T) {
 		"<@12345> un gif stp",
 	}
 	for _, tc := range positive {
-		assert.True(t, IsGifRequest(tc), "expected %q to be detected as a gif request", tc)
+		assert.True(t, isGifRequest(tc), "expected %q to be detected as a gif request", tc)
 	}
 
 	negative := []string{
@@ -1992,7 +1992,7 @@ func TestIsGifRequest(t *testing.T) {
 		"<a:gif:123456789>",
 	}
 	for _, tc := range negative {
-		assert.False(t, IsGifRequest(tc), "expected %q NOT to be detected as a gif request", tc)
+		assert.False(t, isGifRequest(tc), "expected %q NOT to be detected as a gif request", tc)
 	}
 }
 
@@ -2050,9 +2050,10 @@ func TestResolveGifOnRequest(t *testing.T) {
 		svc := NewService(repo, embedder, cfg)
 
 		_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens frérot",
-			TargetText: "envoie un gif de chat stp",
+			GuildID:         "g1",
+			RawReply:        "tiens frérot",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
 		})
 		assert.False(t, ok)
 	})
@@ -2064,9 +2065,10 @@ func TestResolveGifOnRequest(t *testing.T) {
 		svc := NewService(repo, embedder, cfg)
 
 		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens bg",
-			TargetText: "envoie un gif de chat stp",
+			GuildID:         "g1",
+			RawReply:        "tiens bg",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, triggerURL, res.URL)
@@ -2080,9 +2082,10 @@ func TestResolveGifOnRequest(t *testing.T) {
 
 		logs := captureMediaLogs(t)
 		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "voilà pour toi",
-			TargetText: "un gif ?",
+			GuildID:         "g1",
+			RawReply:        "voilà pour toi",
+			TargetText:      "un gif ?",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, fallbackURL, res.URL)
@@ -2095,9 +2098,10 @@ func TestResolveGifOnRequest(t *testing.T) {
 		// Embedder error also falls back to random gif with reason=error.
 		logsErr := captureMediaLogs(t)
 		res, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "voilà",
-			TargetText: "envoie un gif casse",
+			GuildID:         "g1",
+			RawReply:        "voilà",
+			TargetText:      "envoie un gif casse",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, fallbackURL, res.URL)
@@ -2114,18 +2118,20 @@ func TestResolveGifOnRequest(t *testing.T) {
 
 		// Trigger match still succeeds without random_gif_fallback.
 		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens",
-			TargetText: "envoie un gif de chat stp",
+			GuildID:         "g1",
+			RawReply:        "tiens",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, triggerURL, res.URL)
 
 		// Trigger miss stays text-only when random_gif_fallback is false.
 		_, ok = svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens",
-			TargetText: "un gif ?",
+			GuildID:         "g1",
+			RawReply:        "tiens",
+			TargetText:      "un gif ?",
+			TargetMessageID: "m-1",
 		})
 		assert.False(t, ok)
 	})
@@ -2142,12 +2148,62 @@ func TestResolveGifOnRequest(t *testing.T) {
 			"https://tenor.com/view/cat-gif-123",
 		} {
 			_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-				GuildID:    "g1",
-				RawReply:   "mdr",
-				TargetText: target,
+				GuildID:         "g1",
+				RawReply:        "mdr",
+				TargetText:      target,
+				TargetMessageID: "m-1",
 			})
 			assert.False(t, ok, "must not trigger gif_on_request for %q", target)
 		}
+	})
+
+	t.Run("does not append gif when raw reply already contains a URL", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		for _, rawReply := range []string{
+			"tiens https://tenor.com/view/foo",
+			"https://media.giphy.com/media/123/giphy.gif",
+			"tiens www.example.com/funny.gif",
+		} {
+			embedder.resetCalls()
+			_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+				GuildID:         "g1",
+				RawReply:        rawReply,
+				TargetText:      "envoie un gif de chat stp",
+				TargetMessageID: "m-1",
+			})
+			assert.False(t, ok, "must not append second URL when raw reply %q already contains a URL", rawReply)
+			assert.Empty(t, embedder.callHistory(), "must skip lookup when raw reply %q already contains a URL", rawReply)
+		}
+	})
+
+	t.Run("does not trigger without TargetMessageID (reengage) while bare gif still uses TargetText", func(t *testing.T) {
+		cfg := defaultEnabledConfig()
+		cfg.GifOnRequest = true
+		cfg.RandomGifFallback = true
+		svc := NewService(repo, embedder, cfg)
+
+		// Reengage has no TargetMessageID: stale last human message asking for a gif must NOT trigger gif_on_request.
+		embedder.resetCalls()
+		_, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "personne ici ?",
+			TargetText: "envoie un gif de chat stp",
+		})
+		assert.False(t, ok)
+		assert.Empty(t, embedder.callHistory())
+
+		// Bare [gif] tag in reengage still uses TargetText for trigger lookup.
+		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
+			GuildID:    "g1",
+			RawReply:   "personne ici ? [gif]",
+			TargetText: "envoie un gif de chat stp",
+		})
+		require.True(t, ok)
+		assert.Equal(t, triggerURL, res.URL)
 	})
 
 	t.Run("does not override already resolved media URL", func(t *testing.T) {
@@ -2157,9 +2213,10 @@ func TestResolveGifOnRequest(t *testing.T) {
 		svc := NewService(repo, embedder, cfg)
 
 		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens [youtube: cool song]",
-			TargetText: "envoie un gif de chat stp",
+			GuildID:         "g1",
+			RawReply:        "tiens [youtube: cool song]",
+			TargetText:      "envoie un gif de chat stp",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, exactYoutubeURL, res.URL)
@@ -2172,13 +2229,12 @@ func TestResolveGifOnRequest(t *testing.T) {
 		svc := NewService(repo, embedder, cfg)
 
 		res, ok := svc.Resolve(ctx, ai.MediaResolveRequest{
-			GuildID:    "g1",
-			RawReply:   "tiens [youtube: unknown video]",
-			TargetText: "un gif ?",
+			GuildID:         "g1",
+			RawReply:        "tiens [youtube: unknown video]",
+			TargetText:      "un gif ?",
+			TargetMessageID: "m-1",
 		})
 		require.True(t, ok)
 		assert.Equal(t, fallbackURL, res.URL)
 	})
 }
-
-

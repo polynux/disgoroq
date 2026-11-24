@@ -346,6 +346,33 @@ func TestOllamaCompletionMediaResolver(t *testing.T) {
 		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
 		require.Len(t, resolver.reqs, 1)
 		assert.Equal(t, "envoie un gif stp", resolver.reqs[0].TargetText)
+		assert.Equal(t, "m-1", resolver.reqs[0].TargetMessageID)
+	})
+
+	t.Run("reengage leaves TargetMessageID empty while keeping TargetText", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"response":" coucou [gif]"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "[gif]", URL: "https://tenor.com/view/cat-smile-1"},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), &ChatRequest{
+			Model: "luciole", BotName: "Bot", GuildID: "g-1",
+			Messages: []Message{{Role: RoleUser, MessageID: "old-1", AuthorID: "1", AuthorNick: "Alice", Text: "envoie un gif stp"}},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "coucou\nhttps://tenor.com/view/cat-smile-1", resp.Content)
+		require.Len(t, resolver.reqs, 1)
+		assert.Empty(t, resolver.reqs[0].TargetMessageID)
+		assert.Equal(t, "envoie un gif stp", resolver.reqs[0].TargetText)
 	})
 
 	t.Run("empty tagless attempt 0 retries before calling resolver", func(t *testing.T) {
@@ -371,11 +398,13 @@ func TestOllamaCompletionMediaResolver(t *testing.T) {
 
 		resp, err := provider.Chat(context.Background(), &ChatRequest{
 			Model: "luciole", BotName: "Bot", GuildID: "g-1",
-			Messages: []Message{{Role: RoleUser, AuthorID: "1", AuthorNick: "Alice", Text: "un gif ?"}},
+			TargetMessageID: "m-1",
+			Messages:        []Message{{Role: RoleUser, MessageID: "m-1", AuthorID: "1", AuthorNick: "Alice", Text: "un gif ?"}},
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 2, calls)
 		assert.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "m-1", resolver.reqs[0].TargetMessageID)
 		assert.Equal(t, "voilà\nhttps://tenor.com/view/cat-smile-1", resp.Content)
 		assert.Equal(t, "https://tenor.com/view/cat-smile-1", resp.MediaURL)
 	})
