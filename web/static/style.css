@@ -510,6 +510,7 @@ th {
   background: var(--surface-subtle);
   color: var(--text-muted);
   word-break: break-all;
+}
 
 .tabs {
   display: flex;
