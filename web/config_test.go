@@ -590,3 +590,49 @@ func TestConfigSaveRestartRequiredBannerListsTouchedFields(t *testing.T) {
 	assert.Contains(t, body, "reengage.check_interval_seconds")
 	assert.NotContains(t, body, "reengage.check_interval_seconds, reengage.default_inactivity_minutes")
 }
+
+func TestWriteConfigAtomicallyFollowsSymlinkAndUpdatesBackupMode(t *testing.T) {
+	targetDir := t.TempDir()
+	linkDir := t.TempDir()
+
+	targetPath := filepath.Join(targetDir, "real-config.yaml")
+	linkPath := filepath.Join(linkDir, "config.yaml")
+	bakPath := targetPath + ".bak"
+
+	origData := []byte("votes:\n  probability: 0.25\n")
+	newData := []byte("votes:\n  probability: 0.5\n")
+
+	require.NoError(t, os.WriteFile(targetPath, origData, 0o600))
+	// Pre-create .bak with a wider mode (0644) to verify it gets atomically replaced with 0600.
+	require.NoError(t, os.WriteFile(bakPath, []byte("stale backup"), 0o644))
+	require.NoError(t, os.Symlink(targetPath, linkPath))
+
+	require.NoError(t, writeConfigAtomically(linkPath, origData, newData, 0o600))
+
+	// Symlink must still be a symlink pointing to targetPath.
+	lstatInfo, err := os.Lstat(linkPath)
+	require.NoError(t, err)
+	assert.NotZero(t, lstatInfo.Mode()&os.ModeSymlink, "config.yaml must remain a symlink")
+
+	// Target file is updated with newData and keeps mode 0600.
+	gotTarget, err := os.ReadFile(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, newData, gotTarget)
+
+	targetInfo, err := os.Stat(targetPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), targetInfo.Mode().Perm())
+
+	// Backup file in targetDir has origData and now has mode 0600 (not 0644).
+	gotBak, err := os.ReadFile(bakPath)
+	require.NoError(t, err)
+	assert.Equal(t, origData, gotBak)
+
+	bakInfo, err := os.Stat(bakPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), bakInfo.Mode().Perm())
+
+	// No stray .bak created in linkDir.
+	_, strayErr := os.Stat(linkPath + ".bak")
+	assert.True(t, os.IsNotExist(strayErr))
+}

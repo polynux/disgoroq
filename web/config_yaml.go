@@ -1210,21 +1210,35 @@ func yamlNodesSemanticallyEqual(a, b *yaml.Node) bool {
 	}
 }
 
-// writeConfigAtomically copies the current bytes to <path>.bak and atomically
-// writes newData to path via a temporary file in the same directory + fsync + rename,
-// preserving the original file mode.
+// writeConfigAtomically resolves symlinks, atomically writes the backup to
+// <target>.bak, atomically replaces <target> via temp+chmod+fsync+rename, and
+// fsyncs the target directory.
 func writeConfigAtomically(path string, origData, newData []byte, mode os.FileMode) error {
 	if mode == 0 {
 		mode = 0o600
 	}
 
-	bakPath := path + ".bak"
-	if err := os.WriteFile(bakPath, origData, mode); err != nil {
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("resolve config path %s: %w", path, err)
+	}
+
+	bakPath := resolvedPath + ".bak"
+	if err := writeFileAtomically(bakPath, origData, mode); err != nil {
 		return fmt.Errorf("write backup %s: %w", bakPath, err)
 	}
 
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, ".config.yaml.tmp-*")
+	if err := writeFileAtomically(resolvedPath, newData, mode); err != nil {
+		return err
+	}
+
+	return syncDir(filepath.Dir(resolvedPath))
+}
+
+func writeFileAtomically(targetPath string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(targetPath)
+	base := filepath.Base(targetPath)
+	tmpFile, err := os.CreateTemp(dir, "."+base+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -1236,7 +1250,7 @@ func writeConfigAtomically(path string, origData, newData []byte, mode os.FileMo
 		}
 	}()
 
-	if _, err := tmpFile.Write(newData); err != nil {
+	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("write temp file: %w", err)
 	}
@@ -1251,9 +1265,25 @@ func writeConfigAtomically(path string, origData, newData []byte, mode os.FileMo
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename temp file over %s: %w", path, err)
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return fmt.Errorf("rename temp file over %s: %w", targetPath, err)
 	}
 	cleanup = false
+	return nil
+}
+
+func syncDir(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open dir %s for sync: %w", dir, err)
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	if syncErr != nil {
+		return fmt.Errorf("sync dir %s: %w", dir, syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close dir %s: %w", dir, closeErr)
+	}
 	return nil
 }
