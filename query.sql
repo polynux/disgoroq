@@ -576,42 +576,9 @@ WHERE url = ? AND guild_id = ?;
 
 
 -- Web admin data views
--- These queries never select embedding blobs (conversation_summaries.embedding,
--- media_library.description_embedding/trigger_embedding) so no vector data is
--- loaded for the browser. Every list query is bounded by LIMIT/OFFSET.
-
--- name: ListConversationSummaries :many
-SELECT cs.id,
-       cs.guild_id,
-       cs.user_id,
-       cs.summary_text,
-       cs.message_count,
-       cs.start_message_id,
-       cs.end_message_id,
-       cs.created_at,
-       cs.updated_at,
-       CAST(COALESCE(
-           (SELECT mb.author_nick
-            FROM message_buffer mb
-            WHERE mb.guild_id = cs.guild_id
-              AND mb.user_id = cs.user_id
-              AND mb.author_nick != ''
-            ORDER BY mb.timestamp DESC
-            LIMIT 1),
-           (SELECT dm.author_username
-            FROM discord_messages dm
-            WHERE dm.guild_id = cs.guild_id
-              AND dm.author_id = cs.user_id
-              AND dm.author_username != ''
-            ORDER BY dm.created_at DESC
-            LIMIT 1),
-           ''
-       ) AS TEXT) AS author_name
-FROM conversation_summaries cs
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR cs.guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(user_id) AS TEXT) = '' OR cs.user_id = CAST(sqlc.arg(user_id) AS TEXT))
-ORDER BY cs.updated_at DESC, cs.id DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
+-- Admin list queries are built in database/data_views.go and
+-- medialibrary/repository.go so only supplied filters become predicates.
+-- These statement-level queries never select embedding blobs.
 
 -- name: DeleteConversationSummaryByID :execrows
 DELETE FROM conversation_summaries
@@ -621,101 +588,15 @@ WHERE id = ?;
 DELETE FROM conversation_summaries
 WHERE guild_id = ? AND user_id = ?;
 
--- name: ListMessageBuffer :many
-SELECT id, guild_id, channel_id, message_id, user_id, author_nick, content,
-       has_image, image_description, timestamp, processed
-FROM message_buffer
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(channel_id) AS TEXT) = '' OR channel_id = CAST(sqlc.arg(channel_id) AS TEXT))
-  AND (CAST(sqlc.arg(user_id) AS TEXT) = '' OR user_id = CAST(sqlc.arg(user_id) AS TEXT))
-  AND (CAST(sqlc.arg(processed_filter) AS INTEGER) = -1 OR COALESCE(processed, 0) = CAST(sqlc.arg(processed_filter) AS INTEGER))
-ORDER BY timestamp DESC, id DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: ListDiscordMessages :many
-SELECT message_id, channel_id, guild_id, author_id, author_username, content,
-       referenced_message_id, message_json, created_at, edited_at, deleted_at
-FROM discord_messages
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(channel_id) AS TEXT) = '' OR channel_id = CAST(sqlc.arg(channel_id) AS TEXT))
-  AND (CAST(sqlc.arg(author_id) AS TEXT) = '' OR author_id = CAST(sqlc.arg(author_id) AS TEXT))
-  AND (CAST(sqlc.arg(content_filter) AS TEXT) = ''
-       OR INSTR(LOWER(content), LOWER(CAST(sqlc.arg(content_filter) AS TEXT))) > 0)
-  AND (CAST(sqlc.arg(include_deleted) AS INTEGER) = 1 OR deleted_at IS NULL)
-ORDER BY created_at DESC, CAST(message_id AS INTEGER) DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: ListAttachmentCache :many
-SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
-       provider, model, instruction_version, content, created_at, updated_at
-FROM attachment_cache
-WHERE (CAST(sqlc.arg(cache_kind) AS TEXT) = '' OR cache_kind = CAST(sqlc.arg(cache_kind) AS TEXT))
-  AND (CAST(sqlc.arg(provider) AS TEXT) = '' OR provider = CAST(sqlc.arg(provider) AS TEXT))
-  AND (CAST(sqlc.arg(model) AS TEXT) = '' OR model = CAST(sqlc.arg(model) AS TEXT))
-ORDER BY created_at DESC, id DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
 -- name: DeleteAttachmentCacheByID :execrows
 DELETE FROM attachment_cache
 WHERE id = ?;
-
--- name: ListMessageVotesNewest :many
-SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
-       content, reply_to_message_id, reply_to_content, provider, model, good_count,
-       bad_count, message_created_at, created_at, updated_at
-FROM message_votes
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(bot_only) AS INTEGER) = 0 OR is_bot_reply = 1)
-ORDER BY created_at DESC, message_id
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: ListMessageVotesBest :many
-SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
-       content, reply_to_message_id, reply_to_content, provider, model, good_count,
-       bad_count, message_created_at, created_at, updated_at
-FROM message_votes
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(bot_only) AS INTEGER) = 0 OR is_bot_reply = 1)
-ORDER BY good_count DESC, bad_count DESC, created_at DESC, message_id
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: ListMessageVotesWorst :many
-SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
-       content, reply_to_message_id, reply_to_content, provider, model, good_count,
-       bad_count, message_created_at, created_at, updated_at
-FROM message_votes
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(bot_only) AS INTEGER) = 0 OR is_bot_reply = 1)
-ORDER BY bad_count DESC, good_count DESC, created_at DESC, message_id
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: ListBotEventTypes :many
 SELECT DISTINCT event_type
 FROM bot_events
 ORDER BY event_type
 LIMIT 500;
-
--- name: ListBotEvents :many
-SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
-FROM bot_events
-WHERE timestamp >= sqlc.arg(ts_from)
-  AND timestamp <= sqlc.arg(ts_to)
-  AND (CAST(sqlc.arg(event_type) AS TEXT) = '' OR event_type = CAST(sqlc.arg(event_type) AS TEXT))
-  AND (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(has_error) AS INTEGER) = 0 OR (error IS NOT NULL AND error != ''))
-ORDER BY timestamp DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
-
--- name: ListMediaLibrary :many
-SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
-FROM media_library
-WHERE (CAST(sqlc.arg(guild_id) AS TEXT) = '' OR guild_id = CAST(sqlc.arg(guild_id) AS TEXT))
-  AND (CAST(sqlc.arg(kind) AS TEXT) = '' OR kind = CAST(sqlc.arg(kind) AS TEXT))
-  AND (CAST(sqlc.arg(text_filter) AS TEXT) = ''
-       OR INSTR(LOWER(description), LOWER(sqlc.arg(text_filter))) > 0
-       OR INSTR(LOWER(trigger_text), LOWER(sqlc.arg(text_filter))) > 0)
-ORDER BY last_seen DESC, id DESC
-LIMIT sqlc.arg(row_limit) OFFSET sqlc.arg(row_offset);
 
 -- name: UpdateMediaLibraryText :execrows
 UPDATE media_library

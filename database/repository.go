@@ -14,22 +14,25 @@ import (
 
 type Repository struct {
 	queries *db.Queries
+	conn    *sql.DB
 }
 
 func NewRepository() *Repository {
 	return &Repository{
 		queries: utils.Q,
+		conn:    utils.GetDB(),
 	}
 }
 
 func NewRepositoryWithDB(database *sql.DB) *Repository {
 	return &Repository{
 		queries: db.New(database),
+		conn:    database,
 	}
 }
 
 func (r *Repository) GetDB() *sql.DB {
-	return utils.GetDB()
+	return r.conn
 }
 
 const (

@@ -44,11 +44,12 @@ type LookupFilter struct {
 // Repository wraps sqlc queries for media_library and cached discord_messages.
 type Repository struct {
 	queries *db.Queries
+	conn    *sql.DB
 }
 
 // NewRepository creates a Repository backed by dbConn.
 func NewRepository(dbConn *sql.DB) *Repository {
-	return &Repository{queries: db.New(dbConn)}
+	return &Repository{queries: db.New(dbConn), conn: dbConn}
 }
 
 func nullableBlob(b []byte) any {
@@ -185,37 +186,68 @@ type ListFilter struct {
 }
 
 // ListEntries pages through media_library rows, newest last_seen first.
-// Embedding blobs are not selected. hasMore reports whether another page exists.
+// Only supplied filters become predicates. Embedding blobs are not selected.
+// hasMore reports whether another page exists.
 func (r *Repository) ListEntries(ctx context.Context, filter ListFilter, limit, offset int) ([]Entry, bool, error) {
-	rows, err := r.queries.ListMediaLibrary(ctx, db.ListMediaLibraryParams{
-		GuildID:    filter.GuildID,
-		Kind:       filter.Kind,
-		TextFilter: filter.Text,
-		RowLimit:   int64(limit + 1),
-		RowOffset:  int64(offset),
-	})
+	var (
+		clauses []string
+		args    []any
+	)
+	if filter.GuildID != "" {
+		clauses = append(clauses, "guild_id = ?")
+		args = append(args, filter.GuildID)
+	}
+	if filter.Kind != "" {
+		clauses = append(clauses, "kind = ?")
+		args = append(args, filter.Kind)
+	}
+	if filter.Text != "" {
+		clauses = append(clauses, "(INSTR(LOWER(description), LOWER(?)) > 0 OR INSTR(LOWER(trigger_text), LOWER(?)) > 0)")
+		args = append(args, filter.Text, filter.Text)
+	}
+
+	query := `
+		SELECT id, guild_id, url, kind, description, uses, first_seen, last_seen, trigger_text
+		FROM media_library`
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	query += `
+		ORDER BY last_seen DESC, id DESC
+		LIMIT ? OFFSET ?`
+	args = append(args, limit+1, offset)
+
+	rows, err := r.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []Entry
+	for rows.Next() {
+		var entry Entry
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.GuildID,
+			&entry.URL,
+			&entry.Kind,
+			&entry.Description,
+			&entry.Uses,
+			&entry.FirstSeen,
+			&entry.LastSeen,
+			&entry.TriggerText,
+		); err != nil {
+			return nil, false, err
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]Entry, len(rows))
-	for i, row := range rows {
-		out[i] = Entry{
-			ID:          row.ID,
-			GuildID:     row.GuildID,
-			URL:         row.Url,
-			Kind:        row.Kind,
-			Description: row.Description,
-			Uses:        row.Uses,
-			FirstSeen:   row.FirstSeen,
-			LastSeen:    row.LastSeen,
-			TriggerText: row.TriggerText,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }

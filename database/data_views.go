@@ -2,14 +2,18 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"polynux/disgoroq/db"
 )
 
-// Read-only data views backing the web admin /data pages. The row types below
-// deliberately exclude embedding blobs so they never reach the browser.
+// Read-only data views backing the web admin /data pages. List queries are
+// hand-built here so that only supplied filters become predicates and SQLite
+// can use the table indexes. The row types below deliberately exclude
+// embedding blobs so they never reach the browser.
 
 // SummaryView is a conversation_summaries row with a best-effort author name.
 type SummaryView struct {
@@ -81,36 +85,110 @@ type EventListFilter struct {
 	HasError  bool
 }
 
+// whereBuilder accumulates optional predicates and their arguments.
+type whereBuilder struct {
+	clauses []string
+	args    []any
+}
+
+func (b *whereBuilder) add(clause string, args ...any) {
+	b.clauses = append(b.clauses, clause)
+	b.args = append(b.args, args...)
+}
+
+func (b *whereBuilder) clause() string {
+	if len(b.clauses) == 0 {
+		return ""
+	}
+	return " WHERE " + strings.Join(b.clauses, " AND ")
+}
+
+// queryArgs returns the predicate arguments followed by extra (LIMIT/OFFSET).
+func (b *whereBuilder) queryArgs(extra ...any) []any {
+	args := make([]any, 0, len(b.args)+len(extra))
+	args = append(args, b.args...)
+	args = append(args, extra...)
+	return args
+}
+
 func (r *Repository) ListConversationSummaries(ctx context.Context, guildID, userID string, limit, offset int) ([]SummaryView, bool, error) {
-	rows, err := r.queries.ListConversationSummaries(ctx, db.ListConversationSummariesParams{
-		GuildID:   guildID,
-		UserID:    userID,
-		RowLimit:  int64(limit + 1),
-		RowOffset: int64(offset),
-	})
+	var where whereBuilder
+	if guildID != "" {
+		where.add("cs.guild_id = ?", guildID)
+	}
+	if userID != "" {
+		where.add("cs.user_id = ?", userID)
+	}
+
+	query := `
+		SELECT cs.id,
+		       cs.guild_id,
+		       cs.user_id,
+		       cs.summary_text,
+		       cs.message_count,
+		       cs.start_message_id,
+		       cs.end_message_id,
+		       cs.created_at,
+		       cs.updated_at,
+		       COALESCE(
+		           (SELECT mb.author_nick
+		            FROM message_buffer mb
+		            WHERE mb.guild_id = cs.guild_id
+		              AND mb.user_id = cs.user_id
+		              AND mb.author_nick != ''
+		            ORDER BY mb.timestamp DESC
+		            LIMIT 1),
+		           (SELECT dm.author_username
+		            FROM discord_messages dm
+		            WHERE dm.guild_id = cs.guild_id
+		              AND dm.author_id = cs.user_id
+		              AND dm.author_username != ''
+		            ORDER BY dm.created_at DESC
+		            LIMIT 1),
+		           ''
+		       ) AS author_name
+		FROM conversation_summaries cs` + where.clause() + `
+		ORDER BY cs.updated_at DESC, cs.id DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []SummaryView
+	for rows.Next() {
+		var (
+			row          SummaryView
+			startMessage sql.NullString
+			endMessage   sql.NullString
+		)
+		if err := rows.Scan(
+			&row.ID,
+			&row.GuildID,
+			&row.UserID,
+			&row.SummaryText,
+			&row.MessageCount,
+			&startMessage,
+			&endMessage,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+			&row.AuthorName,
+		); err != nil {
+			return nil, false, err
+		}
+		row.StartMessageID = startMessage.String
+		row.EndMessageID = endMessage.String
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]SummaryView, len(rows))
-	for i, row := range rows {
-		out[i] = SummaryView{
-			ID:             row.ID,
-			GuildID:        row.GuildID,
-			UserID:         row.UserID,
-			AuthorName:     row.AuthorName,
-			SummaryText:    row.SummaryText,
-			MessageCount:   row.MessageCount,
-			StartMessageID: row.StartMessageID.String,
-			EndMessageID:   row.EndMessageID.String,
-			CreatedAt:      row.CreatedAt,
-			UpdatedAt:      row.UpdatedAt,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
@@ -132,121 +210,196 @@ func (r *Repository) DeleteConversationSummariesForUser(ctx context.Context, gui
 // ListMessageBuffer returns buffered messages, newest first. processed is
 // -1 (all), 0 (unprocessed) or 1 (processed).
 func (r *Repository) ListMessageBuffer(ctx context.Context, guildID, channelID, userID string, processed int, limit, offset int) ([]BufferMessageView, bool, error) {
-	rows, err := r.queries.ListMessageBuffer(ctx, db.ListMessageBufferParams{
-		GuildID:         guildID,
-		ChannelID:       channelID,
-		UserID:          userID,
-		ProcessedFilter: int64(processed),
-		RowLimit:        int64(limit + 1),
-		RowOffset:       int64(offset),
-	})
+	var where whereBuilder
+	if guildID != "" {
+		where.add("guild_id = ?", guildID)
+	}
+	if channelID != "" {
+		where.add("channel_id = ?", channelID)
+	}
+	if userID != "" {
+		where.add("user_id = ?", userID)
+	}
+	if processed >= 0 {
+		where.add("processed = ?", processed)
+	}
+
+	query := `
+		SELECT id, guild_id, channel_id, message_id, user_id, author_nick, content,
+		       has_image, image_description, timestamp, processed
+		FROM message_buffer` + where.clause() + `
+		ORDER BY timestamp DESC, id DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []BufferMessageView
+	for rows.Next() {
+		var (
+			row              BufferMessageView
+			hasImage         sql.NullBool
+			imageDescription sql.NullString
+			processedFlag    sql.NullBool
+		)
+		if err := rows.Scan(
+			&row.ID,
+			&row.GuildID,
+			&row.ChannelID,
+			&row.MessageID,
+			&row.UserID,
+			&row.AuthorNick,
+			&row.Content,
+			&hasImage,
+			&imageDescription,
+			&row.Timestamp,
+			&processedFlag,
+		); err != nil {
+			return nil, false, err
+		}
+		row.HasImage = hasImage.Bool
+		row.ImageDescription = imageDescription.String
+		row.Processed = processedFlag.Bool
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]BufferMessageView, len(rows))
-	for i, row := range rows {
-		out[i] = BufferMessageView{
-			ID:               row.ID,
-			GuildID:          row.GuildID,
-			ChannelID:        row.ChannelID,
-			MessageID:        row.MessageID,
-			UserID:           row.UserID,
-			AuthorNick:       row.AuthorNick,
-			Content:          row.Content,
-			HasImage:         row.HasImage.Bool,
-			ImageDescription: row.ImageDescription.String,
-			Timestamp:        row.Timestamp,
-			Processed:        row.Processed.Bool,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
 
 // ListDiscordMessages returns cached Discord messages, newest first.
 func (r *Repository) ListDiscordMessages(ctx context.Context, guildID, channelID, authorID, text string, includeDeleted bool, limit, offset int) ([]DiscordMessageView, bool, error) {
-	includeDeletedArg := int64(0)
-	if includeDeleted {
-		includeDeletedArg = 1
+	var where whereBuilder
+	if guildID != "" {
+		where.add("guild_id = ?", guildID)
+	}
+	if channelID != "" {
+		where.add("channel_id = ?", channelID)
+	}
+	if authorID != "" {
+		where.add("author_id = ?", authorID)
+	}
+	if text != "" {
+		where.add("INSTR(LOWER(content), LOWER(?)) > 0", text)
+	}
+	if !includeDeleted {
+		where.add("deleted_at IS NULL")
 	}
 
-	rows, err := r.queries.ListDiscordMessages(ctx, db.ListDiscordMessagesParams{
-		GuildID:        guildID,
-		ChannelID:      channelID,
-		AuthorID:       authorID,
-		ContentFilter:  text,
-		IncludeDeleted: includeDeletedArg,
-		RowLimit:       int64(limit + 1),
-		RowOffset:      int64(offset),
-	})
+	query := `
+		SELECT message_id, channel_id, guild_id, author_id, author_username, content,
+		       referenced_message_id, message_json, created_at, edited_at, deleted_at
+		FROM discord_messages` + where.clause() + `
+		ORDER BY created_at DESC, message_id DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []DiscordMessageView
+	for rows.Next() {
+		var (
+			row       DiscordMessageView
+			editedAt  sql.NullInt64
+			deletedAt sql.NullInt64
+		)
+		if err := rows.Scan(
+			&row.MessageID,
+			&row.ChannelID,
+			&row.GuildID,
+			&row.AuthorID,
+			&row.AuthorUsername,
+			&row.Content,
+			&row.ReferencedMessageID,
+			&row.MessageJSON,
+			&row.CreatedAt,
+			&editedAt,
+			&deletedAt,
+		); err != nil {
+			return nil, false, err
+		}
+		row.EditedAt = editedAt.Int64
+		row.DeletedAt = deletedAt.Int64
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]DiscordMessageView, len(rows))
-	for i, row := range rows {
-		out[i] = DiscordMessageView{
-			MessageID:           row.MessageID,
-			ChannelID:           row.ChannelID,
-			GuildID:             row.GuildID,
-			AuthorID:            row.AuthorID,
-			AuthorUsername:      row.AuthorUsername,
-			Content:             row.Content,
-			ReferencedMessageID: row.ReferencedMessageID,
-			MessageJSON:         row.MessageJson,
-			CreatedAt:           row.CreatedAt,
-			EditedAt:            row.EditedAt.Int64,
-			DeletedAt:           row.DeletedAt.Int64,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
 
 // ListAttachmentCache returns cached attachment results, newest first.
 func (r *Repository) ListAttachmentCache(ctx context.Context, kind, provider, model string, limit, offset int) ([]AttachmentCacheView, bool, error) {
-	rows, err := r.queries.ListAttachmentCache(ctx, db.ListAttachmentCacheParams{
-		CacheKind: kind,
-		Provider:  provider,
-		Model:     model,
-		RowLimit:  int64(limit + 1),
-		RowOffset: int64(offset),
-	})
+	var where whereBuilder
+	if kind != "" {
+		where.add("cache_kind = ?", kind)
+	}
+	if provider != "" {
+		where.add("provider = ?", provider)
+	}
+	if model != "" {
+		where.add("model = ?", model)
+	}
+
+	query := `
+		SELECT id, cache_kind, attachment_key, source_url, filename, content_type, size_bytes,
+		       provider, model, instruction_version, content, created_at, updated_at
+		FROM attachment_cache` + where.clause() + `
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []AttachmentCacheView
+	for rows.Next() {
+		var row AttachmentCacheView
+		if err := rows.Scan(
+			&row.ID,
+			&row.CacheKind,
+			&row.AttachmentKey,
+			&row.SourceURL,
+			&row.Filename,
+			&row.ContentType,
+			&row.SizeBytes,
+			&row.Provider,
+			&row.Model,
+			&row.InstructionVersion,
+			&row.Content,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, false, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]AttachmentCacheView, len(rows))
-	for i, row := range rows {
-		out[i] = AttachmentCacheView{
-			ID:                 row.ID,
-			CacheKind:          row.CacheKind,
-			AttachmentKey:      row.AttachmentKey,
-			SourceURL:          row.SourceUrl,
-			Filename:           row.Filename,
-			ContentType:        row.ContentType,
-			SizeBytes:          row.SizeBytes,
-			Provider:           row.Provider,
-			Model:              row.Model,
-			InstructionVersion: row.InstructionVersion,
-			Content:            row.Content,
-			CreatedAt:          row.CreatedAt,
-			UpdatedAt:          row.UpdatedAt,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
@@ -258,108 +411,152 @@ func (r *Repository) DeleteAttachmentCacheByID(ctx context.Context, id int64) (i
 
 // ListMessageVotes returns votes ordered by sort: newest, good, or bad.
 func (r *Repository) ListMessageVotes(ctx context.Context, guildID string, botOnly bool, sort string, limit, offset int) ([]MessageVote, bool, error) {
-	botOnlyArg := int64(0)
+	var where whereBuilder
+	if guildID != "" {
+		where.add("guild_id = ?", guildID)
+	}
 	if botOnly {
-		botOnlyArg = 1
+		where.add("is_bot_reply = 1")
 	}
 
-	var (
-		rows []db.MessageVote
-		err  error
-	)
-	params := db.ListMessageVotesNewestParams{
-		GuildID:   guildID,
-		BotOnly:   botOnlyArg,
-		RowLimit:  int64(limit + 1),
-		RowOffset: int64(offset),
-	}
+	orderBy := "created_at DESC, message_id"
 	switch sort {
 	case "good":
-		rows, err = r.queries.ListMessageVotesBest(ctx, db.ListMessageVotesBestParams(params))
+		orderBy = "good_count DESC, bad_count DESC, created_at DESC, message_id"
 	case "bad":
-		rows, err = r.queries.ListMessageVotesWorst(ctx, db.ListMessageVotesWorstParams(params))
-	default:
-		rows, err = r.queries.ListMessageVotesNewest(ctx, params)
+		orderBy = "bad_count DESC, good_count DESC, created_at DESC, message_id"
 	}
+
+	query := `
+		SELECT message_id, guild_id, channel_id, author_id, author_name, is_bot_reply,
+		       content, reply_to_message_id, reply_to_content, provider, model, good_count,
+		       bad_count, message_created_at, created_at, updated_at
+		FROM message_votes` + where.clause() + `
+		ORDER BY ` + orderBy + `
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
+	var out []MessageVote
+	for rows.Next() {
+		var row MessageVote
+		if err := rows.Scan(
+			&row.MessageID,
+			&row.GuildID,
+			&row.ChannelID,
+			&row.AuthorID,
+			&row.AuthorName,
+			&row.IsBotReply,
+			&row.Content,
+			&row.ReplyToMessageID,
+			&row.ReplyToContent,
+			&row.Provider,
+			&row.Model,
+			&row.GoodCount,
+			&row.BadCount,
+			&row.MessageCreatedAt,
+			&row.CreatedAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, false, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
 	}
 
-	out := make([]MessageVote, len(rows))
-	for i, row := range rows {
-		out[i] = MessageVote{
-			MessageID:        row.MessageID,
-			GuildID:          row.GuildID,
-			ChannelID:        row.ChannelID,
-			AuthorID:         row.AuthorID,
-			AuthorName:       row.AuthorName,
-			IsBotReply:       row.IsBotReply,
-			Content:          row.Content,
-			ReplyToMessageID: row.ReplyToMessageID,
-			ReplyToContent:   row.ReplyToContent,
-			Provider:         row.Provider,
-			Model:            row.Model,
-			GoodCount:        row.GoodCount,
-			BadCount:         row.BadCount,
-			MessageCreatedAt: row.MessageCreatedAt,
-			CreatedAt:        row.CreatedAt,
-			UpdatedAt:        row.UpdatedAt,
-		}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
 
 // ListBotEvents returns events inside the filter's time range, newest first.
-// The timestamp range keeps the query on idx_bot_events_timestamp and the
-// LIMIT/OFFSET bound is always applied.
+// The timestamp range keeps the query on idx_bot_events_timestamp, optional
+// predicates are only emitted when set, and LIMIT/OFFSET is always applied.
 func (r *Repository) ListBotEvents(ctx context.Context, filter EventListFilter, limit, offset int) ([]BotEvent, bool, error) {
-	hasError := int64(0)
+	where := whereBuilder{}
+	where.add("timestamp >= ?", filter.From)
+	where.add("timestamp <= ?", filter.To)
+	if filter.EventType != "" {
+		where.add("event_type = ?", filter.EventType)
+	}
+	if filter.GuildID != "" {
+		where.add("guild_id = ?", filter.GuildID)
+	}
 	if filter.HasError {
-		hasError = 1
+		where.add("error IS NOT NULL AND error != ''")
 	}
 
-	rows, err := r.queries.ListBotEvents(ctx, db.ListBotEventsParams{
-		TsFrom:    filter.From,
-		TsTo:      filter.To,
-		EventType: filter.EventType,
-		GuildID:   filter.GuildID,
-		HasError:  hasError,
-		RowLimit:  int64(limit + 1),
-		RowOffset: int64(offset),
-	})
+	query := `
+		SELECT timestamp, event_type, guild_id, channel_id, message_id, user_id, details, duration_ms, error
+		FROM bot_events` + where.clause() + `
+		ORDER BY timestamp DESC, id DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := r.conn.QueryContext(ctx, query, where.queryArgs(limit+1, offset)...)
 	if err != nil {
 		return nil, false, err
 	}
+	defer rows.Close()
 
-	hasMore := len(rows) > limit
-	if hasMore {
-		rows = rows[:limit]
-	}
-
-	out := make([]BotEvent, len(rows))
-	for i, row := range rows {
-		event := BotEvent{
-			Timestamp:  time.Unix(row.Timestamp, 0),
-			EventType:  EventType(row.EventType),
-			GuildID:    row.GuildID.String,
-			ChannelID:  row.ChannelID.String,
-			MessageID:  row.MessageID.String,
-			UserID:     row.UserID.String,
-			DurationMS: row.DurationMs.Int64,
-			Error:      row.Error.String,
+	var out []BotEvent
+	for rows.Next() {
+		var (
+			row        BotEvent
+			timestamp  int64
+			eventType  string
+			guildID    sql.NullString
+			channelID  sql.NullString
+			messageID  sql.NullString
+			userID     sql.NullString
+			details    sql.NullString
+			durationMS sql.NullInt64
+			errorText  sql.NullString
+		)
+		if err := rows.Scan(
+			&timestamp,
+			&eventType,
+			&guildID,
+			&channelID,
+			&messageID,
+			&userID,
+			&details,
+			&durationMS,
+			&errorText,
+		); err != nil {
+			return nil, false, err
 		}
-		if row.Details.Valid && row.Details.String != "" {
-			var details EventDetails
-			if err := json.Unmarshal([]byte(row.Details.String), &details); err == nil {
-				event.Details = &details
+
+		row.Timestamp = time.Unix(timestamp, 0)
+		row.EventType = EventType(eventType)
+		row.GuildID = guildID.String
+		row.ChannelID = channelID.String
+		row.MessageID = messageID.String
+		row.UserID = userID.String
+		row.DurationMS = durationMS.Int64
+		row.Error = errorText.String
+		if details.Valid && details.String != "" {
+			var eventDetails EventDetails
+			if err := json.Unmarshal([]byte(details.String), &eventDetails); err == nil {
+				row.Details = &eventDetails
 			}
 		}
-		out[i] = event
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
 	}
 	return out, hasMore, nil
 }
