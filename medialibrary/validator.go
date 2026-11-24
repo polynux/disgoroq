@@ -610,7 +610,8 @@ func isBlockedLinkIP(addr netip.Addr) bool {
 	if !addr.IsValid() {
 		return true
 	}
-	addr = addr.Unmap()
+	// netip.Prefix.Contains is false for zoned addresses (fe80::1%eth0): drop the zone first.
+	addr = addr.WithZone("").Unmap()
 	if addr.Is4() {
 		for _, prefix := range extraBlockedV4 {
 			if prefix.Contains(addr) {
