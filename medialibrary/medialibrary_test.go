@@ -34,8 +34,11 @@ func setupMediaTestDB(t *testing.T) (*sql.DB, *Repository) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	conn, err := sql.Open("libsql", "file:"+dbPath)
+	conn, err := sql.Open("libsql", "file:"+dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
 	require.NoError(t, err)
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
+	conn.SetConnMaxLifetime(time.Hour)
 
 	schemaBytes, err := os.ReadFile(filepath.Join("..", "schema.sql"))
 	require.NoError(t, err)
