@@ -37,8 +37,12 @@ const (
 )
 
 type liveJob struct {
-	msg        discord.Message
-	updateOnly bool
+	msg           discord.Message
+	updateOnly    bool
+	deleteOnly    bool
+	deleteURL     string
+	deleteGuildID string
+	deleteStatus  int
 }
 
 type seenPair struct {
@@ -112,12 +116,11 @@ type Service struct {
 // NewService creates a media library service.
 func NewService(repo *Repository, embedder Embedder, cfg config.MediaLibraryConfig) *Service {
 	return &Service{
-		repo:       repo,
-		embedder:   embedder,
-		cfg:        cfg,
-		httpClient: &http.Client{},
-		queueCap:   liveQueueSize,
-		seenLRU:    newSeenPairLRU(seenPairsCapacity),
+		repo:     repo,
+		embedder: embedder,
+		cfg:      cfg,
+		queueCap: liveQueueSize,
+		seenLRU:  newSeenPairLRU(seenPairsCapacity),
 	}
 }
 
@@ -149,11 +152,21 @@ func (s *Service) runWorker(jobs <-chan liveJob) {
 func (s *Service) processLiveJob(job liveJob) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Error("Recovered panic in media library worker",
-				zap.String("message_id", job.msg.ID.String()),
-				zap.Any("panic", r))
+			if job.deleteOnly {
+				logger.Error("Recovered panic in media library worker",
+					zap.String("delete_url", job.deleteURL),
+					zap.Any("panic", r))
+			} else {
+				logger.Error("Recovered panic in media library worker",
+					zap.String("message_id", job.msg.ID.String()),
+					zap.Any("panic", r))
+			}
 		}
 	}()
+	if job.deleteOnly {
+		s.deleteDeadEntry(job.deleteURL, job.deleteGuildID, job.deleteStatus)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveJobTimeout)
 	defer cancel()
 
@@ -188,9 +201,15 @@ func (s *Service) enqueue(job liveJob) bool {
 		return true
 	default:
 		s.workerMu.Unlock()
-		logger.Debug("Media library live queue full, dropping message",
-			zap.String("message_id", job.msg.ID.String()),
-			zap.Bool("update_only", job.updateOnly))
+		if job.deleteOnly {
+			logger.Debug("Media library queue full, dropping dead link delete",
+				zap.String("url", job.deleteURL),
+				zap.String("guild_id", job.deleteGuildID))
+		} else {
+			logger.Debug("Media library live queue full, dropping message",
+				zap.String("message_id", job.msg.ID.String()),
+				zap.Bool("update_only", job.updateOnly))
+		}
 		return false
 	}
 }
@@ -414,7 +433,7 @@ func (s *Service) resolveRandomGifFallback(ctx context.Context, guildID, tagRaw 
 		return ai.MediaResolveResult{}, false
 	}
 	attempts := 0
-	chosen, postedURL, ok := s.pickEntry(ctx, entries, state, &attempts)
+	chosen, postedURL, ok := s.pickEntry(ctx, entries, state, &attempts, false)
 	if !ok {
 		logger.Info("Media library random gif fallback found no eligible gif",
 			zap.String("tag", tagRaw),
@@ -598,7 +617,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
-	} else if chosen, postedURL, ok := s.pickEntry(ctx, exactRows, state, &attempts); ok {
+	} else if chosen, postedURL, ok := s.pickEntry(ctx, exactRows, state, &attempts, reserveForFallback); ok {
 		logger.Info("Media library matched tag",
 			zap.String("tag", tag.Raw),
 			zap.String("url", chosen.URL),
@@ -636,7 +655,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 						zap.String("tag", tag.Raw),
 						zap.String("guild_id", guildID),
 						zap.Error(err))
-				} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinSimilarity, state, &attempts, &bestSim); ok {
+				} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 					logger.Info("Media library matched tag",
 						zap.String("tag", tag.Raw),
 						zap.String("url", hit.Entry.URL),
@@ -659,7 +678,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", guildID),
 				zap.Error(err))
-		} else if chosen, postedURL, ok := s.pickEntry(ctx, crossExact, state, &attempts); ok {
+		} else if chosen, postedURL, ok := s.pickEntry(ctx, crossExact, state, &attempts, reserveForFallback); ok {
 			logger.Info("Media library matched tag",
 				zap.String("tag", tag.Raw),
 				zap.String("url", chosen.URL),
@@ -678,7 +697,7 @@ func (s *Service) resolveDescribedTag(ctx context.Context, guildID string, tag a
 					zap.String("tag", tag.Raw),
 					zap.String("guild_id", guildID),
 					zap.Error(err))
-			} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinSimilarity, state, &attempts, &bestSim); ok {
+			} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 				logger.Info("Media library matched tag",
 					zap.String("tag", tag.Raw),
 					zap.String("url", hit.Entry.URL),
@@ -737,7 +756,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 			zap.String("tag", tag.Raw),
 			zap.String("guild_id", guildID),
 			zap.Error(err))
-	} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim); ok {
+	} else if hit, postedURL, ok := s.pickHit(ctx, hits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 		logger.Info("Media library matched tag",
 			zap.String("tag", tag.Raw),
 			zap.String("url", hit.Entry.URL),
@@ -756,7 +775,7 @@ func (s *Service) resolveBareGifTag(ctx context.Context, guildID string, tag ai.
 				zap.String("tag", tag.Raw),
 				zap.String("guild_id", guildID),
 				zap.Error(err))
-		} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim); ok {
+		} else if hit, postedURL, ok := s.pickHit(ctx, crossHits, s.cfg.MinTriggerSimilarity, state, &attempts, &bestSim, reserveForFallback); ok {
 			logger.Info("Media library matched tag",
 				zap.String("tag", tag.Raw),
 				zap.String("url", hit.Entry.URL),
@@ -805,28 +824,39 @@ func (st *lookupState) exclude(rawURL string) {
 	}
 }
 
-func (s *Service) pickEntry(ctx context.Context, entries []Entry, state *lookupState, attempts *int) (Entry, string, bool) {
+func (s *Service) pickEntry(ctx context.Context, entries []Entry, state *lookupState, attempts *int, reserveForFallback bool) (Entry, string, bool) {
 	for _, entry := range entries {
 		if !s.eligible(entry.URL, state.excluded) {
 			continue
 		}
+		remainingCandidates := 1
 		if s.cfg.ValidateLinks {
 			if *attempts >= maxValidationCandidates || ctx.Err() != nil {
 				return Entry{}, "", false
 			}
+			remainingCandidates = maxValidationCandidates - *attempts
+			if reserveForFallback {
+				remainingCandidates++
+			}
 			*attempts++
+		} else if reserveForFallback {
+			remainingCandidates = 2
 		}
-		postedURL, dead := s.prepareCandidate(ctx, entry)
-		if dead {
+		postedURL, action := s.prepareCandidate(ctx, entry, remainingCandidates)
+		switch action {
+		case candidateDead, candidateBlocked:
 			state.exclude(entry.URL)
 			continue
+		case candidateTimeout:
+			return Entry{}, "", false
+		default:
+			return entry, postedURL, true
 		}
-		return entry, postedURL, true
 	}
 	return Entry{}, "", false
 }
 
-func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64, state *lookupState, attempts *int, bestSim *float64) (SearchHit, string, bool) {
+func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64, state *lookupState, attempts *int, bestSim *float64, reserveForFallback bool) (SearchHit, string, bool) {
 	for _, hit := range hits {
 		if !s.eligible(hit.Entry.URL, state.excluded) {
 			continue
@@ -837,18 +867,29 @@ func (s *Service) pickHit(ctx context.Context, hits []SearchHit, minSim float64,
 			}
 			continue
 		}
+		remainingCandidates := 1
 		if s.cfg.ValidateLinks {
 			if *attempts >= maxValidationCandidates || ctx.Err() != nil {
 				return SearchHit{}, "", false
 			}
+			remainingCandidates = maxValidationCandidates - *attempts
+			if reserveForFallback {
+				remainingCandidates++
+			}
 			*attempts++
+		} else if reserveForFallback {
+			remainingCandidates = 2
 		}
-		postedURL, dead := s.prepareCandidate(ctx, hit.Entry)
-		if dead {
+		postedURL, action := s.prepareCandidate(ctx, hit.Entry, remainingCandidates)
+		switch action {
+		case candidateDead, candidateBlocked:
 			state.exclude(hit.Entry.URL)
 			continue
+		case candidateTimeout:
+			return SearchHit{}, "", false
+		default:
+			return hit, postedURL, true
 		}
-		return hit, postedURL, true
 	}
 	return SearchHit{}, "", false
 }
