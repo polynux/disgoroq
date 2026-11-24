@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,17 @@ type yamlPatch struct {
 	Path string
 	Kind configFieldKind
 	Val  any
+}
+
+// patchUserError represents a user-actionable YAML structure error (such as a
+// flow-style section or flow sequence with interior comments) that should be
+// returned as HTTP 422 rather than an internal 500 error.
+type patchUserError struct {
+	msg string
+}
+
+func (e *patchUserError) Error() string {
+	return e.msg
 }
 
 var (
@@ -349,11 +361,14 @@ func patchYAMLBytes(orig []byte, patches []yamlPatch) ([]byte, error) {
 	}
 
 	cur := append([]byte(nil), orig...)
-	intended := make(map[string]struct{}, len(patches))
+	eol := detectLineEnding(orig)
 	for _, p := range patches {
-		intended[p.Path] = struct{}{}
-		cur, err = patchSinglePath(cur, p)
+		cur, err = patchSinglePath(cur, p, eol)
 		if err != nil {
+			var userErr *patchUserError
+			if errors.As(err, &userErr) {
+				return nil, err
+			}
 			return nil, fmt.Errorf("patch %s: %w", p.Path, err)
 		}
 	}
@@ -362,11 +377,20 @@ func patchYAMLBytes(orig []byte, patches []yamlPatch) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("re-parse patched yaml: %w", err)
 	}
-	if err := verifyOnlyPathsChanged(origDoc, patchedDoc, intended); err != nil {
+	if err := verifyPatchedDocument(origDoc, patchedDoc, patches); err != nil {
 		return nil, err
 	}
 
 	return cur, nil
+}
+
+func detectLineEnding(src []byte) string {
+	crlf := bytes.Count(src, []byte("\r\n"))
+	lf := bytes.Count(src, []byte("\n")) - crlf
+	if crlf > lf {
+		return "\r\n"
+	}
+	return "\n"
 }
 
 type lineIndex struct {
@@ -437,7 +461,7 @@ func (li lineIndex) offsetAt(line, col int) int {
 	return pos
 }
 
-func patchSinglePath(src []byte, patch yamlPatch) ([]byte, error) {
+func patchSinglePath(src []byte, patch yamlPatch, eol string) ([]byte, error) {
 	doc, err := parseYAMLDocument(src)
 	if err != nil {
 		return nil, err
@@ -466,21 +490,30 @@ func patchSinglePath(src []byte, patch yamlPatch) ([]byte, error) {
 
 		if i == len(parts)-1 {
 			if keyNode != nil {
-				return replaceExistingValue(src, keyNode, valNode, patch)
+				return replaceExistingValue(src, keyNode, valNode, patch, eol)
 			}
-			return insertMissingKeys(src, curr, i == 0, nil, parts[i:], patch)
+			return insertMissingKeys(src, curr, i == 0, nil, nil, parts[i:], patch, eol)
 		}
 
 		if keyNode == nil {
-			return insertMissingKeys(src, curr, i == 0, nil, parts[i:], patch)
+			return insertMissingKeys(src, curr, i == 0, nil, nil, parts[i:], patch, eol)
 		}
 		if valNode.Kind == yaml.MappingNode {
+			if valNode.Style == yaml.FlowStyle {
+				if len(valNode.Content) == 0 {
+					// Empty flow mapping (e.g. "votes: {}") -> replace with block mapping.
+					return insertMissingKeys(src, nil, false, keyNode, valNode, parts[i+1:], patch, eol)
+				}
+				return nil, &patchUserError{
+					msg: fmt.Sprintf("section %q uses flow style; convert it to block style to edit it here", part),
+				}
+			}
 			curr = valNode
 			continue
 		}
-		if valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" && valNode.Value == "" {
-			// Empty section (e.g. "reengage:") parsed as !!null -> convert to mapping.
-			return insertMissingKeys(src, nil, false, keyNode, parts[i+1:], patch)
+		if valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" {
+			// Empty/null section (e.g. "votes:", "votes: null", "votes: ~") -> convert to block mapping.
+			return insertMissingKeys(src, nil, false, keyNode, valNode, parts[i+1:], patch, eol)
 		}
 		return nil, fmt.Errorf("path %q expects mapping at %q", patch.Path, part)
 	}
@@ -488,7 +521,7 @@ func patchSinglePath(src []byte, patch yamlPatch) ([]byte, error) {
 	return nil, fmt.Errorf("empty patch path")
 }
 
-func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPatch) ([]byte, error) {
+func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPatch, eol string) ([]byte, error) {
 	li := buildLineIndex(src)
 	keyIndent := keyNode.Column - 1
 	if keyIndent < 0 {
@@ -505,22 +538,27 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 		if !ok {
 			return nil, fmt.Errorf("expected []string, got %T", patch.Val)
 		}
-		return replaceSequenceValue(src, li, keyNode, valNode, colonPos, keyIndent, items)
+		return replaceSequenceValue(src, li, keyNode, valNode, colonPos, keyIndent, items, eol)
 	}
 
-	emitted, err := emitScalarValue(patch.Kind, patch.Val, keyIndent)
+	emitted, err := emitScalarValue(patch.Kind, patch.Val, keyIndent, eol)
 	if err != nil {
 		return nil, err
 	}
+	isBlockReplacement := strings.HasPrefix(emitted, "|-")
 
 	// Empty / implicit null value on the key line (e.g. "foo:" or "foo: # comment").
 	if valNode.Kind == yaml.ScalarNode && valNode.Tag == "!!null" && valNode.Value == "" && valNode.Style == 0 {
 		insertPos := colonPos + 1
-		// Consume any spaces right after ':' up to comment or EOL.
 		lineEnd := li.lineEnd(keyNode.Line)
 		rest := src[insertPos:lineEnd]
 		if idx := findInlineCommentStart(rest); idx >= 0 {
 			commentStart := insertPos + idx
+			if isBlockReplacement {
+				comment := string(bytes.TrimRight(src[commentStart:lineEnd], " \t"))
+				replacement := " " + attachBlockHeaderComment(emitted, comment, eol)
+				return spliceBytes(src, insertPos, lineEnd, []byte(replacement)), nil
+			}
 			replacement := " " + emitted + " "
 			return spliceBytes(src, insertPos, commentStart, []byte(replacement)), nil
 		}
@@ -533,17 +571,61 @@ func replaceExistingValue(src []byte, keyNode, valNode *yaml.Node, patch yamlPat
 		return nil, err
 	}
 
-	// If replacing a block scalar with a non-block scalar or vice versa, keep the space after ':'.
+	// Preserve header-line comment on an existing block scalar (e.g. "key: |- # keep me").
+	if valNode.Kind == yaml.ScalarNode && (valNode.Style == yaml.LiteralStyle || valNode.Style == yaml.FoldedStyle) {
+		headerLineEnd := li.lineEnd(valNode.Line)
+		headerRest := src[start:headerLineEnd]
+		if idx := findInlineCommentStart(headerRest); idx >= 0 {
+			comment := string(bytes.TrimRight(headerRest[idx:], " \t"))
+			if isBlockReplacement {
+				emitted = attachBlockHeaderComment(emitted, comment, eol)
+			} else {
+				emitted = emitted + " " + comment
+			}
+		}
+		return spliceBytes(src, start, end, []byte(emitted)), nil
+	}
+
+	// If replacing a non-block scalar with a block scalar ("|-"), move any trailing
+	// same-line comment onto the "|-" header line so it doesn't end up inside the block.
+	if isBlockReplacement {
+		endLine := offsetToLine(li, end)
+		lineEnd := li.lineEnd(endLine)
+		trailing := src[end:lineEnd]
+		if idx := findInlineCommentStart(trailing); idx >= 0 {
+			comment := string(bytes.TrimRight(trailing[idx:], " \t"))
+			emitted = attachBlockHeaderComment(emitted, comment, eol)
+			end = lineEnd
+		}
+	}
+
 	return spliceBytes(src, start, end, []byte(emitted)), nil
 }
 
-func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node, colonPos, keyIndent int, items []string) ([]byte, error) {
+// attachBlockHeaderComment inserts " <comment>" immediately after the "|-" indicator
+// on the first line of a literal block scalar.
+func attachBlockHeaderComment(blockScalar, comment, eol string) string {
+	if comment == "" {
+		return blockScalar
+	}
+	if firstEOL := strings.Index(blockScalar, eol); firstEOL >= 0 {
+		return blockScalar[:firstEOL] + " " + comment + blockScalar[firstEOL:]
+	}
+	return blockScalar + " " + comment
+}
+
+func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node, colonPos, keyIndent int, items []string, eol string) ([]byte, error) {
 	// Empty slice -> emit "[]" inline.
 	if len(items) == 0 {
 		if valNode.Kind == yaml.SequenceNode && valNode.Style == yaml.FlowStyle {
 			start, end, err := valueByteSpan(src, li, keyNode, valNode)
 			if err != nil {
 				return nil, err
+			}
+			if flowContainsComment(src[start:end]) {
+				return nil, &patchUserError{
+					msg: fmt.Sprintf("field %q uses a flow sequence with interior comments; convert it to block style to edit it here", keyNode.Value),
+				}
 			}
 			return spliceBytes(src, start, end, []byte("[]")), nil
 		}
@@ -566,6 +648,11 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 		if err != nil {
 			return nil, err
 		}
+		if flowContainsComment(src[start:end]) {
+			return nil, &patchUserError{
+				msg: fmt.Sprintf("field %q uses a flow sequence with interior comments; convert it to block style to edit it here", keyNode.Value),
+			}
+		}
 		emitted := emitFlowStringSlice(items)
 		return spliceBytes(src, start, end, []byte(emitted)), nil
 	}
@@ -580,15 +667,15 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 			itemIndent = dashIdx
 		}
 	}
-	block := emitBlockStringSlice(items, itemIndent)
+	block := emitBlockStringSlice(items, itemIndent, eol)
 
 	if valNode.Kind == yaml.SequenceNode && len(valNode.Content) > 0 {
 		firstLine := valNode.Content[0].Line
 		lastLine := maxNodeLine(src, li, valNode)
 		start := li.lineStart(firstLine)
 		end := li.lineEnd(lastLine)
-		// Drop leading '\n' from block because start is already at lineStart(firstLine).
-		return spliceBytes(src, start, end, []byte(strings.TrimPrefix(block, "\n"))), nil
+		// Drop leading EOL from block because start is already at lineStart(firstLine).
+		return spliceBytes(src, start, end, []byte(strings.TrimPrefix(block, eol))), nil
 	}
 
 	// Replacing a non-block node (e.g. empty/null) with a block sequence.
@@ -596,34 +683,67 @@ func replaceSequenceValue(src []byte, li lineIndex, keyNode, valNode *yaml.Node,
 	return spliceBytes(src, colonPos+1, lineEnd, []byte(block)), nil
 }
 
-func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySectionKey *yaml.Node, remaining []string, patch yamlPatch) ([]byte, error) {
+func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySectionKey, emptySectionVal *yaml.Node, remaining []string, patch yamlPatch, eol string) ([]byte, error) {
 	li := buildLineIndex(src)
 
 	var (
 		baseIndent int
-		insertPos  int
+		spliceFrom int
+		spliceTo   int
 		prefix     string
 		suffix     string
 	)
 
 	if emptySectionKey != nil {
-		// Turning an empty section ("reengage:") into a mapping.
+		// Turning an empty/null/empty-flow section ("votes:", "votes: null", "votes: ~", "votes: {}")
+		// into a block mapping while preserving any trailing comment on the section header line.
 		baseIndent = (emptySectionKey.Column - 1) + 2
-		insertPos = li.lineEnd(emptySectionKey.Line)
-		prefix = "\n"
+		colonPos, ok := findKeyColonOffset(li, emptySectionKey)
+		if !ok {
+			return nil, fmt.Errorf("could not locate ':' for section %q on line %d", emptySectionKey.Value, emptySectionKey.Line)
+		}
+		lineEnd := li.lineEnd(emptySectionKey.Line)
+		// Remove any explicit null / ~ / {} value between ':' and comment/EOL.
+		if emptySectionVal != nil && (emptySectionVal.Kind == yaml.MappingNode || emptySectionVal.Value != "") {
+			valStart := colonPos + 1
+			valEnd := lineEnd
+			if emptySectionVal.Kind == yaml.MappingNode && emptySectionVal.Style == yaml.FlowStyle {
+				if end, ok := scanFlowEnd(src, li.offsetAt(emptySectionVal.Line, emptySectionVal.Column), '{', '}'); ok {
+					valEnd = end
+				}
+			} else if idx := findInlineCommentStart(src[valStart:lineEnd]); idx >= 0 {
+				valEnd = valStart + idx
+			}
+			// Strip the old value (e.g. " {}", " null", " ~") and preserve any trailing comment on the header line.
+			trailingComment := ""
+			if valEnd < lineEnd {
+				rest := src[valEnd:lineEnd]
+				if idx := findInlineCommentStart(rest); idx >= 0 {
+					trailingComment = " " + string(bytes.TrimRight(rest[idx:], " \t"))
+				}
+			}
+			spliceFrom = valStart
+			spliceTo = lineEnd
+			prefix = trailingComment + eol
+		} else {
+			spliceFrom = lineEnd
+			spliceTo = lineEnd
+			prefix = eol
+		}
 	} else if isRoot {
 		baseIndent = 0
-		insertPos = len(src)
+		spliceFrom = len(src)
+		spliceTo = len(src)
 		if len(bytes.TrimSpace(src)) > 0 {
 			if len(src) > 0 && src[len(src)-1] != '\n' {
-				prefix = "\n\n"
-			} else if len(src) >= 2 && src[len(src)-2] == '\n' {
+				prefix = eol + eol
+			} else if bytes.HasSuffix(src, []byte(eol+eol)) || (len(src) >= 2 && src[len(src)-2] == '\n') {
 				prefix = ""
 			} else {
-				prefix = "\n"
+				prefix = eol
 			}
 		}
-		suffix = "\n"
+		suffix = eol
 	} else {
 		if len(parentMap.Content) == 0 {
 			return nil, fmt.Errorf("cannot determine indentation for empty parent mapping")
@@ -633,8 +753,9 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 			baseIndent = 0
 		}
 		lastLine := maxNodeLine(src, li, parentMap)
-		insertPos = li.lineEnd(lastLine)
-		prefix = "\n"
+		spliceFrom = li.lineEnd(lastLine)
+		spliceTo = spliceFrom
+		prefix = eol
 	}
 
 	var b strings.Builder
@@ -645,7 +766,7 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 		b.WriteString(key)
 		b.WriteByte(':')
 		if i < len(remaining)-1 {
-			b.WriteByte('\n')
+			b.WriteString(eol)
 			continue
 		}
 		// Leaf value.
@@ -657,10 +778,10 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 			if len(items) == 0 {
 				b.WriteString(" []")
 			} else {
-				b.WriteString(emitBlockStringSlice(items, indent+2))
+				b.WriteString(emitBlockStringSlice(items, indent+2, eol))
 			}
 		} else {
-			emitted, err := emitScalarValue(patch.Kind, patch.Val, indent)
+			emitted, err := emitScalarValue(patch.Kind, patch.Val, indent, eol)
 			if err != nil {
 				return nil, err
 			}
@@ -670,7 +791,7 @@ func insertMissingKeys(src []byte, parentMap *yaml.Node, isRoot bool, emptySecti
 	}
 	b.WriteString(suffix)
 
-	return spliceBytes(src, insertPos, insertPos, []byte(b.String())), nil
+	return spliceBytes(src, spliceFrom, spliceTo, []byte(b.String())), nil
 }
 
 func findKeyColonOffset(li lineIndex, keyNode *yaml.Node) (int, bool) {
@@ -745,22 +866,86 @@ func valueByteSpan(src []byte, li lineIndex, keyNode, valNode *yaml.Node) (int, 
 		endLine := scanBlockScalarEndLine(src, li, valNode.Line, keyIndent)
 		return start, li.lineEnd(endLine), nil
 	default:
-		// Plain scalar. Usually single-line; also handle multi-line plain scalars.
-		lineEnd := li.lineEnd(valNode.Line)
-		rest := src[start:lineEnd]
-		if cIdx := findInlineCommentStart(rest); cIdx >= 0 {
-			end := start + cIdx
-			for end > start && (src[end-1] == ' ' || src[end-1] == '\t') {
-				end--
-			}
-			return start, end, nil
+		// Plain scalar (single-line or multi-line).
+		keyIndent := keyNode.Column - 1
+		if keyIndent < 0 {
+			keyIndent = 0
 		}
-		end := lineEnd
-		for end > start && (src[end-1] == ' ' || src[end-1] == '\t') {
-			end--
-		}
+		end, _ := scanPlainScalarEnd(src, li, start, valNode.Line, keyIndent)
 		return start, end, nil
 	}
+}
+
+// scanPlainScalarEnd returns the exclusive end byte offset and 1-based end line
+// of a plain scalar starting at (startLine, start), spanning continuation lines
+// indented deeper than keyIndent until a comment, dedented line, or EOF.
+func scanPlainScalarEnd(src []byte, li lineIndex, start, startLine, keyIndent int) (int, int) {
+	firstLineEnd := li.lineEnd(startLine)
+	rest := src[start:firstLineEnd]
+	if cIdx := findInlineCommentStart(rest); cIdx >= 0 {
+		end := trimRightSpaces(src, start, start+cIdx)
+		return end, startLine
+	}
+
+	lastEnd := trimRightSpaces(src, start, firstLineEnd)
+	lastLine := startLine
+
+	for line := startLine + 1; line <= li.lineCount(); line++ {
+		ls := li.lineStart(line)
+		le := li.lineEnd(line)
+		lineBytes := src[ls:le]
+		if len(bytes.TrimSpace(lineBytes)) == 0 {
+			// Blank lines inside a multi-line plain scalar are only part of it if
+			// followed by another indented continuation line.
+			continue
+		}
+		indent := countLeadingSpaces(lineBytes)
+		if indent <= keyIndent {
+			break
+		}
+		trimmed := lineBytes[indent:]
+		if trimmed[0] == '#' {
+			break
+		}
+		if cIdx := findInlineCommentStart(trimmed); cIdx >= 0 {
+			lastEnd = trimRightSpaces(src, ls+indent, ls+indent+cIdx)
+			lastLine = line
+			break
+		}
+		lastEnd = trimRightSpaces(src, ls+indent, le)
+		lastLine = line
+	}
+
+	return lastEnd, lastLine
+}
+
+func trimRightSpaces(src []byte, start, end int) int {
+	for end > start && (src[end-1] == ' ' || src[end-1] == '\t') {
+		end--
+	}
+	return end
+}
+
+// flowContainsComment reports whether a flow sequence/mapping slice contains
+// any YAML comment outside quoted strings.
+func flowContainsComment(flow []byte) bool {
+	for i := 0; i < len(flow); i++ {
+		switch flow[i] {
+		case '"':
+			if end, ok := scanDoubleQuotedEnd(flow, i); ok {
+				i = end - 1
+			}
+		case '\'':
+			if end, ok := scanSingleQuotedEnd(flow, i); ok {
+				i = end - 1
+			}
+		case '#':
+			if i == 0 || flow[i-1] == ' ' || flow[i-1] == '\t' || flow[i-1] == '\n' || flow[i-1] == '\r' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func scanDoubleQuotedEnd(src []byte, start int) (int, bool) {
@@ -891,12 +1076,20 @@ func maxNodeLine(src []byte, li lineIndex, node *yaml.Node) int {
 			}
 		}
 		for _, item := range node.Content {
-			if il := maxNodeLine(src, li, item); il > maxL {
+			var il int
+			if item.Kind == yaml.ScalarNode {
+				itemLineIndent := countLeadingSpaces(src[li.lineStart(item.Line):li.lineEnd(item.Line)])
+				il = scalarEndLine(src, li, itemLineIndent, item)
+			} else {
+				il = maxNodeLine(src, li, item)
+			}
+			if il > maxL {
 				maxL = il
 			}
 		}
 	case yaml.ScalarNode:
-		if endL := scalarEndLine(src, li, node.Column-1, node); endL > maxL {
+		lineIndent := countLeadingSpaces(src[li.lineStart(node.Line):li.lineEnd(node.Line)])
+		if endL := scalarEndLine(src, li, lineIndent, node); endL > maxL {
 			maxL = endL
 		}
 	}
@@ -931,6 +1124,10 @@ func scalarEndLine(src []byte, li lineIndex, keyIndent int, node *yaml.Node) int
 		if end, ok := scanSingleQuotedEnd(src, start); ok {
 			return offsetToLine(li, end-1)
 		}
+	default:
+		start := li.offsetAt(node.Line, node.Column)
+		_, endLine := scanPlainScalarEnd(src, li, start, node.Line, keyIndent)
+		return endLine
 	}
 	return node.Line
 }
@@ -961,7 +1158,7 @@ func spliceBytes(src []byte, start, end int, replacement []byte) []byte {
 
 // emitScalarValue formats a scalar according to the in-place patching rules and
 // verifies that YAML parses it back to the exact intended value.
-func emitScalarValue(kind configFieldKind, val any, keyIndent int) (string, error) {
+func emitScalarValue(kind configFieldKind, val any, keyIndent int, eol string) (string, error) {
 	switch kind {
 	case fieldKindBool:
 		b, ok := val.(bool)
@@ -986,17 +1183,17 @@ func emitScalarValue(kind configFieldKind, val any, keyIndent int) (string, erro
 		if !ok {
 			return "", fmt.Errorf("expected string value, got %T", val)
 		}
-		return emitYAMLString(s, keyIndent), nil
+		return emitYAMLString(s, keyIndent, eol), nil
 	default:
 		return "", fmt.Errorf("unsupported scalar kind %q", kind)
 	}
 }
 
-func emitYAMLString(s string, keyIndent int) string {
+func emitYAMLString(s string, keyIndent int, eol string) string {
 	var candidate string
 	if strings.Contains(s, "\n") {
 		if canUseLiteralBlock(s) {
-			candidate = formatLiteralBlock(s, keyIndent+2)
+			candidate = formatLiteralBlock(s, keyIndent+2, eol)
 		} else {
 			candidate = strconv.Quote(s)
 		}
@@ -1038,13 +1235,13 @@ func canUseLiteralBlock(s string) bool {
 	return true
 }
 
-func formatLiteralBlock(s string, contentIndent int) string {
+func formatLiteralBlock(s string, contentIndent int, eol string) string {
 	pad := strings.Repeat(" ", contentIndent)
 	lines := strings.Split(s, "\n")
 	var b strings.Builder
 	b.WriteString("|-")
 	for _, line := range lines {
-		b.WriteByte('\n')
+		b.WriteString(eol)
 		if line != "" {
 			b.WriteString(pad)
 			b.WriteString(line)
@@ -1107,21 +1304,28 @@ func emitFlowStringSlice(items []string) string {
 	return "[" + strings.Join(parts, ", ") + "]"
 }
 
-func emitBlockStringSlice(items []string, itemIndent int) string {
+func emitBlockStringSlice(items []string, itemIndent int, eol string) string {
 	pad := strings.Repeat(" ", itemIndent)
 	var b strings.Builder
 	for _, item := range items {
-		b.WriteByte('\n')
+		b.WriteString(eol)
 		b.WriteString(pad)
 		b.WriteString("- ")
-		b.WriteString(emitYAMLString(item, itemIndent+2))
+		b.WriteString(emitYAMLString(item, itemIndent+2, eol))
 	}
 	return b.String()
 }
 
-// verifyOnlyPathsChanged compares all leaf paths in origDoc and patchedDoc and
-// returns an error if any path not in intended was added, removed, or modified.
-func verifyOnlyPathsChanged(origDoc, patchedDoc *yaml.Node, intended map[string]struct{}) error {
+// verifyPatchedDocument compares all leaf paths in origDoc and patchedDoc:
+//  1. Every untouched path must remain present and semantically identical.
+//  2. No unexpected paths may be inserted or removed.
+//  3. Every intended patch path must re-parse to exactly patch.Val.
+func verifyPatchedDocument(origDoc, patchedDoc *yaml.Node, patches []yamlPatch) error {
+	intended := make(map[string]yamlPatch, len(patches))
+	for _, p := range patches {
+		intended[p.Path] = p
+	}
+
 	origLeaves := make(map[string]*yaml.Node)
 	patchedLeaves := make(map[string]*yaml.Node)
 	collectLeaves(documentMapping(origDoc), "", origLeaves)
@@ -1131,8 +1335,11 @@ func verifyOnlyPathsChanged(origDoc, patchedDoc *yaml.Node, intended map[string]
 		if _, ok := intended[path]; ok {
 			continue
 		}
-		// An empty section (!!null) may have been expanded into a mapping if one of its children is intended.
-		if origNode.Kind == yaml.ScalarNode && origNode.Tag == "!!null" && origNode.Value == "" && hasIntendedDescendant(path, intended) {
+		// An empty/null section (or empty flow mapping {}) may have been expanded
+		// into a block mapping if one of its children is intended.
+		if ((origNode.Kind == yaml.ScalarNode && origNode.Tag == "!!null") ||
+			(origNode.Kind == yaml.MappingNode && len(origNode.Content) == 0)) &&
+			hasIntendedDescendant(path, intended) {
 			continue
 		}
 		newNode, exists := patchedLeaves[path]
@@ -1152,10 +1359,55 @@ func verifyOnlyPathsChanged(origDoc, patchedDoc *yaml.Node, intended map[string]
 			return fmt.Errorf("internal error: unexpected insertion of %q", path)
 		}
 	}
+
+	for _, p := range patches {
+		newNode, ok := getYAMLNode(patchedDoc, p.Path)
+		if !ok {
+			return fmt.Errorf("internal error: patched path %q missing after re-parse", p.Path)
+		}
+		if err := verifyNodeMatchesPatch(newNode, p); err != nil {
+			return fmt.Errorf("internal error: patched path %q did not round-trip: %w", p.Path, err)
+		}
+	}
 	return nil
 }
 
-func hasIntendedDescendant(prefix string, intended map[string]struct{}) bool {
+func verifyNodeMatchesPatch(node *yaml.Node, p yamlPatch) error {
+	switch p.Kind {
+	case fieldKindString, fieldKindText:
+		want, _ := p.Val.(string)
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!str" || node.Value != want {
+			return fmt.Errorf("got (%d,%s,%q), want string %q", node.Kind, node.Tag, node.Value, want)
+		}
+	case fieldKindBool:
+		want, _ := p.Val.(bool)
+		var got bool
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!bool" || node.Decode(&got) != nil || got != want {
+			return fmt.Errorf("got (%s,%q), want bool %t", node.Tag, node.Value, want)
+		}
+	case fieldKindInt:
+		want, _ := p.Val.(int64)
+		var got int64
+		if node.Kind != yaml.ScalarNode || node.Tag != "!!int" || node.Decode(&got) != nil || got != want {
+			return fmt.Errorf("got (%s,%q), want int %d", node.Tag, node.Value, want)
+		}
+	case fieldKindFloat:
+		want, _ := p.Val.(float64)
+		var got float64
+		if node.Kind != yaml.ScalarNode || (node.Tag != "!!float" && node.Tag != "!!int") || node.Decode(&got) != nil || got != want {
+			return fmt.Errorf("got (%s,%q), want float %g", node.Tag, node.Value, want)
+		}
+	case fieldKindStringSlice:
+		want, _ := p.Val.([]string)
+		var got []string
+		if node.Kind != yaml.SequenceNode || node.Decode(&got) != nil || !slices.Equal(got, want) {
+			return fmt.Errorf("got %v, want %v", got, want)
+		}
+	}
+	return nil
+}
+
+func hasIntendedDescendant(prefix string, intended map[string]yamlPatch) bool {
 	dotPrefix := prefix + "."
 	for p := range intended {
 		if strings.HasPrefix(p, dotPrefix) {

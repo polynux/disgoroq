@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -211,6 +212,13 @@ func (s *Server) handleConfigSectionSave(w http.ResponseWriter, r *http.Request)
 
 	newData, err := patchYAMLBytes(origData, patches)
 	if err != nil {
+		var userErr *patchUserError
+		if errors.As(err, &userErr) {
+			secView := buildSectionViewWithOverrides(secSpec, doc, currentHash, submittedRaw, submittedBool)
+			secView.Error = userErr.Error()
+			s.renderConfigSectionResponse(w, r, schema, doc, currentHash, secView, http.StatusUnprocessableEntity)
+			return
+		}
 		logger.Error("Failed to patch config.yaml in place", zap.String("path", cfgPath), zap.Error(err))
 		secView := buildSectionViewWithOverrides(secSpec, doc, currentHash, submittedRaw, submittedBool)
 		secView.Error = "Failed to update YAML: " + err.Error()
