@@ -570,6 +570,18 @@ func TestTrimCompletionSentence(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name:   "stray closing bracket after a closed tag",
+			input:  " [gif: chat] Bon ben on verra bien demain. c'est cool :] et puis",
+			want:   "[gif: chat] Bon ben on verra bien demain.",
+			wantOK: true,
+		},
+		{
+			name:   "sentence before a closed tag and a stray bracket",
+			input:  " C'est vraiment trop drôle cette histoire ! [gif: chat] ] et la suite continue",
+			want:   "C'est vraiment trop drôle cette histoire !",
+			wantOK: true,
+		},
+		{
 			name:   "multibyte accents and emoji counted as runes",
 			input:  " C'est déjà très été 🔥! Et ensuite on verra bien",
 			want:   "C'est déjà très été 🔥!",
@@ -716,7 +728,60 @@ func TestCompletionChatTruncatedReplies(t *testing.T) {
 				require.Len(t, resolver.reqs, 1)
 				assert.Equal(t, tc.wantRaw, resolver.reqs[0].RawReply)
 				assert.Equal(t, tc.wantContent, resp.Content)
+				assert.Equal(t, "length", resp.FinishReason)
 				assert.False(t, resp.EmptyCompletion)
+			})
+		}
+	})
+
+	t.Run("length trimmed to a sentence keeps complete media tags after it", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, `{"model":"luciole","response":" C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe] et puis franchement j'ai","done":true,"done_reason":"length"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "[gif: chat qui tombe]", URL: "https://tenor.com/view/cat-1"},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), baseReq())
+		require.NoError(t, err)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe]", resolver.reqs[0].RawReply)
+		assert.Equal(t, "C'est vraiment trop drôle cette histoire !\nhttps://tenor.com/view/cat-1", resp.Content)
+	})
+
+	t.Run("length on last attempt still word-cuts a trailing bracket that is not a media tag", func(t *testing.T) {
+		for _, tc := range []struct{ name, second, want string }{
+			{"stray bracket", " du blabla sans ponctuation qui finit par un crochet ]", "du blabla sans ponctuation qui finit par un crochet"},
+			{"bracketed words", " premier essai coupé [pas un tag]", "premier essai coupé"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					response := " premier essai coupé sans ponctuation du tout"
+					if calls == 2 {
+						response = tc.second
+					}
+					body, _ := json.Marshal(map[string]any{"model": "luciole", "response": response, "done": true, "done_reason": "length"})
+					_, _ = w.Write(body)
+				}))
+				defer server.Close()
+
+				provider, err := NewOllamaProvider(server.URL, false)
+				require.NoError(t, err)
+				provider.SetCompletionMode(true)
+
+				resp, err := provider.Chat(context.Background(), baseReq())
+				require.NoError(t, err)
+				assert.Equal(t, 2, calls)
+				assert.Equal(t, tc.want, resp.Content)
 			})
 		}
 	})

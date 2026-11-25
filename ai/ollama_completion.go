@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode"
 )
@@ -125,11 +124,17 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		raw := generated.Response
 		if generated.DoneReason == "length" {
 			if trimmed, ok := trimCompletionSentence(raw, completionMinSentenceRunes); ok {
+				// Keep complete media tags that came after the sentence end, so
+				// "c'est trop drôle ! [gif: chat] et puis" still posts the gif.
+				dropped := strings.TrimSpace(raw)[len(trimmed):]
+				for _, tag := range completionPlaceholder.FindAllString(dropped, -1) {
+					trimmed += " " + tag
+				}
 				raw = trimmed
 			} else if attempt == 0 {
 				continue
-			} else if raw = strings.TrimSpace(raw); !strings.HasSuffix(raw, "]") {
-				// A reply ending on a closed media tag is whole; cutting at its
+			} else if raw = strings.TrimSpace(raw); !endsWithMediaTag(raw) {
+				// A reply ending on a complete media tag is whole; cutting at its
 				// last space would split the tag and drop it.
 				raw = cutCompletionWordBoundary(raw)
 			}
@@ -334,25 +339,29 @@ func isSentenceEnd(r rune) bool {
 // trimCompletionSentence trims text to the end of its last complete sentence
 // (`.`, `!`, `?`, or `…`, including runs like `...` or `?!`, followed by
 // whitespace or end of text), dropping any trailing unterminated media tag
-// first. Punctuation inside a closed `[...]` tag never counts as a sentence
-// end. It returns ok=false when fewer than minRunes remain.
+// first. Punctuation inside a complete media tag (`[youtube: Wow ! ...]`)
+// never counts as a sentence end. It returns ok=false when fewer than minRunes
+// remain.
 func trimCompletionSentence(text string, minRunes int) (string, bool) {
 	s := strings.TrimSpace(text)
 	if open := strings.LastIndex(s, "["); open > strings.LastIndex(s, "]") {
 		s = strings.TrimSpace(s[:open])
 	}
 	runes := []rune(s)
-	depth := 0
+	inTag := make([]bool, len(runes))
+	tags := completionPlaceholder.FindAllStringIndex(s, -1)
+	i := 0
+	for b := range s {
+		for _, tag := range tags {
+			if b >= tag[0] && b < tag[1] {
+				inTag[i] = true
+				break
+			}
+		}
+		i++
+	}
 	for i := len(runes) - 1; i >= 0; i-- {
-		switch {
-		case runes[i] == ']' && slices.Contains(runes[:i], '['):
-			// Only a "]" with a "[" before it closes a tag; a stray one (":]") doesn't.
-			depth++
-			continue
-		case runes[i] == '[' && depth > 0:
-			depth--
-			continue
-		case depth > 0 || !isSentenceEnd(runes[i]):
+		if inTag[i] || !isSentenceEnd(runes[i]) {
 			continue
 		}
 		if i < len(runes)-1 && !unicode.IsSpace(runes[i+1]) {
@@ -364,6 +373,11 @@ func trimCompletionSentence(text string, minRunes int) (string, bool) {
 		return string(runes[:i+1]), true
 	}
 	return "", false
+}
+
+func endsWithMediaTag(s string) bool {
+	tags := completionPlaceholder.FindAllStringIndex(s, -1)
+	return len(tags) > 0 && tags[len(tags)-1][1] == len(s)
 }
 
 func cutCompletionWordBoundary(cut string) string {
