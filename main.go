@@ -147,11 +147,9 @@ func main() {
 	// Create slog adapter for disgo
 	slogLogger := logger.NewSlogLogger()
 
-	// The channel cache only feeds the web admin UI's channel pickers.
-	cacheFlags := cache.FlagGuilds | cache.FlagVoiceStates
-	if cfg.Web.Enabled {
-		cacheFlags |= cache.FlagChannels
-	}
+	// The channel cache resolves a thread's parent for ignored channels and
+	// feeds the web admin UI's channel pickers.
+	cacheFlags := cache.FlagGuilds | cache.FlagVoiceStates | cache.FlagChannels
 
 	// Create disgo client
 	client, err := disgo.New(cfg.Discord.Token,

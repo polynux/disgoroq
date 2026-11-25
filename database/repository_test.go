@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/snowflake/v2"
 	"github.com/stretchr/testify/assert"
@@ -841,4 +843,133 @@ func TestRepository_GetGuildSettingsMap(t *testing.T) {
 	empty, err := repo.GetGuildSettingsMap(ctx, "guild-missing")
 	require.NoError(t, err)
 	assert.Empty(t, empty)
+}
+
+func TestRepository_IgnoredChannelsCRUDAndEmptyDeletesRow(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+	const guildID = "guild-ignored"
+	ignoredList := func() []string {
+		ids, err := repo.GetIgnoredChannels(ctx, guildID)
+		require.NoError(t, err)
+		return ids
+	}
+
+	// Empty by default
+	assert.Empty(t, ignoredList())
+	assert.NotContains(t, ignoredList(), "200")
+
+	// Add out of order; list is sorted and deduplicated
+	changed, err := repo.AddIgnoredChannel(ctx, guildID, "200")
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	changed, err = repo.AddIgnoredChannel(ctx, guildID, "100")
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	// Duplicate add reports unchanged
+	changed, err = repo.AddIgnoredChannel(ctx, guildID, "200")
+	require.NoError(t, err)
+	assert.False(t, changed)
+
+	assert.Equal(t, []string{"100", "200"}, ignoredList())
+	assert.Contains(t, ignoredList(), "100")
+	assert.Contains(t, ignoredList(), "200")
+	assert.NotContains(t, ignoredList(), "300")
+
+	// Removing non-existent channel reports unchanged
+	changed, err = repo.RemoveIgnoredChannel(ctx, guildID, "999")
+	require.NoError(t, err)
+	assert.False(t, changed)
+
+	// Remove one channel; the other remains
+	changed, err = repo.RemoveIgnoredChannel(ctx, guildID, "100")
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, []string{"200"}, ignoredList())
+
+	// Remove last channel; the guild_settings row is deleted
+	changed, err = repo.RemoveIgnoredChannel(ctx, guildID, "200")
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Empty(t, ignoredList())
+
+	_, err = repo.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		GuildID: guildID,
+		Name:    "ignored_channels",
+	})
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+}
+
+func TestIsChannelOrParentIgnored(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+
+	const (
+		guildID       = "100000000000000001"
+		ignoredParent = "200000000000000001"
+		activeParent  = "200000000000000002"
+		ignoredThread = "300000000000000001"
+		activeThread  = "300000000000000002"
+		uncachedID    = "300000000000000003"
+	)
+
+	_, err := repo.AddIgnoredChannel(ctx, guildID, ignoredParent)
+	require.NoError(t, err)
+
+	caches := cache.New(cache.WithCaches(cache.FlagChannels))
+	var threadUnderIgnored discord.GuildThread
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"`+ignoredThread+`","guild_id":"`+guildID+`","parent_id":"`+ignoredParent+`","name":"t1","type":11}`), &threadUnderIgnored))
+	caches.AddChannel(threadUnderIgnored)
+
+	var threadUnderActive discord.GuildThread
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"`+activeThread+`","guild_id":"`+guildID+`","parent_id":"`+activeParent+`","name":"t2","type":11}`), &threadUnderActive))
+	caches.AddChannel(threadUnderActive)
+
+	// Direct channel match
+	assert.True(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, repo, guildID, snowflake.MustParse(ignoredParent))))
+	assert.False(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, repo, guildID, snowflake.MustParse(activeParent))))
+
+	// Thread inherits from ignored parent
+	assert.True(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, repo, guildID, snowflake.MustParse(ignoredThread))))
+	assert.False(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, repo, guildID, snowflake.MustParse(activeThread))))
+
+	// Uncached channel or nil cache falls back to checking channel ID itself
+	assert.False(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, repo, guildID, snowflake.MustParse(uncachedID))))
+	assert.False(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, nil, repo, guildID, snowflake.MustParse(ignoredThread))))
+	assert.True(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, nil, repo, guildID, snowflake.MustParse(ignoredParent))))
+
+	// Nil repo is safe
+	assert.False(t, ignoredOK(t)(IsChannelOrParentIgnored(ctx, caches, nil, guildID, snowflake.MustParse(ignoredParent))))
+}
+
+func ignoredOK(t *testing.T) func(bool, error) bool {
+	return func(ignored bool, err error) bool {
+		t.Helper()
+		require.NoError(t, err)
+		return ignored
+	}
+}
+
+func TestRepository_IgnoredChannelsUnreadableListIsNotOverwritten(t *testing.T) {
+	ctx := context.Background()
+	repo := setupTestDB(t)
+	const guildID = "guild-ignored-corrupt"
+	require.NoError(t, repo.SetGuildSetting(ctx, guildID, "ignored_channels", "not json"))
+
+	changed, err := repo.AddIgnoredChannel(ctx, guildID, "300")
+	assert.Error(t, err)
+	assert.False(t, changed)
+	changed, err = repo.RemoveIgnoredChannel(ctx, guildID, "300")
+	assert.Error(t, err)
+	assert.False(t, changed)
+
+	value, err := repo.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{GuildID: guildID, Name: "ignored_channels"})
+	require.NoError(t, err)
+	assert.Equal(t, "not json", value, "a list that can't be read must not be overwritten")
+
+	ignored, err := IsChannelOrParentIgnored(ctx, nil, repo, guildID, snowflake.ID(300))
+	assert.Error(t, err)
+	assert.False(t, ignored)
 }

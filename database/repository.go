@@ -4,8 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+
+	"github.com/disgoorg/disgo/cache"
+	"github.com/disgoorg/disgo/discord"
+	"github.com/disgoorg/snowflake/v2"
 
 	"polynux/disgoroq/db"
 	"polynux/disgoroq/triggerwords"
@@ -202,6 +210,165 @@ func (r *Repository) DeleteTriggerWords(ctx context.Context, guildID string) err
 		GuildID: guildID,
 		Name:    "trigger_words",
 	})
+}
+
+const ignoredChannelsSettingKey = "ignored_channels"
+
+// NormalizeIgnoredChannels trims, deduplicates, and sorts channel IDs.
+func NormalizeIgnoredChannels(channelIDs []string) []string {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(channelIDs))
+	result := make([]string, 0, len(channelIDs))
+	for _, raw := range channelIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	slices.Sort(result)
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// ignoredChannelsMu serializes the read-modify-write in Add/RemoveIgnoredChannel
+// so a slash command and a web save can't drop each other's change.
+var ignoredChannelsMu sync.Mutex
+
+// loadIgnoredChannels returns the stored list. A missing row is an empty list;
+// a DB or JSON error is returned so callers never overwrite a list they
+// couldn't read.
+func (r *Repository) loadIgnoredChannels(ctx context.Context, guildID string) ([]string, error) {
+	value, err := r.queries.GetGuildSetting(ctx, db.GetGuildSettingParams{
+		Name:    ignoredChannelsSettingKey,
+		GuildID: guildID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var channelIDs []string
+	if err := json.Unmarshal([]byte(value), &channelIDs); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", ignoredChannelsSettingKey, err)
+	}
+	return NormalizeIgnoredChannels(channelIDs), nil
+}
+
+// GetIgnoredChannels returns the sorted ignored channel IDs for a guild.
+func (r *Repository) GetIgnoredChannels(ctx context.Context, guildID string) ([]string, error) {
+	return r.loadIgnoredChannels(ctx, guildID)
+}
+
+func (r *Repository) saveIgnoredChannels(ctx context.Context, guildID string, channelIDs []string) error {
+	normalized := NormalizeIgnoredChannels(channelIDs)
+	if len(normalized) == 0 {
+		return r.queries.DeleteGuildSetting(ctx, db.DeleteGuildSettingParams{
+			GuildID: guildID,
+			Name:    ignoredChannelsSettingKey,
+		})
+	}
+
+	payload, err := json.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+
+	return r.queries.SetGuildSetting(ctx, db.SetGuildSettingParams{
+		GuildID: guildID,
+		Name:    ignoredChannelsSettingKey,
+		Value:   string(payload),
+	})
+}
+
+func (r *Repository) AddIgnoredChannel(ctx context.Context, guildID, channelID string) (bool, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return false, nil
+	}
+
+	ignoredChannelsMu.Lock()
+	defer ignoredChannelsMu.Unlock()
+
+	channels, err := r.loadIgnoredChannels(ctx, guildID)
+	if err != nil {
+		return false, err
+	}
+	if slices.Contains(channels, channelID) {
+		return false, nil
+	}
+
+	channels = append(channels, channelID)
+	if err := r.saveIgnoredChannels(ctx, guildID, channels); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (r *Repository) RemoveIgnoredChannel(ctx context.Context, guildID, channelID string) (bool, error) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return false, nil
+	}
+
+	ignoredChannelsMu.Lock()
+	defer ignoredChannelsMu.Unlock()
+
+	channels, err := r.loadIgnoredChannels(ctx, guildID)
+	if err != nil {
+		return false, err
+	}
+	filtered := make([]string, 0, len(channels))
+	removed := false
+	for _, existing := range channels {
+		if existing == channelID {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	if !removed {
+		return false, nil
+	}
+
+	if err := r.saveIgnoredChannels(ctx, guildID, filtered); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// IsChannelOrParentIgnored reports whether channelID (or its parent channel
+// when channelID is a cached GuildThread) is ignored in guildID. The channel
+// cache must be enabled for threads to inherit their parent's setting.
+func IsChannelOrParentIgnored(ctx context.Context, caches cache.ChannelCache, repo *Repository, guildID string, channelID snowflake.ID) (bool, error) {
+	if repo == nil || guildID == "" || channelID == 0 {
+		return false, nil
+	}
+	ignored, err := repo.loadIgnoredChannels(ctx, guildID)
+	if err != nil || len(ignored) == 0 {
+		return false, err
+	}
+	if slices.Contains(ignored, channelID.String()) {
+		return true, nil
+	}
+	if caches != nil {
+		if ch, ok := caches.Channel(channelID); ok {
+			if thread, ok := ch.(discord.GuildThread); ok && thread.ParentID() != nil {
+				return slices.Contains(ignored, thread.ParentID().String()), nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func (r *Repository) SetGuildSetting(ctx context.Context, guildID, name, value string) error {

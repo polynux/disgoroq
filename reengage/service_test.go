@@ -449,3 +449,34 @@ func TestGenerateAndSend_UsesGuildTemperature(t *testing.T) {
 		t.Fatalf("expected guild temperature 0.85, got %v", tempsSeen[1])
 	}
 }
+
+func TestGenerateAndSend_SkipsIgnoredChannel(t *testing.T) {
+	ctx := context.Background()
+	repo := databaseTestRepository(t)
+
+	const guildID = "400000000000000020"
+	const channelID = "500000000000000020"
+	if _, err := repo.AddIgnoredChannel(ctx, guildID, channelID); err != nil {
+		t.Fatalf("failed to ignore channel: %v", err)
+	}
+
+	transport := &countingTransport{}
+	client, err := disgo.New("MTIzNDU2Nzg5MDEyMzQ1Njc4.fake.fake",
+		bot.WithRestClientConfigOpts(rest.WithHTTPClient(&http.Client{Transport: transport})),
+	)
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	svc := &Service{
+		client:  client,
+		repo:    repo,
+		runtime: config.NewRuntime(config.DefaultConfig()),
+	}
+	if err := svc.GenerateAndSend(ctx, guildID, channelID); err != nil {
+		t.Fatalf("expected nil error for ignored channel, got %v", err)
+	}
+	if calls := transport.calls(); calls != 0 {
+		t.Fatalf("expected 0 REST calls for ignored channel, got %d", calls)
+	}
+}

@@ -45,6 +45,7 @@ DisgoroQ is a Go Discord bot with:
 - Votes on any human message or AI reply are stored in `message_votes`; the bot seeds reactions only on a random share of its AI replies.
 - The built-in web admin UI (`web/`) binds `web.listen` and serves `/guilds`, `/config`, and `/data` with no authentication; treat that port as LAN-only.
 - Data previews load through `/data/media/thumb`, which refreshes expired Discord CDN signatures with the bot token and resolves Tenor, Giphy, and Klipy GIF pages to direct images.
+- Per-guild ignored channels (`ignored_channels` setting, managed via `/ignore` and the web admin UI) blind the bot to messages, updates, deletes, votes, memory, media indexing, and reengage in those channels and their child threads, while slash commands still work.
 
 ## Conventions
 

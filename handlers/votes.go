@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
@@ -89,6 +90,24 @@ func (h *VoteHandler) isVoteEmoji(emoji string) bool {
 		normalizeVoteEmoji(emoji) == normalizeVoteEmoji(cfg.BadEmoji)
 }
 
+func (h *VoteHandler) isChannelIgnored(guildID, channelID snowflake.ID) bool {
+	if h.repo == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var caches cache.ChannelCache
+	if h.client != nil {
+		caches = h.client.Caches
+	}
+	ignored, err := database.IsChannelOrParentIgnored(ctx, caches, h.repo, guildID.String(), channelID)
+	if err != nil {
+		logger.Warn("Failed to read ignored channels; treating channel as not ignored",
+			zap.String("guild_id", guildID.String()), zap.String("channel_id", channelID.String()), zap.Error(err))
+	}
+	return ignored
+}
+
 // recount runs off the gateway goroutine: disgo dispatches listeners inline,
 // so a slow REST call here would delay every other event.
 // When adopt is set, an untracked eligible message is recorded on its first vote.
@@ -110,6 +129,11 @@ func (h *VoteHandler) recount(guildID, channelID, messageID snowflake.ID, adopt 
 }
 
 func (h *VoteHandler) runRecount(messageID snowflake.ID, state *recountState) {
+	// Checked here, not in recount, to keep the DB read off the gateway goroutine.
+	if h.isChannelIgnored(state.guildID, state.channelID) {
+		h.finishRecount(messageID, state, false)
+		return
+	}
 	for {
 		if !h.acquireRecountSlot(state) {
 			logger.Warn("Dropping vote recount after waiting for a concurrency slot",
@@ -307,6 +331,9 @@ func partialEmojiName(name *string) string {
 func (h *MessageHandler) addReplyVoteReactions(reply discord.Message, source discord.Message, response *ai.ChatResponse, provider string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if source.GuildID != nil && h.isChannelIgnored(ctx, h.client, source.GuildID.String(), reply.ChannelID) {
+		return
+	}
 	// Store the record before reacting so the first votes find it.
 	if err := h.repo.InsertMessageVote(ctx, database.MessageVote{
 		MessageID: reply.ID.String(), GuildID: source.GuildID.String(), ChannelID: reply.ChannelID.String(),

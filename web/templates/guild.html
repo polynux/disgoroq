@@ -24,6 +24,7 @@
 {{template "guild_section_channels" .Channels}}
 {{template "guild_section_voice" .Voice}}
 {{template "guild_section_reengage" .Reengage}}
+{{template "guild_section_ignored" .Ignored}}
 
 {{if .Bookkeeping}}
 <section class="card" id="section-bookkeeping">
@@ -479,6 +480,72 @@
 
     <div class="actions">
       <button type="submit" class="btn btn-primary">Save Channel Reengage</button>
+    </div>
+  </form>
+</section>
+{{end}}
+
+{{define "guild_section_ignored"}}
+<section class="card" id="section-ignored">
+  <h2>Ignored Channels</h2>
+  {{if .Success}}<div class="alert alert-success">{{.Success}}</div>{{end}}
+  {{if .Error}}<div class="alert alert-error">{{.Error}}</div>{{end}}
+
+  {{if .Channels}}
+  <table>
+    <thead>
+      <tr>
+        <th>Channel</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Channels}}
+      <tr>
+        <td>
+          {{if .InCache}}#{{.ChannelName}} <span class="mono muted">{{.ChannelID}}</span>{{else}}<span class="mono">{{.ChannelID}}</span> <span class="badge badge-warn">not in cache</span>{{end}}
+        </td>
+        <td>
+          <form method="post" action="/guilds/{{$.GuildID}}/ignored/{{.ChannelID}}/remove" hx-post="/guilds/{{$.GuildID}}/ignored/{{.ChannelID}}/remove" hx-target="#section-ignored" hx-swap="outerHTML">
+            <button type="submit" class="btn btn-sm btn-danger">Remove</button>
+          </form>
+        </td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else if not .Unreadable}}
+  <p class="muted">No channels are ignored in this guild.</p>
+  {{end}}
+
+  <h3>Add Ignored Channel</h3>
+  <form method="post" action="/guilds/{{.GuildID}}/ignored" hx-post="/guilds/{{.GuildID}}/ignored" hx-target="#section-ignored" hx-swap="outerHTML">
+    <div class="field-grid">
+      {{if .TextChannels}}
+      <div class="field">
+        <label class="field-label" for="ignored_channel_id">Channel</label>
+        <select id="ignored_channel_id" name="channel_id">
+          <option value="">Select a text channel...</option>
+          {{range .TextChannels}}
+          <option value="{{.ID}}"{{if eq $.FormChannelID .ID}} selected{{end}}>#{{.Name}} ({{.ID}})</option>
+          {{end}}
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label" for="ignored_raw_channel_id">Or Raw Channel ID</label>
+        <input id="ignored_raw_channel_id" name="raw_channel_id" type="text" value="{{.FormRawID}}" placeholder="Channel snowflake ID (e.g. forum or uncached)">
+      </div>
+      {{else}}
+      <div class="field">
+        <label class="field-label" for="ignored_channel_id">Channel ID</label>
+        <input id="ignored_channel_id" name="channel_id" type="text" value="{{.FormChannelID}}" placeholder="Channel snowflake ID" required>
+        <div class="field-hint">Discord channel cache unavailable; enter a raw channel ID.</div>
+      </div>
+      {{end}}
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Ignore Channel</button>
     </div>
   </form>
 </section>

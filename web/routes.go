@@ -37,6 +37,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /guilds/{id}/reengage/message", s.guildRoute(s.handleGuildReengageMessageSave))
 	s.mux.HandleFunc("POST /guilds/{id}/reengage/channel", s.guildRoute(s.handleGuildReengageChannelSave))
 	s.mux.HandleFunc("POST /guilds/{id}/reengage/channel/{channelID}/reset", s.guildRoute(s.handleGuildReengageChannelReset))
+	s.mux.HandleFunc("POST /guilds/{id}/ignored", s.guildRoute(s.handleGuildIgnoredChannelAdd))
+	s.mux.HandleFunc("POST /guilds/{id}/ignored/{channelID}/remove", s.guildRoute(s.handleGuildIgnoredChannelRemove))
 	s.mux.HandleFunc("POST /guilds/{id}/reset", s.guildRoute(s.handleGuildSettingReset))
 
 	// Phase 2a: Global config.yaml editor

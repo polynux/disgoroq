@@ -265,3 +265,89 @@ func TestGuildTextareasKeepLeadingNewline(t *testing.T) {
 	assert.Contains(t, body, ">\n\n\nLe chat est calme</textarea>")
 	assert.Contains(t, body, ">\n\nprompt body</textarea>")
 }
+
+func TestGuildIgnoredChannelsAddRemoveAndValidation(t *testing.T) {
+	guildID := "999999999999999910"
+	srv, repo, _, textID, _, _ := newCachedGuildServer(t, guildID)
+	ctx := context.Background()
+	uncachedID := "666666666666666601"
+	ignoredList := func() []string {
+		ids, err := repo.GetIgnoredChannels(ctx, guildID)
+		require.NoError(t, err)
+		return ids
+	}
+
+	// Validation: empty channel ID
+	rec := sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Channel ID is required")
+
+	// Validation: invalid snowflake (HTMX -> 200 fragment, non-HTMX -> 422 full page)
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{"channel_id": {"not-a-snowflake"}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "valid Discord snowflake")
+
+	reqNoHTMX := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8090/guilds/"+guildID+"/ignored", strings.NewReader(url.Values{"raw_channel_id": {"bad"}}.Encode()))
+	reqNoHTMX.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reqNoHTMX.Header.Set("Sec-Fetch-Site", "same-origin")
+	recNoHTMX := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(recNoHTMX, reqNoHTMX)
+	assert.Equal(t, http.StatusUnprocessableEntity, recNoHTMX.Code)
+	assert.Contains(t, recNoHTMX.Body.String(), "valid Discord snowflake")
+
+	// Select and raw ID both set and different -> rejected, nothing stored
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{"channel_id": {textID}, "raw_channel_id": {uncachedID}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "not both")
+	assert.Empty(t, ignoredList())
+
+	// Invalid snowflake in remove path -> 404 from guildRoute
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored/not-a-snowflake/remove", url.Values{})
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	// Add cached channel via select
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{"channel_id": {textID}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "added to ignored channels")
+	assert.Contains(t, rec.Body.String(), "#general")
+	assert.Equal(t, []string{textID}, ignoredList())
+
+	// Duplicate add reports already ignored
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{"channel_id": {textID}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "already ignored")
+
+	// Add uncached channel via raw_channel_id fallback
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored", url.Values{"raw_channel_id": {uncachedID}})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), uncachedID)
+	assert.Contains(t, rec.Body.String(), "not in cache")
+	assert.Equal(t, []string{textID, uncachedID}, ignoredList())
+
+	// Full guild detail page renders Ignored Channels section
+	page := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+guildID, nil))
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.Contains(t, page.Body.String(), "Ignored Channels")
+	assert.Contains(t, page.Body.String(), uncachedID)
+
+	// Remove both channels; last removal deletes the setting row
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored/"+textID+"/remove", url.Values{})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "removed from ignored channels")
+	assert.Equal(t, []string{uncachedID}, ignoredList())
+
+	rec = sameOriginPost(srv, "/guilds/"+guildID+"/ignored/"+uncachedID+"/remove", url.Values{})
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, ignoredList())
+	_, hasRow := storedSettings(t, repo, guildID)["ignored_channels"]
+	assert.False(t, hasRow, "removing the last ignored channel must delete the setting row")
+
+	// An unreadable stored list is reported, not shown as empty
+	require.NoError(t, repo.SetGuildSetting(ctx, guildID, "ignored_channels", "not json"))
+	page = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8090/guilds/"+guildID, nil))
+	require.Equal(t, http.StatusOK, page.Code)
+	assert.Contains(t, page.Body.String(), "Stored ignored channels can&#39;t be read")
+	assert.NotContains(t, page.Body.String(), "No channels are ignored in this guild")
+}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/events"
 	"github.com/disgoorg/disgo/rest"
@@ -74,6 +75,22 @@ func (h *MessageHandler) SetMediaLibrary(ml *medialibrary.Service) {
 	h.mediaLibrary = ml
 }
 
+func (h *MessageHandler) isChannelIgnored(ctx context.Context, client *bot.Client, guildID string, channelID snowflake.ID) bool {
+	if client == nil {
+		client = h.client
+	}
+	var caches cache.ChannelCache
+	if client != nil {
+		caches = client.Caches
+	}
+	ignored, err := database.IsChannelOrParentIgnored(ctx, caches, h.repo, guildID, channelID)
+	if err != nil {
+		logger.Warn("Failed to read ignored channels; treating channel as not ignored",
+			zap.String("guild_id", guildID), zap.String("channel_id", channelID.String()), zap.Error(err))
+	}
+	return ignored
+}
+
 func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	client := e.Client()
 	m := e.Message
@@ -82,6 +99,13 @@ func (h *MessageHandler) HandleMessageCreate(e *events.MessageCreate) {
 	// message. Keep this gateway work bounded because the cache write is needed
 	// for message ordering, while REST and AI work are not.
 	cacheCtx, cacheCancel := context.WithTimeout(context.Background(), 2*time.Second)
+
+	// Ignored channels are invisible to the bot, its own messages included.
+	if m.GuildID != nil && h.isChannelIgnored(cacheCtx, client, m.GuildID.String(), m.ChannelID) {
+		cacheCancel()
+		return
+	}
+
 	h.cacheMessage(cacheCtx, m)
 
 	if m.Author.ID == client.ID() {
@@ -487,6 +511,9 @@ func (h *MessageHandler) HandleMessageUpdate(e *events.MessageUpdate) {
 	msg := normalizeEventMessage(e.GenericMessage)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	if msg.GuildID != nil && h.isChannelIgnored(ctx, h.client, msg.GuildID.String(), msg.ChannelID) {
+		return
+	}
 	h.cacheMessage(ctx, msg)
 	if h.mediaLibrary != nil && msg.GuildID != nil && !msg.Author.Bot && msg.WebhookID == nil && len(msg.Embeds) > 0 {
 		h.mediaLibrary.EnqueueMessageUpdate(msg)
@@ -501,6 +528,9 @@ func (h *MessageHandler) HandleMessageDelete(e *events.MessageDelete) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
+	if guildID != "" && h.isChannelIgnored(ctx, h.client, guildID, e.ChannelID) {
+		return
+	}
 	if err := h.repo.MarkDiscordMessageDeleted(
 		ctx,
 		e.MessageID.String(),

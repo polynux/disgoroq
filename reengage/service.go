@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/disgoorg/disgo/bot"
+	"github.com/disgoorg/disgo/cache"
 	"github.com/disgoorg/disgo/discord"
 	"github.com/disgoorg/disgo/rest"
 	"github.com/disgoorg/snowflake/v2"
@@ -132,6 +133,10 @@ func (s *Service) CheckAllChannels(ctx context.Context) error {
 				continue
 			}
 
+			if s.isChannelIgnored(ctx, guildID, channel.ID()) {
+				continue
+			}
+
 			enabled, thresholdMinutes, chance := s.resolveReengageSettings(ctx, guildID, channel.ID().String())
 			if !enabled {
 				continue
@@ -223,8 +228,24 @@ func (s *Service) skipUnknownGuild(err error, guildID string) bool {
 	return true
 }
 
+func (s *Service) isChannelIgnored(ctx context.Context, guildID string, channelID snowflake.ID) bool {
+	var caches cache.ChannelCache
+	if s.client != nil {
+		caches = s.client.Caches
+	}
+	ignored, err := database.IsChannelOrParentIgnored(ctx, caches, s.repo, guildID, channelID)
+	if err != nil {
+		logger.Warn("Failed to read ignored channels; treating channel as not ignored",
+			zap.String("guild_id", guildID), zap.String("channel_id", channelID.String()), zap.Error(err))
+	}
+	return ignored
+}
+
 func (s *Service) GenerateAndSend(ctx context.Context, guildID, channelID string) error {
 	channelIDSnowflake := snowflake.MustParse(channelID)
+	if s.isChannelIgnored(ctx, guildID, channelIDSnowflake) {
+		return nil
+	}
 
 	messages, err := s.getRecentMessages(ctx, guildID, channelIDSnowflake, 20)
 	if err != nil {

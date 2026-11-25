@@ -413,6 +413,8 @@ func RegisterAll(registry *Registry, repo *database.Repository, memoryService me
 		},
 		triggerWordsHandler(repo),
 	)
+
+	registry.AddCommand(ignoreCommand(), ignoreHandler(repo))
 }
 
 func ptr[T any](v T) *T {

@@ -174,6 +174,27 @@ type reengageSectionData struct {
 	FormThreshold string
 }
 
+type ignoredChannelRow struct {
+	ChannelID   string
+	ChannelName string
+	InCache     bool
+}
+
+type ignoredSectionData struct {
+	GuildID      string
+	Success      string
+	Error        string
+	TextChannels []channelOption
+	Channels     []ignoredChannelRow
+	// Unreadable is set when the stored list can't be parsed, so the
+	// template doesn't claim the list is empty.
+	Unreadable bool
+
+	// Form values preserved on validation error when adding a channel.
+	FormChannelID string
+	FormRawID     string
+}
+
 type bookkeepingRow struct {
 	Key       string
 	Label     string
@@ -190,6 +211,7 @@ type guildPageData struct {
 	Channels    channelsSectionData
 	Voice       voiceSectionData
 	Reengage    reengageSectionData
+	Ignored     ignoredSectionData
 	Bookkeeping []bookkeepingRow
 }
 
@@ -820,6 +842,109 @@ func (s *Server) handleGuildReengageChannelReset(w http.ResponseWriter, r *http.
 	s.renderSectionOrPage(w, r, guildID, "guild_section_reengage", sec, false)
 }
 
+func (s *Server) handleGuildIgnoredChannelAdd(w http.ResponseWriter, r *http.Request) {
+	guildID := strings.TrimSpace(r.PathValue("id"))
+	if guildID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "Invalid form submission", http.StatusBadRequest)
+		return
+	}
+
+	settings, err := s.loadGuildSettings(r.Context(), guildID)
+	if err != nil {
+		logger.Error("Failed to load guild settings", zap.String("guild_id", guildID), zap.Error(err))
+		http.Error(w, "Failed to load guild settings", http.StatusInternalServerError)
+		return
+	}
+
+	channelID := strings.TrimSpace(r.FormValue("channel_id"))
+	rawID := strings.TrimSpace(r.FormValue("raw_channel_id"))
+	targetID := channelID
+	if rawID != "" {
+		targetID = rawID
+	}
+
+	renderErr := func(msg string) {
+		sec := s.buildIgnoredSection(guildID, settings)
+		sec.FormChannelID = channelID
+		sec.FormRawID = rawID
+		sec.Error = msg
+		s.renderSectionOrPage(w, r, guildID, "guild_section_ignored", sec, true)
+	}
+
+	if channelID != "" && rawID != "" && channelID != rawID {
+		renderErr("Pick a channel or enter a raw channel ID, not both.")
+		return
+	}
+	if targetID == "" {
+		renderErr("Channel ID is required.")
+		return
+	}
+	if _, err := snowflake.Parse(targetID); err != nil {
+		renderErr("Channel ID must be a valid Discord snowflake.")
+		return
+	}
+
+	ctx := r.Context()
+	changed, err := s.deps.Repo.AddIgnoredChannel(ctx, guildID, targetID)
+	if err != nil {
+		renderErr("Failed to add ignored channel: " + err.Error())
+		return
+	}
+
+	updated, err := s.loadGuildSettings(ctx, guildID)
+	if err != nil {
+		renderErr("Saved, but failed to reload settings: " + err.Error())
+		return
+	}
+
+	sec := s.buildIgnoredSection(guildID, updated)
+	if changed {
+		sec.Success = fmt.Sprintf("Channel %s added to ignored channels.", targetID)
+	} else {
+		sec.Success = fmt.Sprintf("Channel %s is already ignored.", targetID)
+	}
+	s.renderSectionOrPage(w, r, guildID, "guild_section_ignored", sec, false)
+}
+
+func (s *Server) handleGuildIgnoredChannelRemove(w http.ResponseWriter, r *http.Request) {
+	guildID := strings.TrimSpace(r.PathValue("id"))
+	channelID := strings.TrimSpace(r.PathValue("channelID"))
+	if guildID == "" || channelID == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	ctx := r.Context()
+	changed, err := s.deps.Repo.RemoveIgnoredChannel(ctx, guildID, channelID)
+	if err != nil {
+		logger.Error("Failed to remove ignored channel",
+			zap.String("guild_id", guildID),
+			zap.String("channel_id", channelID),
+			zap.Error(err))
+		http.Error(w, "Failed to remove ignored channel", http.StatusInternalServerError)
+		return
+	}
+
+	updated, err := s.loadGuildSettings(ctx, guildID)
+	if err != nil {
+		http.Error(w, "Failed to reload settings", http.StatusInternalServerError)
+		return
+	}
+
+	sec := s.buildIgnoredSection(guildID, updated)
+	if changed {
+		sec.Success = fmt.Sprintf("Channel %s removed from ignored channels.", channelID)
+	} else {
+		sec.Success = fmt.Sprintf("Channel %s was not ignored.", channelID)
+	}
+	s.renderSectionOrPage(w, r, guildID, "guild_section_ignored", sec, false)
+}
+
 func (s *Server) handleGuildSettingReset(w http.ResponseWriter, r *http.Request) {
 	guildID := strings.TrimSpace(r.PathValue("id"))
 	if guildID == "" {
@@ -911,6 +1036,8 @@ func (s *Server) renderSectionOrPage(w http.ResponseWriter, r *http.Request, gui
 			data.Voice = v
 		case reengageSectionData:
 			data.Reengage = v
+		case ignoredSectionData:
+			data.Ignored = v
 		}
 		s.renderPage(w, "guild", http.StatusUnprocessableEntity, data)
 		return
@@ -1054,6 +1181,7 @@ func (s *Server) buildGuildPageData(ctx context.Context, guildID string) (guildP
 		Channels:    s.buildChannelsSection(guildID, settings),
 		Voice:       s.buildVoiceSection(guildID, settings),
 		Reengage:    s.buildReengageSection(guildID, settings),
+		Ignored:     s.buildIgnoredSection(guildID, settings),
 		Bookkeeping: s.buildBookkeeping(guildID, settings),
 	}, nil
 }
@@ -1246,6 +1374,35 @@ func (s *Server) buildReengageSection(guildID string, settings map[string]string
 		return rows[i].ChannelID < rows[j].ChannelID
 	})
 	sec.Channels = rows
+	return sec
+}
+
+func (s *Server) buildIgnoredSection(guildID string, settings map[string]string) ignoredSectionData {
+	textChannels, _, nameByID := s.guildChannels(guildID)
+	sec := ignoredSectionData{
+		GuildID:      guildID,
+		TextChannels: textChannels,
+	}
+
+	if raw, ok := settings["ignored_channels"]; ok {
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+			sec.Error = "Stored ignored channels can't be read: " + err.Error()
+			sec.Unreadable = true
+		} else {
+			ids = database.NormalizeIgnoredChannels(ids)
+			rows := make([]ignoredChannelRow, 0, len(ids))
+			for _, id := range ids {
+				name, inCache := nameByID[id]
+				rows = append(rows, ignoredChannelRow{
+					ChannelID:   id,
+					ChannelName: name,
+					InCache:     inCache,
+				})
+			}
+			sec.Channels = rows
+		}
+	}
 	return sec
 }
 
