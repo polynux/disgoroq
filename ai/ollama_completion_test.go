@@ -459,3 +459,280 @@ func TestOllamaCompletionModeTemperatureWhenSet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "hi", resp.Content)
 }
+
+func TestTrimCompletionSentence(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		want   string
+		wantOK bool
+	}{
+		{
+			name:   "period followed by space",
+			input:  " C'est vraiment la fin du monde. Et encore j'ai pas fini de",
+			want:   "C'est vraiment la fin du monde.",
+			wantOK: true,
+		},
+		{
+			name:   "period at end of text",
+			input:  " C'est vraiment la fin du monde. ",
+			want:   "C'est vraiment la fin du monde.",
+			wantOK: true,
+		},
+		{
+			name:   "exclamation mark",
+			input:  " Incroyable cette histoire ! Mais attends la suite c'est",
+			want:   "Incroyable cette histoire !",
+			wantOK: true,
+		},
+		{
+			name:   "question mark",
+			input:  " Tu penses vraiment que ça va marcher ? Parce que moi je",
+			want:   "Tu penses vraiment que ça va marcher ?",
+			wantOK: true,
+		},
+		{
+			name:   "unicode ellipsis",
+			input:  " Franchement je sais plus quoi dire… et puis en vrai",
+			want:   "Franchement je sais plus quoi dire…",
+			wantOK: true,
+		},
+		{
+			name:   "triple dot run",
+			input:  " Franchement je sais plus quoi dire... et puis en vrai",
+			want:   "Franchement je sais plus quoi dire...",
+			wantOK: true,
+		},
+		{
+			name:   "question exclamation run",
+			input:  " T'as vraiment osé faire ça ?! Non mais sérieusement",
+			want:   "T'as vraiment osé faire ça ?!",
+			wantOK: true,
+		},
+		{
+			name:   "multiple exclamations run",
+			input:  " C'est n'importe quoi cette game !!! On aurait jamais dû",
+			want:   "C'est n'importe quoi cette game !!!",
+			wantOK: true,
+		},
+		{
+			name:   "decimal number not a boundary",
+			input:  " Il fait au moins 3.5 degrés dehors aujourd'hui et j'ai",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "url dot not a boundary",
+			input:  " Regarde sur https://example.com/foo.bar et dis moi ce que tu",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "too short after trimming",
+			input:  " Trop court. Mais la suite continue beaucoup plus loin sans fin",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "unterminated media tag after complete sentence",
+			input:  " C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe",
+			want:   "C'est vraiment trop drôle cette histoire !",
+			wantOK: true,
+		},
+		{
+			name:   "period inside unterminated media tag ignored",
+			input:  " C'est vraiment trop drôle [gif: chat. qui tombe",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "unterminated media tag without sentence boundary",
+			input:  " C'est vraiment trop drôle cette histoire [gif: chat qui",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "multibyte accents and emoji counted as runes",
+			input:  " C'est déjà très été 🔥! Et ensuite on verra bien",
+			want:   "C'est déjà très été 🔥!",
+			wantOK: true,
+		},
+		{
+			name:   "multibyte under 20 runes rejected despite >20 bytes",
+			input:  " été 🔥🔥🔥🔥! Et ensuite on continue sans fin",
+			want:   "",
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := trimCompletionSentence(tc.input, completionMinSentenceRunes)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestCompletionChatTruncatedReplies(t *testing.T) {
+	baseReq := func() *ChatRequest {
+		return &ChatRequest{
+			Model: "luciole-1b-discord1", BotName: "Bot", GuildID: "g-1", ChannelID: "c-1",
+			TargetMessageID: "m-1",
+			Messages: []Message{{
+				Role: RoleUser, MessageID: "m-1", AuthorID: "1", AuthorNick: "Alice",
+				Text: "tu en penses quoi ?",
+			}},
+		}
+	}
+
+	t.Run("length with usable sentence boundary trims without retry", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = io.WriteString(w, `{"model":"luciole","response":" C'est vraiment la fin du monde. Et encore j'ai pas fini de","done":true,"done_reason":"length"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{ok: false}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), baseReq())
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, "C'est vraiment la fin du monde.", resp.Content)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "C'est vraiment la fin du monde.", resolver.reqs[0].RawReply)
+	})
+
+	t.Run("length without boundary retries and skips resolver on discarded attempt", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				_, _ = io.WriteString(w, `{"model":"luciole","response":" c'est vraiment la fin du mon [gif: chat]","done":true,"done_reason":"length"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"model":"luciole","response":" carrément d'accord","done":true,"done_reason":"stop"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{
+			result: MediaResolveResult{Tag: "[gif: chat]", URL: "https://tenor.com/view/cat-1"},
+			ok:     true,
+		}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), baseReq())
+		require.NoError(t, err)
+		assert.Equal(t, 2, calls)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, " carrément d'accord", resolver.reqs[0].RawReply)
+		assert.Equal(t, "carrément d'accord\nhttps://tenor.com/view/cat-1", resp.Content)
+	})
+
+	t.Run("length still truncated on last attempt falls back to word boundary and drops open tag", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls == 1 {
+				_, _ = io.WriteString(w, `{"model":"luciole","response":" premier essai coupé sans ponctuation du tout","done":true,"done_reason":"length"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"model":"luciole","response":" deuxième essai coupé au milieu [gif: chat qui","done":true,"done_reason":"length"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+		resolver := &stubMediaResolver{ok: false}
+		provider.SetMediaResolver(resolver)
+
+		resp, err := provider.Chat(context.Background(), baseReq())
+		require.NoError(t, err)
+		assert.Equal(t, 2, calls)
+		assert.Equal(t, "deuxième essai coupé au milieu", resp.Content)
+		assert.False(t, resp.EmptyCompletion)
+		require.Len(t, resolver.reqs, 1)
+		assert.Equal(t, "deuxième essai coupé au milieu", resolver.reqs[0].RawReply)
+	})
+
+	t.Run("stop done_reason is unchanged even without punctuation", func(t *testing.T) {
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			_, _ = io.WriteString(w, `{"model":"luciole","response":" ouais carrément","done":true,"done_reason":"stop"}`)
+		}))
+		defer server.Close()
+
+		provider, err := NewOllamaProvider(server.URL, false)
+		require.NoError(t, err)
+		provider.SetCompletionMode(true)
+
+		resp, err := provider.Chat(context.Background(), baseReq())
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, "ouais carrément", resp.Content)
+	})
+}
+
+func TestBuildCompletionPromptBotLineCapAndDefault(t *testing.T) {
+	t.Run("400-rune bot line capped at sentence boundary within 200 runes while human keeps 300", func(t *testing.T) {
+		botSentence := "C'est une première phrase complète et assez longue pour passer le seuil."
+		botLong := botSentence + " " + strings.Repeat("mot ", 90)
+		require.Greater(t, len([]rune(botLong)), 400)
+
+		humanLong := strings.Repeat("mot ", 100)
+		require.Greater(t, len([]rune(humanLong)), 350)
+
+		messages := []Message{
+			{Role: RoleAssistant, Content: botLong, Text: botLong, AuthorNick: "bot"},
+			{Role: RoleUser, Content: "Alice: " + humanLong, Text: humanLong, AuthorID: "1", AuthorNick: "Alice"},
+		}
+		prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 0, "v0")
+		lines := strings.Split(prompt, "\n")
+		require.Len(t, lines, 3)
+
+		botLine := strings.TrimPrefix(lines[0], "§bot: ")
+		assert.Equal(t, botSentence, botLine)
+		assert.LessOrEqual(t, len([]rune(botLine)), completionBotLineChars)
+
+		humanLine := strings.TrimPrefix(lines[1], "Alice: ")
+		assert.Greater(t, len([]rune(humanLine)), completionBotLineChars)
+		assert.LessOrEqual(t, len([]rune(humanLine)), completionLineChars)
+	})
+
+	t.Run("400-rune bot line without sentence boundary falls back to word boundary <= 200 runes", func(t *testing.T) {
+		botNoPunct := strings.Repeat("blabla ", 60)
+		require.Greater(t, len([]rune(botNoPunct)), 400)
+
+		messages := []Message{
+			{Role: RoleAssistant, Content: botNoPunct, Text: botNoPunct, AuthorNick: "bot"},
+		}
+		prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 0, "v0")
+		lines := strings.Split(prompt, "\n")
+		require.Len(t, lines, 2)
+
+		botLine := strings.TrimPrefix(lines[0], "§bot: ")
+		assert.LessOrEqual(t, len([]rune(botLine)), completionBotLineChars)
+		assert.Equal(t, limitCompletionLine(strings.TrimSpace(botNoPunct), completionBotLineChars), botLine)
+	})
+
+	t.Run("default keeps 8 bot lines when character budget allows", func(t *testing.T) {
+		var messages []Message
+		for i := 1; i <= 10; i++ {
+			messages = append(messages, Message{Role: RoleAssistant, Content: "bot line", Text: "bot line", AuthorNick: "bot"})
+			messages = append(messages, Message{Role: RoleUser, Content: "Alice: human line", Text: "human line", AuthorNick: "Alice"})
+		}
+		prompt := buildCompletionPrompt(messages, "Display", "", "§bot", 2400, 0, "v0")
+		assert.Equal(t, 8, strings.Count(prompt, "§bot: bot line"))
+		assert.Equal(t, 10, strings.Count(prompt, "Alice: human line"))
+	})
+}

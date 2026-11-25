@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Completion mode serves raw chat-log models (e.g. luciole-1b-discord1 from
@@ -20,10 +21,12 @@ import (
 
 const (
 	// Luciole has a 1,024-token context; French chat averages about 2.8 chars/token.
-	completionPromptChars     = 2400
-	completionLineChars       = 300
-	completionMaxTokens       = 64
-	completionDefaultBotLines = 4
+	completionPromptChars      = 2400
+	completionLineChars        = 300
+	completionBotLineChars     = 200
+	completionMinSentenceRunes = 20
+	completionMaxTokens        = 64
+	completionDefaultBotLines  = 8
 )
 
 var (
@@ -118,6 +121,16 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		if err != nil {
 			return nil, err
 		}
+		raw := generated.Response
+		if generated.DoneReason == "length" {
+			if trimmed, ok := trimCompletionSentence(raw, completionMinSentenceRunes); ok {
+				raw = trimmed
+			} else if attempt == 0 {
+				continue
+			} else {
+				raw = cutCompletionWordBoundary(strings.TrimSpace(raw))
+			}
+		}
 		model := generated.Model
 		if model == "" {
 			model = req.Model
@@ -126,11 +139,11 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 		if finishReason == "" {
 			finishReason = "stop"
 		}
-		cleaned := cleanCompletionReply(generated.Response, req.BotName)
+		cleaned := cleanCompletionReply(raw, req.BotName)
 		var mediaURL string
-		if o.mediaResolver != nil && (cleaned != "" || attempt == 1 || len(ParseMediaTags(generated.Response)) > 0) {
+		if o.mediaResolver != nil && (cleaned != "" || attempt == 1 || len(ParseMediaTags(raw)) > 0) {
 			if resolved, ok := o.mediaResolver.Resolve(ctx, MediaResolveRequest{
-				RawReply:        generated.Response,
+				RawReply:        raw,
 				GuildID:         req.GuildID,
 				ChannelID:       req.ChannelID,
 				BotID:           req.BotID,
@@ -249,6 +262,9 @@ func buildCompletionPrompt(messages []Message, botName, targetMessageID, complet
 		}
 		isTarget := targetMessageID != "" && msg.MessageID == targetMessageID
 		text := completionText(msg, names, mediaTags)
+		if msg.Role == RoleAssistant {
+			text = limitCompletionBotLine(text, completionBotLineChars)
+		}
 		if text == "" && !isTarget {
 			continue
 		}
@@ -308,14 +324,36 @@ func completionText(msg Message, names map[string]string, mediaTags string) stri
 	return limitCompletionLine(text, completionLineChars)
 }
 
-// limitCompletionLine caps a prompt line at maxRunes code points, cuts at the
-// last space, and drops a tag that would be cut in the middle.
-func limitCompletionLine(text string, maxRunes int) string {
-	runes := []rune(text)
-	if len(runes) <= maxRunes {
-		return text
+func isSentenceEnd(r rune) bool {
+	return r == '.' || r == '!' || r == '?' || r == '…'
+}
+
+// trimCompletionSentence trims text to the end of its last complete sentence
+// (`.`, `!`, `?`, or `…`, including runs like `...` or `?!`, followed by
+// whitespace or end of text), dropping any trailing unterminated media tag
+// first. It returns ok=false when fewer than minRunes remain.
+func trimCompletionSentence(text string, minRunes int) (string, bool) {
+	s := strings.TrimSpace(text)
+	if open := strings.LastIndex(s, "["); open > strings.LastIndex(s, "]") {
+		s = strings.TrimSpace(s[:open])
 	}
-	cut := string(runes[:maxRunes])
+	runes := []rune(s)
+	for i := len(runes) - 1; i >= 0; i-- {
+		if !isSentenceEnd(runes[i]) {
+			continue
+		}
+		if i < len(runes)-1 && !unicode.IsSpace(runes[i+1]) {
+			continue
+		}
+		if i+1 < minRunes {
+			return "", false
+		}
+		return string(runes[:i+1]), true
+	}
+	return "", false
+}
+
+func cutCompletionWordBoundary(cut string) string {
 	if idx := strings.LastIndex(cut, " "); idx >= 0 {
 		cut = cut[:idx]
 	}
@@ -323,6 +361,38 @@ func limitCompletionLine(text string, maxRunes int) string {
 		cut = cut[:open]
 	}
 	return strings.TrimSpace(cut)
+}
+
+// limitCompletionLine caps a prompt line at maxRunes code points, cuts at the
+// last space, and drops a tag that would be cut in the middle.
+func limitCompletionLine(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return cutCompletionWordBoundary(string(runes[:maxRunes]))
+}
+
+// limitCompletionBotLine caps a bot prompt line at maxRunes code points,
+// preferring the last complete sentence within maxRunes and otherwise
+// falling back to limitCompletionLine.
+func limitCompletionBotLine(text string, maxRunes int) string {
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	prefix := string(runes[:maxRunes])
+	if !unicode.IsSpace(runes[maxRunes]) {
+		end := maxRunes
+		for end > 0 && isSentenceEnd(runes[end-1]) {
+			end--
+		}
+		prefix = string(runes[:end])
+	}
+	if trimmed, ok := trimCompletionSentence(prefix, completionMinSentenceRunes); ok {
+		return trimmed
+	}
+	return limitCompletionLine(text, maxRunes)
 }
 
 func completionNames(messages []Message) map[string]string {

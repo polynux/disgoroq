@@ -56,8 +56,8 @@ ai:
 	if config.AI.Ollama.CompletionPromptChars != 2400 {
 		t.Errorf("AI.Ollama.CompletionPromptChars = %d, want 2400", config.AI.Ollama.CompletionPromptChars)
 	}
-	if config.AI.Ollama.CompletionBotLines != 4 {
-		t.Errorf("AI.Ollama.CompletionBotLines = %d, want 4", config.AI.Ollama.CompletionBotLines)
+	if config.AI.Ollama.CompletionBotLines != 8 {
+		t.Errorf("AI.Ollama.CompletionBotLines = %d, want 8", config.AI.Ollama.CompletionBotLines)
 	}
 	if config.AI.Ollama.CompletionMediaTags != "v0" {
 		t.Errorf("AI.Ollama.CompletionMediaTags = %q, want v0", config.AI.Ollama.CompletionMediaTags)

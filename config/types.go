@@ -263,7 +263,7 @@ func DefaultConfig() *Config {
 				ThinkingEnabled:       false,
 				CompletionSpeaker:     "§bot",
 				CompletionPromptChars: 2400,
-				CompletionBotLines:    4,
+				CompletionBotLines:    8,
 				CompletionMediaTags:   "v0",
 			},
 			Opencode: OpencodeConfig{
