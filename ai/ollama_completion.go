@@ -338,7 +338,8 @@ func isSentenceEnd(r rune) bool {
 
 // trimCompletionSentence trims text to the end of its last complete sentence
 // (`.`, `!`, `?`, or `…`, including runs like `...` or `?!`, followed by
-// whitespace or end of text), dropping any trailing unterminated media tag
+// whitespace, the end of the text, or a bracketed tag such as
+// `![gif: chat]`), dropping any trailing unterminated media tag
 // first. Punctuation inside a matched `[...]` (such as `[youtube: Wow ! ...]`)
 // never counts as a sentence end. It returns ok=false when fewer than minRunes
 // remain.
