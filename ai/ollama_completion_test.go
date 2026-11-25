@@ -576,6 +576,18 @@ func TestTrimCompletionSentence(t *testing.T) {
 			wantOK: true,
 		},
 		{
+			name:   "punctuation inside ordinary brackets is not a boundary",
+			input:  " Franchement il a dit [wow ! mais non] et puis j'ai pas fini",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "sentence end directly followed by a media tag",
+			input:  " C'est vraiment trop drôle cette histoire ![gif: chat qui tombe] et puis",
+			want:   "C'est vraiment trop drôle cette histoire !",
+			wantOK: true,
+		},
+		{
 			name:   "sentence before a closed tag and a stray bracket",
 			input:  " C'est vraiment trop drôle cette histoire ! [gif: chat] ] et la suite continue",
 			want:   "C'est vraiment trop drôle cette histoire !",
@@ -735,25 +747,40 @@ func TestCompletionChatTruncatedReplies(t *testing.T) {
 	})
 
 	t.Run("length trimmed to a sentence keeps complete media tags after it", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = io.WriteString(w, `{"model":"luciole","response":" C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe] et puis franchement j'ai","done":true,"done_reason":"length"}`)
-		}))
-		defer server.Close()
+		for _, tc := range []struct{ name, response, wantRaw string }{
+			{"spaced tag", " C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe] et puis franchement j'ai",
+				"C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe]"},
+			{"tag right after the punctuation", " C'est vraiment trop drôle cette histoire ![gif: chat qui tombe] et puis franchement j'ai",
+				"C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe]"},
+			{"several tags and an unterminated one", " C'est vraiment trop drôle cette histoire ! [gif] et [youtube: fail] puis [gif: autre",
+				"C'est vraiment trop drôle cette histoire ! [gif] [youtube: fail]"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					body, _ := json.Marshal(map[string]any{"model": "luciole", "response": tc.response, "done": true, "done_reason": "length"})
+					_, _ = w.Write(body)
+				}))
+				defer server.Close()
 
-		provider, err := NewOllamaProvider(server.URL, false)
-		require.NoError(t, err)
-		provider.SetCompletionMode(true)
-		resolver := &stubMediaResolver{
-			result: MediaResolveResult{Tag: "[gif: chat qui tombe]", URL: "https://tenor.com/view/cat-1"},
-			ok:     true,
+				provider, err := NewOllamaProvider(server.URL, false)
+				require.NoError(t, err)
+				provider.SetCompletionMode(true)
+				resolver := &stubMediaResolver{
+					result: MediaResolveResult{Tag: "[gif: chat qui tombe]", URL: "https://tenor.com/view/cat-1"},
+					ok:     true,
+				}
+				provider.SetMediaResolver(resolver)
+
+				resp, err := provider.Chat(context.Background(), baseReq())
+				require.NoError(t, err)
+				assert.Equal(t, 1, calls)
+				require.Len(t, resolver.reqs, 1)
+				assert.Equal(t, tc.wantRaw, resolver.reqs[0].RawReply)
+				assert.Equal(t, "C'est vraiment trop drôle cette histoire !\nhttps://tenor.com/view/cat-1", resp.Content)
+			})
 		}
-		provider.SetMediaResolver(resolver)
-
-		resp, err := provider.Chat(context.Background(), baseReq())
-		require.NoError(t, err)
-		require.Len(t, resolver.reqs, 1)
-		assert.Equal(t, "C'est vraiment trop drôle cette histoire ! [gif: chat qui tombe]", resolver.reqs[0].RawReply)
-		assert.Equal(t, "C'est vraiment trop drôle cette histoire !\nhttps://tenor.com/view/cat-1", resp.Content)
 	})
 
 	t.Run("length on last attempt still word-cuts a trailing bracket that is not a media tag", func(t *testing.T) {

@@ -339,7 +339,7 @@ func isSentenceEnd(r rune) bool {
 // trimCompletionSentence trims text to the end of its last complete sentence
 // (`.`, `!`, `?`, or `…`, including runs like `...` or `?!`, followed by
 // whitespace or end of text), dropping any trailing unterminated media tag
-// first. Punctuation inside a complete media tag (`[youtube: Wow ! ...]`)
+// first. Punctuation inside a matched `[...]` (such as `[youtube: Wow ! ...]`)
 // never counts as a sentence end. It returns ok=false when fewer than minRunes
 // remain.
 func trimCompletionSentence(text string, minRunes int) (string, bool) {
@@ -348,23 +348,28 @@ func trimCompletionSentence(text string, minRunes int) (string, bool) {
 		s = strings.TrimSpace(s[:open])
 	}
 	runes := []rune(s)
+	// Mark every matched [...] pair (media tags included); a stray "]" such
+	// as ":]" has no opener and stays unmarked.
 	inTag := make([]bool, len(runes))
-	tags := completionPlaceholder.FindAllStringIndex(s, -1)
-	i := 0
-	for b := range s {
-		for _, tag := range tags {
-			if b >= tag[0] && b < tag[1] {
-				inTag[i] = true
-				break
+	var open []int
+	for i, r := range runes {
+		switch {
+		case r == '[':
+			open = append(open, i)
+		case r == ']' && len(open) > 0:
+			for j := open[len(open)-1]; j <= i; j++ {
+				inTag[j] = true
 			}
+			open = open[:len(open)-1]
 		}
-		i++
 	}
 	for i := len(runes) - 1; i >= 0; i-- {
 		if inTag[i] || !isSentenceEnd(runes[i]) {
 			continue
 		}
-		if i < len(runes)-1 && !unicode.IsSpace(runes[i+1]) {
+		// A sentence end must be followed by whitespace, the end of the text,
+		// or a bracketed tag ("drôle ![gif: chat]").
+		if i < len(runes)-1 && !unicode.IsSpace(runes[i+1]) && !inTag[i+1] {
 			continue
 		}
 		if i+1 < minRunes {
