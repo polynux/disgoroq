@@ -552,6 +552,24 @@ func TestTrimCompletionSentence(t *testing.T) {
 			wantOK: false,
 		},
 		{
+			name:   "punctuation inside a closed media tag is not a boundary",
+			input:  " Regarde ça [youtube: Incroyable ! Le pire fail] et franchement j'ai pas",
+			want:   "",
+			wantOK: false,
+		},
+		{
+			name:   "sentence before a closed media tag with inner punctuation",
+			input:  " Tu vas adorer cette vidéo. [youtube: Incroyable ! Le pire fail] et franchement",
+			want:   "Tu vas adorer cette vidéo.",
+			wantOK: true,
+		},
+		{
+			name:   "stray closing bracket does not hide earlier sentence",
+			input:  " Bon ben on verra bien demain. c'est cool :] et puis",
+			want:   "Bon ben on verra bien demain.",
+			wantOK: true,
+		},
+		{
 			name:   "multibyte accents and emoji counted as runes",
 			input:  " C'est déjà très été 🔥! Et ensuite on verra bien",
 			want:   "C'est déjà très été 🔥!",
@@ -604,6 +622,7 @@ func TestCompletionChatTruncatedReplies(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, calls)
 		assert.Equal(t, "C'est vraiment la fin du monde.", resp.Content)
+		assert.Equal(t, "length", resp.FinishReason)
 		require.Len(t, resolver.reqs, 1)
 		assert.Equal(t, "C'est vraiment la fin du monde.", resolver.reqs[0].RawReply)
 	})
@@ -664,6 +683,44 @@ func TestCompletionChatTruncatedReplies(t *testing.T) {
 		assert.Equal(t, "deuxième essai coupé au milieu", resolver.reqs[0].RawReply)
 	})
 
+	t.Run("length on last attempt keeps a reply that ends on a complete media tag", func(t *testing.T) {
+		for _, tc := range []struct{ name, second, wantRaw, wantContent string }{
+			{"tag only", " [gif: chat qui tombe]", "[gif: chat qui tombe]", "https://tenor.com/view/cat-1"},
+			{"text then tag", " trop drôle cette vidéo mdr [gif: chat qui tombe]", "trop drôle cette vidéo mdr [gif: chat qui tombe]", "trop drôle cette vidéo mdr\nhttps://tenor.com/view/cat-1"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					response := " premier essai coupé sans ponctuation du tout"
+					if calls == 2 {
+						response = tc.second
+					}
+					body, _ := json.Marshal(map[string]any{"model": "luciole", "response": response, "done": true, "done_reason": "length"})
+					_, _ = w.Write(body)
+				}))
+				defer server.Close()
+
+				provider, err := NewOllamaProvider(server.URL, false)
+				require.NoError(t, err)
+				provider.SetCompletionMode(true)
+				resolver := &stubMediaResolver{
+					result: MediaResolveResult{Tag: "[gif: chat qui tombe]", URL: "https://tenor.com/view/cat-1"},
+					ok:     true,
+				}
+				provider.SetMediaResolver(resolver)
+
+				resp, err := provider.Chat(context.Background(), baseReq())
+				require.NoError(t, err)
+				assert.Equal(t, 2, calls)
+				require.Len(t, resolver.reqs, 1)
+				assert.Equal(t, tc.wantRaw, resolver.reqs[0].RawReply)
+				assert.Equal(t, tc.wantContent, resp.Content)
+				assert.False(t, resp.EmptyCompletion)
+			})
+		}
+	})
+
 	t.Run("stop done_reason is unchanged even without punctuation", func(t *testing.T) {
 		calls := 0
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -722,7 +779,23 @@ func TestBuildCompletionPromptBotLineCapAndDefault(t *testing.T) {
 
 		botLine := strings.TrimPrefix(lines[0], "§bot: ")
 		assert.LessOrEqual(t, len([]rune(botLine)), completionBotLineChars)
-		assert.Equal(t, limitCompletionLine(strings.TrimSpace(botNoPunct), completionBotLineChars), botLine)
+		assert.Equal(t, strings.TrimSpace(strings.Repeat("blabla ", 28)), botLine)
+	})
+
+	t.Run("punctuation at the 200-rune cut", func(t *testing.T) {
+		head := strings.Repeat("a", 30) + " " + strings.Repeat("b", 168) // 199 runes
+		for _, tc := range []struct{ name, tail, want string }{
+			// Rune 200 is "." and rune 201 a space: the sentence ends exactly at the cap.
+			{"followed by space is a boundary", ". suite du texte qui continue encore", head + "."},
+			// Rune 200 is "." but rune 201 is "5": "3.5"-style, not a sentence end.
+			{"followed by a digit is not a boundary", ".5 degrés et la suite continue encore", strings.Repeat("a", 30)},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				line := head + tc.tail
+				require.Equal(t, '.', []rune(line)[199])
+				assert.Equal(t, tc.want, limitCompletionBotLine(line, completionBotLineChars))
+			})
+		}
 	})
 
 	t.Run("default keeps 8 bot lines when character budget allows", func(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -127,8 +128,10 @@ func (o *OllamaProvider) completionChat(ctx context.Context, req *ChatRequest) (
 				raw = trimmed
 			} else if attempt == 0 {
 				continue
-			} else {
-				raw = cutCompletionWordBoundary(strings.TrimSpace(raw))
+			} else if raw = strings.TrimSpace(raw); !strings.HasSuffix(raw, "]") {
+				// A reply ending on a closed media tag is whole; cutting at its
+				// last space would split the tag and drop it.
+				raw = cutCompletionWordBoundary(raw)
 			}
 		}
 		model := generated.Model
@@ -331,15 +334,25 @@ func isSentenceEnd(r rune) bool {
 // trimCompletionSentence trims text to the end of its last complete sentence
 // (`.`, `!`, `?`, or `…`, including runs like `...` or `?!`, followed by
 // whitespace or end of text), dropping any trailing unterminated media tag
-// first. It returns ok=false when fewer than minRunes remain.
+// first. Punctuation inside a closed `[...]` tag never counts as a sentence
+// end. It returns ok=false when fewer than minRunes remain.
 func trimCompletionSentence(text string, minRunes int) (string, bool) {
 	s := strings.TrimSpace(text)
 	if open := strings.LastIndex(s, "["); open > strings.LastIndex(s, "]") {
 		s = strings.TrimSpace(s[:open])
 	}
 	runes := []rune(s)
+	depth := 0
 	for i := len(runes) - 1; i >= 0; i-- {
-		if !isSentenceEnd(runes[i]) {
+		switch {
+		case runes[i] == ']' && slices.Contains(runes[:i], '['):
+			// Only a "]" with a "[" before it closes a tag; a stray one (":]") doesn't.
+			depth++
+			continue
+		case runes[i] == '[' && depth > 0:
+			depth--
+			continue
+		case depth > 0 || !isSentenceEnd(runes[i]):
 			continue
 		}
 		if i < len(runes)-1 && !unicode.IsSpace(runes[i+1]) {
